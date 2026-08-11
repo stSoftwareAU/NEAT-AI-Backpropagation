@@ -1,0 +1,31 @@
+[package]
+name = "neat_ai_backpropagation"
+version = "0.1.1"
+edition = "2024"
+license = "Apache-2.0"
+description = "Experimental standalone backpropagation trainer for production NEAT-AI creatures."
+repository = "https://github.com/stSoftwareAU/NEAT-AI-Backpropagation"
+readme = "../README.md"
+
+[lints]
+workspace = true
+
+[lib]
+name = "neat_ai_backpropagation"
+path = "src/lib.rs"
+
+[[bin]]
+name = "neat_ai_backpropagation"
+path = "src/main.rs"
+
+[dependencies]
+# Keep this sibling path aligned with NEAT-AI-Lamarck / NEAT-AI-scorer.
+# CI checks out NEAT-AI-core beside this repo.
+neat-core = { path = "../../NEAT-AI-core/neat-core" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.9"
+
+[dev-dependencies]
+tempfile = "3"

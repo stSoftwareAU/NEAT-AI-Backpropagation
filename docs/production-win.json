@@ -1,0 +1,129 @@
+{
+  "status": "recorded",
+  "crateVersion": "0.1.0",
+  "creature": "~/src/GRQ-cluster/network.json",
+  "creatureShape": {
+    "input": 2511,
+    "output": 1,
+    "neurons": 1605,
+    "synapses": 22011,
+    "forwardOnly": true
+  },
+  "corpus": "~/src/GRQ/.trainData-binary_116",
+  "corpusRecords": 2262277,
+  "parity": {
+    "records": 256,
+    "sourceBin": "~/src/GRQ/.trainData-binary_116/A-2007.bin",
+    "rustMse": 0.316566495627,
+    "tsMse": 0.316566533076,
+    "overlapNeurons": 3,
+    "overlapSynapses": 6,
+    "rustOnlyNeurons": 1117,
+    "note": "Overlap neuron bias matches within 1e-9. TypeScript/WASM stops at IF/MIN/MAX; Rust linearises those aggregates and continues blame (Lamarck #83)."
+  },
+  "fullCorpusScorer": {
+    "binary": "~/src/NEAT-AI-scorer/target/release/rust_scorer",
+    "gpu": "off",
+    "baselineScore": 0.347586415202173,
+    "baselineError": 0.6520330527979026,
+    "experimentalScore": 0.3476147943591828,
+    "experimentalError": 0.6520046736408928,
+    "scoreDelta": 0.0000283791570098,
+    "minAcceptDelta": 1e-6,
+    "complexityPenaltyUnchanged": 0.0003805319999244193,
+    "hiddenGenesMoved": true,
+    "outputsOnly": false
+  },
+  "method": {
+    "note": "Full-net apply of the saturated propose() step increases full-corpus MSE (A-2007 slice wins overfit). Win is a single-gene line search on IF/MIN/MAX inbound hidden genes using the sign of a full-corpus accumulate, then combining the genes that each beat rust_scorer by > 1e-6.",
+    "accumulate": "neat_ai_backpropagation sweep network.json .trainData-binary_116 --skip-mse --step-scales 0.002 --learning-rate 0.01 --maximum-bias-adjustment-scale 1 --maximum-weight-adjustment-scale 1",
+    "accumulateRecords": 2262277,
+    "combinedHiddenBiases": 1,
+    "combinedHiddenWeights": 11,
+    "patches": [
+      {
+        "kind": "weight",
+        "fromUUID": "input-300",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": 0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-693",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": -0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-620",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": -0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-183",
+        "toUUID": "4222d084-d11f-4a6c-86ac-f5a465f698aa",
+        "squash": "MINIMUM",
+        "delta": 0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-25",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": -0.01
+      },
+      {
+        "kind": "bias",
+        "uuid": "neuron-763351284",
+        "squash": "MAXIMUM",
+        "delta": -0.002
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-500",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": -0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-580",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": -0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-622",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": -0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "neuron-1279418144",
+        "toUUID": "neuron-1138516000",
+        "squash": "MINIMUM",
+        "delta": -0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-324",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": 0.01
+      },
+      {
+        "kind": "weight",
+        "fromUUID": "input-73",
+        "toUUID": "neuron-1472012023",
+        "squash": "IF",
+        "delta": -0.01
+      }
+    ]
+  }
+}
