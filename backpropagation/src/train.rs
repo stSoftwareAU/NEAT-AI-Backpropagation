@@ -55,6 +55,12 @@ pub struct TrainEpochRecord {
     pub records: u64,
     /// Whether the candidate was kept.
     pub accepted: bool,
+    /// Step-scale halvings tried after the initial step this epoch (#38).
+    #[serde(default)]
+    pub backtracks: u32,
+    /// Step scale of the final (kept or last-tried) candidate (#38).
+    #[serde(default)]
+    pub step_scale: f64,
     /// Hidden / constant biases that moved.
     pub hidden_biases: usize,
     /// Output biases that moved.
@@ -105,6 +111,10 @@ pub struct TrainRequest<'a> {
     /// When true, keep the applied creature even if slice MSE rose (for
     /// full-corpus scorer checks). Default false = MSE rollback.
     pub accept_always: bool,
+    /// Backtracking line search (#38): on a rejected apply, retry the same
+    /// accumulated learning at step/2, step/4, … up to this many halvings
+    /// before declaring the epoch dry. `0` = single attempt (old behaviour).
+    pub max_backtracks: u32,
 }
 
 /// Run the experimental trainer and write `journal.jsonl` + `best.json`.
@@ -154,22 +164,46 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             req.max_records,
             &mut rng,
         )?;
-        let candidate =
-            apply_learnings_with(&incumbent, &report.learning, req.config, lr, req.apply);
-        let deltas = count_apply_deltas(&incumbent, &candidate, req.config.plank_constant);
-        let mut cand_net = compile_creature(&candidate).map_err(|e| e.to_string())?;
-        let (after_mse, _) = compute_mse(
-            &candidate,
-            &mut cand_net,
-            req.training_data,
-            req.max_records,
-        )?;
+        // Backtracking line search (#38): the accumulate above is the
+        // expensive part — on a rejected apply, halve the step and re-test
+        // the same learning instead of discarding the epoch.
+        let mut step_scale = if req.apply.step_scale.is_finite() && req.apply.step_scale > 0.0 {
+            req.apply.step_scale.min(1.0)
+        } else {
+            1.0
+        };
+        let mut backtracks = 0u32;
+        let (candidate, deltas, after_mse, accepted) = loop {
+            let candidate = apply_learnings_with(
+                &incumbent,
+                &report.learning,
+                req.config,
+                lr,
+                ApplyOptions {
+                    step_scale,
+                    ..req.apply
+                },
+            );
+            let deltas = count_apply_deltas(&incumbent, &candidate, req.config.plank_constant);
+            let mut cand_net = compile_creature(&candidate).map_err(|e| e.to_string())?;
+            let (after_mse, _) = compute_mse(
+                &candidate,
+                &mut cand_net,
+                req.training_data,
+                req.max_records,
+            )?;
+            let accepted = req.accept_always || after_mse < best_mse;
+            if accepted || backtracks >= req.max_backtracks {
+                break (candidate, deltas, after_mse, accepted);
+            }
+            backtracks += 1;
+            step_scale /= 2.0;
+        };
         fs::write(
             req.output_dir.join("candidate.json"),
             creature_to_json_pretty(&candidate).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
-        let accepted = req.accept_always || after_mse < best_mse;
         if accepted {
             incumbent = candidate;
             best_mse = after_mse;
@@ -182,6 +216,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             after_mse,
             records: report.records,
             accepted,
+            backtracks,
+            step_scale,
             hidden_biases: deltas.hidden_biases,
             output_biases: deltas.output_biases,
             hidden_weights: deltas.hidden_weights,
@@ -190,7 +226,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         journal.push_str(&serde_json::to_string(&rec).map_err(|e| e.to_string())?);
         journal.push('\n');
         eprintln!(
-            "epoch {epoch}: before_mse={:.12} after_mse={:.12} accepted={accepted} hidden_b={} out_b={} hidden_w={} out_w={}",
+            "epoch {epoch}: before_mse={:.12} after_mse={:.12} accepted={accepted} backtracks={backtracks} step={step_scale:.8} hidden_b={} out_b={} hidden_w={} out_w={}",
             report.mse,
             after_mse,
             deltas.hidden_biases,
@@ -198,6 +234,15 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             deltas.hidden_weights,
             deltas.output_weights
         );
+        // With deterministic accumulation (full sparse ratio, no random
+        // samples) a rejected epoch would recompute the identical learning —
+        // further epochs cannot make progress, so stop early (#38).
+        if !accepted && req.config.sparse_ratio >= 1.0 && req.config.disable_random_samples {
+            eprintln!(
+                "epoch {epoch}: rejected after {backtracks} backtracks and accumulation is deterministic; stopping early (#38)"
+            );
+            break;
+        }
     }
 
     // Score before writing best.json so GRQ can read `score` / `backpropagation`
@@ -310,11 +355,137 @@ mod tests {
             scorer: None,
             apply: ApplyOptions::default(),
             accept_always: false,
+            max_backtracks: 0,
         })
         .unwrap();
         assert!(result.baseline_mse > 0.0);
         assert!(out.join("best.json").is_file());
         assert!(out.join("journal.jsonl").is_file());
+    }
+
+    #[test]
+    fn rejected_deterministic_epoch_stops_early() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let mut f = fs::File::create(data.join("0.bin")).unwrap();
+        // input=1 → identity chain → 1; target=1 so MSE is already 0 and no
+        // apply can strictly improve it — every epoch must reject.
+        f.write_all(&1.0f32.to_le_bytes()).unwrap();
+        f.write_all(&1.0f32.to_le_bytes()).unwrap();
+        let creature_path = dir.path().join("creature.json");
+        fs::write(
+            &creature_path,
+            r#"{
+              "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+              "neurons":[
+                {"type":"hidden","uuid":"h1","bias":0.0,"squash":"IDENTITY"},
+                {"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}
+              ],
+              "synapses":[
+                {"fromUUID":"input-0","toUUID":"h1","weight":1.0},
+                {"fromUUID":"h1","toUUID":"o1","weight":1.0}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let out = dir.path().join("out");
+        let result = run_train(TrainRequest {
+            creature: &creature_path,
+            training_data: &data,
+            config: &BackpropConfig::default(),
+            epochs: 5,
+            max_records: Some(1),
+            seed: 1,
+            output_dir: &out,
+            scorer: None,
+            apply: ApplyOptions::default(),
+            accept_always: false,
+            max_backtracks: 2,
+        })
+        .unwrap();
+        assert_eq!(result.accepted_epochs, 0);
+        let journal = fs::read_to_string(out.join("journal.jsonl")).unwrap();
+        let epoch_lines = journal
+            .lines()
+            .filter(|l| l.contains("\"kind\":\"epoch\""))
+            .count();
+        // Deterministic accumulation + rejection → early stop after epoch 1,
+        // not 5 identical rejected epochs (#38).
+        assert_eq!(epoch_lines, 1);
+    }
+
+    #[test]
+    fn backtracking_accepts_when_full_step_overshoots() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let mut f = fs::File::create(data.join("0.bin")).unwrap();
+        // input=1 → identity chain → 1; target=1.5. With a large learning
+        // rate the proposed jump overshoots past the target (worse MSE at
+        // full step) but a halved step lands closer — the line search must
+        // find it instead of rejecting the epoch.
+        f.write_all(&1.0f32.to_le_bytes()).unwrap();
+        f.write_all(&1.5f32.to_le_bytes()).unwrap();
+        let creature_path = dir.path().join("creature.json");
+        fs::write(
+            &creature_path,
+            r#"{
+              "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+              "neurons":[
+                {"type":"hidden","uuid":"h1","bias":0.0,"squash":"IDENTITY"},
+                {"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}
+              ],
+              "synapses":[
+                {"fromUUID":"input-0","toUUID":"h1","weight":1.0},
+                {"fromUUID":"h1","toUUID":"o1","weight":1.0}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let cfg = BackpropConfig {
+            learning_rate: 1.0,
+            initial_learning_rate: 1.0,
+            ..BackpropConfig::default()
+        };
+        let out_no_ls = dir.path().join("out-no-ls");
+        let baseline = run_train(TrainRequest {
+            creature: &creature_path,
+            training_data: &data,
+            config: &cfg,
+            epochs: 1,
+            max_records: Some(1),
+            seed: 1,
+            output_dir: &out_no_ls,
+            scorer: None,
+            apply: ApplyOptions::default(),
+            accept_always: false,
+            max_backtracks: 0,
+        })
+        .unwrap();
+        let out_ls = dir.path().join("out-ls");
+        let with_ls = run_train(TrainRequest {
+            creature: &creature_path,
+            training_data: &data,
+            config: &cfg,
+            epochs: 1,
+            max_records: Some(1),
+            seed: 1,
+            output_dir: &out_ls,
+            scorer: None,
+            apply: ApplyOptions::default(),
+            accept_always: false,
+            max_backtracks: 8,
+        })
+        .unwrap();
+        // The line-search run must never do worse than the single-attempt
+        // run, and when the full step overshoots it must recover an accept.
+        assert!(with_ls.best_mse <= baseline.best_mse);
+        if baseline.accepted_epochs == 0 {
+            assert_eq!(with_ls.accepted_epochs, 1);
+            let journal = fs::read_to_string(out_ls.join("journal.jsonl")).unwrap();
+            assert!(journal.contains("\"backtracks\":"));
+        }
     }
 
     #[test]
@@ -346,6 +517,7 @@ mod tests {
             scorer: None,
             apply: ApplyOptions::default(),
             accept_always: false,
+            max_backtracks: 0,
         })
         .unwrap_err();
         assert!(err.contains("forward-only"));
