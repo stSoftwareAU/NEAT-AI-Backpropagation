@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `train` stamps `score`, `error`, and a run-summary `backpropagation` tag on
+  `best.json` when `--scorer` is set, so GRQ workers can gate check-in on the
+  full-corpus rust_scorer score without reading another program's tag
+  (GRQ #3991 / #3952).
 - Experimental standalone Rust trainer (`neat_ai_backpropagation`) with
   `compare`, `diff`, `train`, and `sweep` subcommands. Reverse-topo math
   stays in sibling `neat-core`; this crate ports the Lamarck config /

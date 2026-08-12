@@ -12,6 +12,7 @@ pub mod mse;
 pub mod propagate_layout;
 pub mod scorer;
 pub mod sweep;
+pub mod tags;
 pub mod train;
 
 pub use backprop::{
