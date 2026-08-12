@@ -82,6 +82,10 @@ enum Commands {
         /// Keep the applied creature even if slice MSE rose.
         #[arg(long, default_value_t = false)]
         accept_always: bool,
+        /// Backtracking line search (#38): halvings of step-scale to retry a
+        /// rejected apply with, reusing the epoch's accumulated learning.
+        #[arg(long, default_value_t = 6)]
+        max_backtracks: u32,
         /// Optional `rust_scorer` binary for before/after score.
         #[arg(long)]
         scorer: Option<PathBuf>,
@@ -213,6 +217,7 @@ fn run() -> Result<(), String> {
             outputs_only,
             hidden_only,
             accept_always,
+            max_backtracks,
             scorer,
             output_dir,
         } => {
@@ -238,6 +243,7 @@ fn run() -> Result<(), String> {
                     hidden_only,
                 },
                 accept_always,
+                max_backtracks,
             })?;
             eprintln!(
                 "train: baseline_mse={:.12} best_mse={:.12} accepted_epochs={}",
