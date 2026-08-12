@@ -237,10 +237,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         // With deterministic accumulation (full sparse ratio, no random
         // samples) a rejected epoch would recompute the identical learning —
         // further epochs cannot make progress, so stop early (#38).
-        if !accepted
-            && req.config.sparse_ratio >= 1.0
-            && req.config.disable_random_samples
-        {
+        if !accepted && req.config.sparse_ratio >= 1.0 && req.config.disable_random_samples {
             eprintln!(
                 "epoch {epoch}: rejected after {backtracks} backtracks and accumulation is deterministic; stopping early (#38)"
             );
