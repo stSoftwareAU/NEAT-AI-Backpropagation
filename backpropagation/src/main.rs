@@ -3,6 +3,7 @@
 use clap::{Parser, Subcommand};
 use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig};
 use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, run_compare};
+use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
 use neat_ai_backpropagation::train::{TrainRequest, default_output_dir, run_train};
 use std::path::PathBuf;
@@ -133,6 +134,49 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         skip_mse: bool,
         /// Output directory for `sweep.json` and `candidates/`.
+        #[arg(long, default_value_os_t = default_output_dir())]
+        output_dir: PathBuf,
+    },
+    /// Compare proposal Δ to finite-difference ∂MSE/∂gene (issue #40).
+    GradientCheck {
+        /// Creature JSON (UUID-only export).
+        creature: PathBuf,
+        /// Directory of little-endian f32 `.bin` records.
+        training_data: PathBuf,
+        /// Max records for accumulate and FD MSE.
+        #[arg(long)]
+        max_records: Option<u64>,
+        /// Sparse-selection / sampling seed.
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        /// Learning rate (fixed strategy).
+        #[arg(long, default_value_t = 0.01)]
+        learning_rate: f64,
+        /// Maximum |Δbias| per propose.
+        #[arg(long, default_value_t = 1.0)]
+        maximum_bias_adjustment_scale: f64,
+        /// Maximum |Δweight| per propose.
+        #[arg(long, default_value_t = 1.0)]
+        maximum_weight_adjustment_scale: f64,
+        /// Step scale applied to (proposed − current).
+        #[arg(long, default_value_t = 1.0)]
+        step_scale: f64,
+        /// Max bias genes to sample (stratified by class).
+        #[arg(long, default_value_t = 50)]
+        sample_biases: usize,
+        /// Max weight genes to sample (stratified by class).
+        #[arg(long, default_value_t = 50)]
+        sample_weights: usize,
+        /// Central finite-difference ε.
+        #[arg(long, default_value_t = 1e-4)]
+        fd_eps: f64,
+        /// Restrict eligible pool to output genes.
+        #[arg(long, default_value_t = false)]
+        outputs_only: bool,
+        /// Restrict eligible pool to hidden genes.
+        #[arg(long, default_value_t = false)]
+        hidden_only: bool,
+        /// Output directory for `gradient-check.json` and `genes.jsonl`.
         #[arg(long, default_value_os_t = default_output_dir())]
         output_dir: PathBuf,
     },
@@ -301,6 +345,58 @@ fn run() -> Result<(), String> {
                 summary.baseline_train_mse,
                 output_dir.join("sweep.json").display()
             );
+            Ok(())
+        }
+        Commands::GradientCheck {
+            creature,
+            training_data,
+            max_records,
+            seed,
+            learning_rate,
+            maximum_bias_adjustment_scale,
+            maximum_weight_adjustment_scale,
+            step_scale,
+            sample_biases,
+            sample_weights,
+            fd_eps,
+            outputs_only,
+            hidden_only,
+            output_dir,
+        } => {
+            let cfg = BackpropConfig {
+                learning_rate,
+                initial_learning_rate: learning_rate,
+                maximum_bias_adjustment_scale,
+                maximum_weight_adjustment_scale,
+                ..BackpropConfig::default()
+            };
+            let summary = run_gradient_check(GradientCheckRequest {
+                creature: &creature,
+                training_data: &training_data,
+                config: &cfg,
+                max_records,
+                seed,
+                sample_biases,
+                sample_weights,
+                fd_eps,
+                step_scale,
+                outputs_only,
+                hidden_only,
+                output_dir: &output_dir,
+            })?;
+            eprintln!(
+                "gradient-check: records={} scored={} sign_agree={:.1}% wrote {}",
+                summary.records,
+                summary.scored,
+                summary.sign_agree_pct,
+                output_dir.join("gradient-check.json").display()
+            );
+            for c in &summary.by_class {
+                eprintln!(
+                    "  {}: sampled={} scored={} sign_agree={:.1}%",
+                    c.class, c.sampled, c.scored, c.sign_agree_pct
+                );
+            }
             Ok(())
         }
     }
