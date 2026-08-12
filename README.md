@@ -51,6 +51,12 @@ cargo run -p neat_ai_backpropagation --release -- sweep \
   ~/src/GRQ/.trainData-binary_116 \
   --skip-mse --step-scales 0.002,0.01 \
   --output-dir .backprop/sweep
+
+cargo run -p neat_ai_backpropagation --release -- gradient-check \
+  ~/src/GRQ-cluster/network.json \
+  /tmp/grq-train-slice \
+  --max-records 512 --sample-biases 20 --sample-weights 40 \
+  --output-dir .backprop/grad-check
 ```
 
 `--version` reports `CARGO_PKG_VERSION`. Train journals that version in
@@ -60,8 +66,10 @@ cargo run -p neat_ai_backpropagation --release -- sweep \
 only when post-apply MSE is strictly lower than the best so far
 (rollback otherwise). `--accept-always` keeps the candidate anyway
 (for a later full-corpus `rust_scorer` check). `sweep` accumulates
-once and writes one candidate per `--step-scales` entry. Recurrent /
-re-entrant creatures are refused.
+once and writes one candidate per `--step-scales` entry.
+`gradient-check` (issue #40) compares per-gene proposal Δ to a
+finite-difference ∂MSE/∂θ and reports sign-agreement by gene class.
+Recurrent / re-entrant creatures are refused.
 
 ## Production win protocol
 

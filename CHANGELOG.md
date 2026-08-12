@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `gradient-check` CLI: accumulate once, sample genes, and compare each
+  proposal Δ against a central finite-difference ∂MSE/∂θ — sign-agreement
+  rates by gene class (issue #40). Confirms whether the aggregated learning
+  direction is a descent direction before trusting full-network apply.
 - `train` stamps `score`, `error`, and a run-summary `backpropagation` tag on
   `best.json` when `--scorer` is set, so GRQ workers can gate check-in on the
   full-corpus rust_scorer score without reading another program's tag

@@ -8,6 +8,7 @@
 
 pub mod backprop;
 pub mod compare;
+pub mod gradient_check;
 pub mod mse;
 pub mod propagate_layout;
 pub mod scorer;
@@ -23,6 +24,10 @@ pub use backprop::{
 pub use compare::{
     CompareDiffReport, CompareDump, NeuronCompare, SynapseCompare, build_compare_dump,
     diff_compare_dumps,
+};
+pub use gradient_check::{
+    ClassStats, GeneClass, GeneProbeRow, GradientCheckRequest, GradientCheckSummary,
+    run_gradient_check,
 };
 pub use mse::compute_mse;
 pub use propagate_layout::{
