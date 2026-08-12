@@ -95,7 +95,7 @@ pub struct BackpropProgress {
     pub opening_score: f64,
 }
 
-/// Run-level check-in blurb for GRQ commit subjects.
+/// Run-level check-in blurb for GRQ commit subjects, marked 🌀 (issue #31).
 pub fn backprop_progress_message(progress: &BackpropProgress) -> String {
     let score_clause = format_score_improved(progress.score, progress.opening_score);
     let accept_word = if progress.accepted_epochs == 1 {
@@ -109,7 +109,7 @@ pub fn backprop_progress_message(progress: &BackpropProgress) -> String {
         "epochs"
     };
     format!(
-        "🔁 Backprop · {} {accept_word} / {} {epoch_word} · {score_clause}",
+        "🌀 · {} {accept_word} / {} {epoch_word} · {score_clause}",
         progress.accepted_epochs, progress.epochs,
     )
 }
@@ -243,10 +243,39 @@ mod tests {
             .find(|t| t["name"] == "backpropagation")
             .unwrap();
         let msg = backprop["value"].as_str().unwrap();
-        assert!(msg.contains("🔁 Backprop"));
+        assert!(msg.starts_with("🌀 · "), "unexpected subject: {msg}");
+        assert!(!msg.contains('🔁'));
+        assert!(!msg.contains("Backprop"));
         assert!(msg.contains("2 accepts / 4 epochs"));
         assert!(msg.contains("improved by"));
         let lamarck = tags.iter().find(|t| t["name"] == "lamarck").unwrap();
         assert_eq!(lamarck["value"], "🦒 leave me alone");
+    }
+
+    #[test]
+    fn progress_message_is_spiral_prefixed_with_singular_wording() {
+        let msg = backprop_progress_message(&BackpropProgress {
+            accepted_epochs: 1,
+            epochs: 1,
+            score: 0.5,
+            error: 0.5,
+            opening_score: 0.4,
+        });
+        assert_eq!(msg, "🌀 · 1 accept / 1 epoch · score: 0.5 improved by 0.1");
+    }
+
+    #[test]
+    fn progress_message_reports_a_decline() {
+        let msg = backprop_progress_message(&BackpropProgress {
+            accepted_epochs: 0,
+            epochs: 3,
+            score: 0.4,
+            error: 0.6,
+            opening_score: 0.5,
+        });
+        assert_eq!(
+            msg,
+            "🌀 · 0 accepts / 3 epochs · score: 0.4 declined by 0.1"
+        );
     }
 }
