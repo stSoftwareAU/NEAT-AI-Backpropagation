@@ -6,6 +6,7 @@ use crate::backprop::{
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
 use crate::scorer::{ScoreResult, score_creature};
+use crate::tags::{BackpropProgress, CreatureMeta, serialize_creature_with_meta};
 use neat_core::{CreatureExport, compile_creature, creature_to_json_pretty, parse_creature_json};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -110,6 +111,7 @@ pub struct TrainRequest<'a> {
 pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
     let text = fs::read_to_string(req.creature).map_err(|e| e.to_string())?;
+    let mut meta = CreatureMeta::from_creature_json(&text);
     let mut incumbent = parse_creature_json(&text).map_err(|e| e.to_string())?;
     if !incumbent.forward_only {
         return Err(
@@ -198,12 +200,12 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         );
     }
 
-    let best_json = creature_to_json_pretty(&incumbent).map_err(|e| e.to_string())?;
-    fs::write(req.output_dir.join("best.json"), &best_json).map_err(|e| e.to_string())?;
-    fs::write(&journal_path, journal).map_err(|e| e.to_string())?;
-
+    // Score before writing best.json so GRQ can read `score` / `backpropagation`
+    // tags without a second rescore pass (GRQ #3991). Untagged best.json when
+    // --scorer is omitted — callers that need the gate must pass a scorer.
     let mut baseline_score = None;
     let mut best_score = None;
+    let compact_best = creature_to_json_pretty(&incumbent).map_err(|e| e.to_string())?;
     if let Some(scorer) = req.scorer {
         let score_dir = req.output_dir.join("scorer-work");
         baseline_score = Some(score_creature(
@@ -214,11 +216,24 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         )?);
         best_score = Some(score_creature(
             scorer,
-            &best_json,
+            &compact_best,
             req.training_data,
             &score_dir.join("best"),
         )?);
+        if let (Some(baseline), Some(best)) = (&baseline_score, &best_score) {
+            meta.stamp_train_result(&BackpropProgress {
+                accepted_epochs,
+                epochs: req.epochs,
+                score: best.score,
+                error: best.error,
+                opening_score: baseline.score,
+            });
+        }
     }
+
+    let best_json = serialize_creature_with_meta(&incumbent, &meta)?;
+    fs::write(req.output_dir.join("best.json"), &best_json).map_err(|e| e.to_string())?;
+    fs::write(&journal_path, journal).map_err(|e| e.to_string())?;
 
     Ok(TrainResult {
         creature: incumbent,
