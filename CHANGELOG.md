@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The `backpropagation` tag — used verbatim as the GRQ check-in commit subject
+  — is now marked `🌀` and drops the word "Backprop":
+  `🌀 · 2 accepts / 4 epochs · score: … improved by …` (issue #31).
+
 ### Added
 
 - `gradient-check` CLI: accumulate once, sample genes, and compare each
