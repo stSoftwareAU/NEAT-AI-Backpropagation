@@ -62,6 +62,20 @@ applied to the active development branch only.
 
 Always update to the latest commit on `Develop` to receive security fixes.
 
+## Automated scanning
+
+| Gate | Where | Covers |
+| ---- | ----- | ------ |
+| CodeQL (`security-and-quality`) | [`.github/workflows/codeql.yml`](./.github/workflows/codeql.yml) — PRs, pushes to `Develop`, weekly cron | this repository's own Rust |
+| `rustsec/audit-check`, `cargo-deny` | [`.github/workflows/security.yml`](./.github/workflows/security.yml), `quality.sh` | advisories and licences in dependencies |
+| Renovate (`osvVulnerabilityAlerts`) | [`renovate.json`](./renovate.json) | advisory-driven crate bumps, no PR needed to trigger |
+
+Dependabot alerts and Dependabot security updates are repository settings
+rather than committed files. A repository administrator enables them under
+**Settings → Advanced Security**; nothing in the checkout can turn them on.
+Once enabled they complement the gates above by raising a PR the moment an
+advisory lands.
+
 ## Scope
 
 This policy covers the code in this repository. Vulnerabilities in the

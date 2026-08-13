@@ -45,6 +45,10 @@ echo "Validating auto-format PR workflow..."
 echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
 ./scripts/check-version-increment-workflow.sh
 
+echo "Validating CodeQL code-scanning workflow..."
+./scripts/test-check-codeql-workflow.sh
+./scripts/check-codeql-workflow.sh
+
 echo "Validating Renovate dependency-update config..."
 ./scripts/test-check-renovate-config.sh
 ./scripts/check-renovate-config.sh

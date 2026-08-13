@@ -25,6 +25,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `.github/workflows/codeql.yml` — CodeQL `security-and-quality` analysis of
+  this crate's own Rust on pull requests, pushes to `Develop`, and a weekly
+  cron, so an advisory or query pack published after a merge is applied without
+  waiting for the next PR. `scripts/check-codeql-workflow.sh` gates the policy
+  in `quality.sh` and CI (issue #20).
 - `backpropagation/tests/mse_surface_agreement.rs` — cross-surface guard that
   `compute_mse` (eval path) and `AccumulateReport::mse` (accumulate pass) agree
   within `nearly_equal` on the same records, for a feed-forward creature and

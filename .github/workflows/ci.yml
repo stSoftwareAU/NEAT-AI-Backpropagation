@@ -133,6 +133,7 @@ jobs:
             "rust-toolchain.toml"
             "backpropagation/src/main.rs"
             ".github/CODEOWNERS"
+            ".github/workflows/codeql.yml"
             "SECURITY.md"
             "neat-core.expected-version"
             "renovate.json"
@@ -153,6 +154,12 @@ jobs:
 
       - name: Gate on unhandled breaking neat-core bump
         run: ./scripts/check-neat-core-version.sh
+
+      - name: Validate CodeQL code-scanning workflow
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-codeql-workflow.sh
+          ./scripts/check-codeql-workflow.sh
 
       - name: Validate Renovate dependency-update config
         run: |

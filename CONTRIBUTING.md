@@ -34,8 +34,14 @@ The `neat-core` path dependency in
 ```
 
 This mirrors CI: shellcheck, the auto-format workflow validator, the
-version-increment workflow validator, the Renovate config validator, codespell,
-cargo-deny, fmt `--check`, clippy with warnings denied, tests, and rustdoc.
+version-increment workflow validator, the CodeQL workflow validator, the
+Renovate config validator, codespell, cargo-deny, fmt `--check`, clippy with
+warnings denied, tests, and rustdoc.
+
+Code scanning runs in GitHub Actions, not locally — see
+[Code scanning](./README.md#code-scanning). Changing
+[`.github/workflows/codeql.yml`](./.github/workflows/codeql.yml) must keep
+`./scripts/check-codeql-workflow.sh` green.
 
 External crate bumps arrive as Renovate PRs under a 24-hour quarantine — see
 [Dependency updates](./README.md#dependency-updates). Changing
