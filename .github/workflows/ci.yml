@@ -135,6 +135,7 @@ jobs:
             ".github/CODEOWNERS"
             "SECURITY.md"
             "neat-core.expected-version"
+            "renovate.json"
           )
           missing_files=()
           for file in "${required_files[@]}"; do
@@ -152,6 +153,12 @@ jobs:
 
       - name: Gate on unhandled breaking neat-core bump
         run: ./scripts/check-neat-core-version.sh
+
+      - name: Validate Renovate dependency-update config
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-renovate-config.sh
+          ./scripts/check-renovate-config.sh
 
   shell-checks:
     name: Shell Script Quality
