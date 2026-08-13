@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `.markdownlint-cli2.jsonc`, mirroring the sibling NEAT-AI-core config, so the
+  markdown gate runs with the same rule set across the repo family (prose-width
+  and table-padding rules off, PR-summary snapshots ignored, structural rules
+  and bare-URL checks on).
 - `gradient-check` CLI: accumulate once, sample genes, and compare each
   proposal Δ against a central finite-difference ∂MSE/∂θ — sign-agreement
   rates by gene class (issue #40). Confirms whether the aggregated learning
