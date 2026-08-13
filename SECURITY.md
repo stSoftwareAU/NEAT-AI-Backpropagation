@@ -18,7 +18,7 @@ Use one of the private channels below instead:
    a private advisory visible only to you and the maintainers. See
    [Privately reporting a security vulnerability](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability).
 2. **Email.** If you cannot use GitHub private reporting, email
-   **security@stsoftware.com.au** with the details. Use the subject line
+   **`security@stsoftware.com.au`** with the details. Use the subject line
    `NEAT-AI-Backpropagation security report`.
 
 Whichever channel you choose, please include as much of the following as you

@@ -1,0 +1,31 @@
+# markdownlint-cli2 configuration for NEAT-AI-Backpropagation.
+# Mirrors the sibling NEAT-AI-core config: structural rules (heading
+# hierarchy, list indentation, fencing) stay on, prose-style rules that only
+# produce noise on tables and archived PR summaries are off.
+# YAML (not .jsonc) because .gitignore only un-ignores this filename.
+globs:
+  - "**/*.md"
+
+ignores:
+  - "target/**"
+  - "node_modules/**"
+  - ".git/**"
+  # Historical PR summary docs — point-in-time snapshots, not retroactively
+  # reformatted (Issue #2173 moved them under docs/archive/pr-summaries/;
+  # the old glob stays for leftovers).
+  - "docs/pr-summary-*.md"
+  - "docs/archive/pr-summaries/pr-summary-*.md"
+
+config:
+  default: true
+  # Long lines are common in tables and fenced code blocks.
+  MD013: false
+  # Tables in this repo use the compact style without padding spaces.
+  MD060: false
+  # Allow inline HTML (e.g. <details>, <summary>, <br>).
+  MD033: false
+  # PR summaries reuse "## Summary" / "## Test Plan" across sections.
+  MD024:
+    siblings_only: true
+  # First line need not be a top-level heading (PR summaries lead with H2).
+  MD041: false
