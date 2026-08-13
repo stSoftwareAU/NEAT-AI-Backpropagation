@@ -168,6 +168,35 @@ flowchart LR
 it fails if the quarantine is missing, shorter than 24 hours, unparsable,
 shortened for an external crate, or if the `cargo` manager is switched off.
 
+## Code scanning
+
+`security.yml` only asks whether a *dependency* carries a known advisory.
+[`codeql.yml`](./.github/workflows/codeql.yml) analyses this crate's own
+Rust with CodeQL's `security-and-quality` queries, and runs on a weekly
+schedule as well as on pull requests — so a newly published query pack is
+applied even in a week with no PR.
+
+```mermaid
+flowchart LR
+    A[PR to Develop] --> C[codeql.yml]
+    B["weekly cron<br/>Mon 04:30 UTC"] --> C
+    P[push to Develop] --> C
+    C --> D["CodeQL init<br/>(rust, build-mode none)"]
+    D --> E[analyse]
+    E --> F[Security tab<br/>code scanning alerts]
+```
+
+`scripts/check-codeql-workflow.sh` gates that policy in `quality.sh` and CI:
+it fails if the workflow is missing, skips `Develop`, has no schedule (or one
+slower than weekly), cannot upload results (`security-events: write`), does
+not analyse Rust, is missing either CodeQL step, or pins an action to a
+movable tag instead of a commit SHA.
+
+**Dependabot alerts and security updates** are a repository *setting*, not a
+committed file, so they cannot be enabled from the checkout — see
+[SECURITY.md](./SECURITY.md#automated-scanning). Renovate's
+`osvVulnerabilityAlerts` already raises an advisory-driven PR without them.
+
 ## Local quality
 
 ```bash

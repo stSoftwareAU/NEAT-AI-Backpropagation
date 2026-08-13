@@ -1,0 +1,64 @@
+# CodeQL code scanning (Issue #20).
+#
+# `security.yml` only answers "does a dependency have a known advisory?".
+# This workflow analyses the repository's own Rust for injectable or unsound
+# patterns, and — because it also runs on a weekly schedule — keeps doing so
+# when no pull request happens to be open.
+name: CodeQL
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - Develop
+      - "milestone/**"
+  push:
+    branches:
+      - Develop
+  schedule:
+    # Weekly, Mondays 04:30 UTC — refreshes the default-branch baseline the
+    # pull-request alerts are diffed against, even in a quiet week.
+    - cron: "30 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyse:
+    name: Analyse Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Without this the analysis runs and its results are discarded.
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up NEAT-AI-core sibling (path dependency for neat-core)
+        uses: ./.github/actions/setup-neat-core
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable, frozen 2026-05-18
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef  # v4 (codeql-bundle-v2.26.3)
+        with:
+          languages: rust
+          # Rust extraction resolves the workspace from source; no build step.
+          build-mode: none
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef  # v4 (codeql-bundle-v2.26.3)
+        with:
+          category: "/language:rust"
