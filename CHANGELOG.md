@@ -8,21 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `compute_mse` is now a thin wrapper over `neat_core::mse_mean_streaming` —
-  no loss maths stays in this crate (issue #32). The empty-corpus error
-  (`MSE: no training records scored`) is kept here, and the creature's own
-  `forwardOnly` flag now selects core's fused (no-reset) route, so a
-  recurrent creature keeps stateless per-record semantics.
+- `train --step-scale` now defaults to `0.01` (the top of `sweep`'s own grid)
+  instead of `1.0`. A full coordinated jump moves every gene to a value
+  proposed as if the others stayed put, which overshoots on large creatures —
+  on the GRQ network it raised train-slice MSE 0.6515 → 0.7505 (issue #39).
+- `train` resolves the learning rate **per epoch** from the configured
+  strategy and journals it as `learningRate` on each epoch record. Previously
+  only iteration 0 was ever evaluated (issue #39).
 - The `backpropagation` tag — used verbatim as the GRQ check-in commit subject
   — is now marked `🌀` and drops the word "Backprop":
   `🌀 · 2 accepts / 4 epochs · score: … improved by …` (issue #31).
 
 ### Added
 
-- `.markdownlint-cli2.jsonc`, mirroring the sibling NEAT-AI-core config, so the
-  markdown gate runs with the same rule set across the repo family (prose-width
-  and table-padding rules off, PR-summary snapshots ignored, structural rules
-  and bare-URL checks on).
+- `train --learning-rate-strategy` (`fixed`, `decay`, `adaptive`,
+  `warm-restart`), `--learning-rate-decay`, and `--normalise-gradients` —
+  `BackpropConfig` already supported all three but the trainer only ever ran a
+  fixed rate with multi-path gradients un-normalised (issue #39).
 - `gradient-check` CLI: accumulate once, sample genes, and compare each
   proposal Δ against a central finite-difference ∂MSE/∂θ — sign-agreement
   rates by gene class (issue #40). Confirms whether the aggregated learning

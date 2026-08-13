@@ -36,4 +36,4 @@ pub use propagate_layout::{
 };
 pub use scorer::{ScoreResult, score_creature};
 pub use sweep::{SweepRequest, SweepRow, SweepSummary, run_sweep};
-pub use train::{TrainJournalHeader, TrainResult, run_train};
+pub use train::{DEFAULT_STEP_SCALE, TrainJournalHeader, TrainResult, run_train};

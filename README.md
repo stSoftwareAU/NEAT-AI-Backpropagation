@@ -67,6 +67,41 @@ only when post-apply MSE is strictly lower than the best so far
 (rollback otherwise). `--accept-always` keeps the candidate anyway
 (for a later full-corpus `rust_scorer` check). `sweep` accumulates
 once and writes one candidate per `--step-scales` entry.
+
+### Train step size (issue #39)
+
+Every gene's proposal is computed as if the other genes hold still, so
+moving all of them the whole way at once overshoots on a large creature
+(~16.6k parameters move together on the GRQ network). The defaults are
+therefore sweep-informed rather than full-jump:
+
+| Flag | Default | Why |
+| ---- | ------- | --- |
+| `--step-scale` | `0.01` | Top of sweep's own grid; `1.0` raised production MSE 0.6515 → 0.7505 |
+| `--max-backtracks` | `6` | Line search (#38) halves further on a rejected apply |
+| `--maximum-bias-adjustment-scale` | `1.0` | ±10 (the `BackpropConfig` / TypeScript parity default) is huge per gene |
+| `--maximum-weight-adjustment-scale` | `1.0` | as above |
+
+`BackpropConfig::default()` keeps the ±10 clamps because `compare` must
+mirror the TypeScript harness byte for byte; only the trainer CLI caps at
+±1.
+
+```mermaid
+flowchart LR
+    A[accumulate epoch] --> B["apply at --step-scale (0.01)"]
+    B --> C{post-apply MSE lower?}
+    C -- yes --> D[keep candidate]
+    C -- no --> E{backtracks left?}
+    E -- yes --> F[step ÷ 2] --> B
+    E -- no --> G[rollback]
+```
+
+`--learning-rate` is the *initial* rate; `--learning-rate-strategy`
+(`fixed`, `decay`, `adaptive`, `warm-restart`) plus `--learning-rate-decay`
+schedule it per epoch, and each epoch's resolved rate is journalled as
+`learningRate`. `--normalise-gradients` divides multi-path gradients by
+`sqrt(path count)` (NEAT-AI #1872) so dense graphs stop multi-counting a
+neuron's signal.
 `gradient-check` (issue #40) compares per-gene proposal Δ to a
 finite-difference ∂MSE/∂θ and reports sign-agreement by gene class.
 Recurrent / re-entrant creatures are refused.
