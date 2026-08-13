@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The accumulate pass reduces each record's squared error through
+  `neat_core::mse_record` instead of its own fused loop, so this crate holds no
+  loss arithmetic (issue #33). `AccumulateReport::mse` is unchanged — core
+  applies the same `1/outputs` mean over the same activations.
 - `train --step-scale` now defaults to `0.01` (the top of `sweep`'s own grid)
   instead of `1.0`. A full coordinated jump moves every gene to a value
   proposed as if the others stayed put, which overshoots on large creatures —
