@@ -1,0 +1,19 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "minimumReleaseAge": "24 hours",
+  "vulnerabilityAlerts": { "enabled": true },
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "neat-core is a sibling path dependency; the Auto Format workflow already runs `cargo update -p neat-core` on every PR, so Renovate must not fight it.",
+      "matchPackageNames": ["neat-core"],
+      "enabled": false
+    },
+    {
+      "description": "Internal stSoftwareAU code ships with no embargo (Issue #1613 classification). null is Renovate's documented no-embargo value; the schema types minimumReleaseAge as string|null, so \"0\" and false are both invalid.",
+      "matchPackageNames": ["/^stSoftwareAU\\//"],
+      "minimumReleaseAge": null
+    }
+  ]
+}

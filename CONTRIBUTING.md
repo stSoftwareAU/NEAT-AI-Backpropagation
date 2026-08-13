@@ -34,8 +34,13 @@ The `neat-core` path dependency in
 ```
 
 This mirrors CI: shellcheck, the auto-format workflow validator, the
-version-increment workflow validator, codespell, cargo-deny, fmt `--check`,
-clippy with warnings denied, tests, and rustdoc.
+version-increment workflow validator, the Renovate config validator, codespell,
+cargo-deny, fmt `--check`, clippy with warnings denied, tests, and rustdoc.
+
+External crate bumps arrive as Renovate PRs under a 24-hour quarantine — see
+[Dependency updates](./README.md#dependency-updates). Changing
+[`renovate.json`](./renovate.json) must keep
+`./scripts/check-renovate-config.sh` green.
 
 On each PR the **Auto Format** workflow
 ([`.github/workflows/auto-format.yml`](./.github/workflows/auto-format.yml))

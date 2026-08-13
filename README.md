@@ -141,6 +141,33 @@ Recorded result (see [`docs/production-win.json`](./docs/production-win.json)):
   Score `0.347586415202` → `0.347614794359` (Δ `+2.84e-5`). Topology
   and complexity penalty unchanged.
 
+## Dependency updates
+
+External crates.io dependencies are bumped by Renovate
+([`renovate.json`](./renovate.json)) under a **24-hour quarantine**
+(`minimumReleaseAge`), so a freshly-hijacked release cannot be merged on
+publish day. Internal `stSoftwareAU/*` dependencies carry no embargo, and
+`neat-core` is disabled outright — it is a sibling path dependency whose
+lockfile entry is already synced by the Auto Format workflow's
+`cargo update -p neat-core`.
+
+```mermaid
+flowchart LR
+    A[crates.io release] --> B{"published ≥ 24h ago?"}
+    B -- no --> C[held by Renovate]
+    C --> B
+    B -- yes --> D[Renovate PR]
+    E[stSoftwareAU release] --> D
+    F[neat-core path dep] --> G[Auto Format<br/>cargo update -p neat-core]
+    D --> H["ci.yml — cargo-deny, clippy, tests"]
+    G --> H
+    H --> I[merge]
+```
+
+`scripts/check-renovate-config.sh` gates that policy in `quality.sh` and CI:
+it fails if the quarantine is missing, shorter than 24 hours, unparsable,
+shortened for an external crate, or if the `cargo` manager is switched off.
+
 ## Local quality
 
 ```bash

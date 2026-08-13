@@ -45,6 +45,10 @@ echo "Validating auto-format PR workflow..."
 echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
 ./scripts/check-version-increment-workflow.sh
 
+echo "Validating Renovate dependency-update config..."
+./scripts/test-check-renovate-config.sh
+./scripts/check-renovate-config.sh
+
 echo "Running codespell preflight..."
 if ! ./scripts/spell-check.sh; then
   echo "spell-check: FAILED — fix the typos above or update .codespellrc"
