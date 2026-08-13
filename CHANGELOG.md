@@ -8,12 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `train --step-scale` now defaults to `0.01` (the top of `sweep`'s own grid)
+  instead of `1.0`. A full coordinated jump moves every gene to a value
+  proposed as if the others stayed put, which overshoots on large creatures —
+  on the GRQ network it raised train-slice MSE 0.6515 → 0.7505 (issue #39).
+- `train` resolves the learning rate **per epoch** from the configured
+  strategy and journals it as `learningRate` on each epoch record. Previously
+  only iteration 0 was ever evaluated (issue #39).
 - The `backpropagation` tag — used verbatim as the GRQ check-in commit subject
   — is now marked `🌀` and drops the word "Backprop":
   `🌀 · 2 accepts / 4 epochs · score: … improved by …` (issue #31).
 
 ### Added
 
+- `train --learning-rate-strategy` (`fixed`, `decay`, `adaptive`,
+  `warm-restart`), `--learning-rate-decay`, and `--normalise-gradients` —
+  `BackpropConfig` already supported all three but the trainer only ever ran a
+  fixed rate with multi-path gradients un-normalised (issue #39).
 - `gradient-check` CLI: accumulate once, sample genes, and compare each
   proposal Δ against a central finite-difference ∂MSE/∂θ — sign-agreement
   rates by gene class (issue #40). Confirms whether the aggregated learning

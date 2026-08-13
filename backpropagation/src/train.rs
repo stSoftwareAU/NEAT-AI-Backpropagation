@@ -17,6 +17,14 @@ use std::path::{Path, PathBuf};
 /// Minimum score improvement treated as a production accept (`rust_scorer`).
 pub const MIN_SCORE_IMPROVEMENT: f64 = 1e-6;
 
+/// Default apply step scale for a `train` run (#39).
+///
+/// Every gene's proposal is computed as if the others stay put, so moving all
+/// of them the whole way at once overshoots on large creatures. `sweep`'s
+/// default grid tops out at 1% — the trainer starts there rather than 100×
+/// above it, and the backtracking line search shrinks further when needed.
+pub const DEFAULT_STEP_SCALE: f64 = 0.01;
+
 /// Journal header written at the start of a train run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +61,9 @@ pub struct TrainEpochRecord {
     pub after_mse: f64,
     /// Records used this epoch.
     pub records: u64,
+    /// Learning rate this epoch resolved from the configured strategy (#39).
+    #[serde(default)]
+    pub learning_rate: f64,
     /// Whether the candidate was kept.
     pub accepted: bool,
     /// Step-scale halvings tried after the initial step this epoch (#38).
@@ -129,7 +140,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                 .into(),
         );
     }
-    let lr = calculate_learning_rate(req.config, 0, None);
+    let initial_lr = calculate_learning_rate(req.config, 0, None);
 
     let mut network = compile_creature(&incumbent).map_err(|e| e.to_string())?;
     let (baseline_mse, _) =
@@ -142,7 +153,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         seed: req.seed,
         epochs: req.epochs,
         max_records: req.max_records,
-        learning_rate: lr,
+        learning_rate: initial_lr,
         step_scale: req.apply.step_scale,
         outputs_only: req.apply.outputs_only,
     };
@@ -153,8 +164,18 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     let mut best_mse = baseline_mse;
     let mut accepted_epochs = 0u64;
     let mut rng = StdRng::seed_from_u64(req.seed);
+    let mut previous_mse: Option<f64> = None;
 
     for epoch in 1..=req.epochs {
+        // Resolve the epoch's rate from the configured strategy (#39): fixed
+        // holds steady, decay / warm-restart follow the epoch index, adaptive
+        // reacts to the last epoch's MSE movement.
+        let lr = calculate_learning_rate(
+            req.config,
+            epoch - 1,
+            previous_mse.map(|prev| (prev, best_mse)),
+        );
+        previous_mse = Some(best_mse);
         let mut net = compile_creature(&incumbent).map_err(|e| e.to_string())?;
         let report = accumulate_creature_learning_report(
             &incumbent,
@@ -215,6 +236,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             before_mse: report.mse,
             after_mse,
             records: report.records,
+            learning_rate: lr,
             accepted,
             backtracks,
             step_scale,
@@ -485,6 +507,230 @@ mod tests {
             assert_eq!(with_ls.accepted_epochs, 1);
             let journal = fs::read_to_string(out_ls.join("journal.jsonl")).unwrap();
             assert!(journal.contains("\"backtracks\":"));
+        }
+    }
+
+    /// Two dense identity layers into one output — many genes, many paths, so
+    /// per-gene proposals (each computed as if the others hold still) compound
+    /// when applied together.
+    fn dense_creature_json(layer_a: usize, layer_b: usize) -> String {
+        let mut neurons = Vec::new();
+        for i in 0..layer_a {
+            neurons.push(format!(
+                r#"{{"type":"hidden","uuid":"a{i}","bias":0.01,"squash":"IDENTITY"}}"#
+            ));
+        }
+        for j in 0..layer_b {
+            neurons.push(format!(
+                r#"{{"type":"hidden","uuid":"b{j}","bias":0.01,"squash":"IDENTITY"}}"#
+            ));
+        }
+        neurons.push(r#"{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}"#.to_string());
+        let mut synapses = Vec::new();
+        for i in 0..layer_a {
+            synapses.push(format!(
+                r#"{{"fromUUID":"input-0","toUUID":"a{i}","weight":0.1}}"#
+            ));
+            for j in 0..layer_b {
+                synapses.push(format!(
+                    r#"{{"fromUUID":"a{i}","toUUID":"b{j}","weight":0.05}}"#
+                ));
+            }
+        }
+        for j in 0..layer_b {
+            synapses.push(format!(
+                r#"{{"fromUUID":"b{j}","toUUID":"o1","weight":0.05}}"#
+            ));
+        }
+        format!(
+            r#"{{"semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+              "neurons":[{}],"synapses":[{}]}}"#,
+            neurons.join(","),
+            synapses.join(",")
+        )
+    }
+
+    /// `y = 0.5x + 0.25` over a deterministic sweep of inputs.
+    fn write_linear_records(path: &Path, count: usize) {
+        let mut f = fs::File::create(path).unwrap();
+        for i in 0..count {
+            let x = (i as f32) / (count as f32) * 2.0 - 1.0;
+            f.write_all(&x.to_le_bytes()).unwrap();
+            f.write_all(&(0.5 * x + 0.25).to_le_bytes()).unwrap();
+        }
+    }
+
+    fn run_at_step(
+        creature: &Path,
+        data: &Path,
+        out: &Path,
+        step_scale: f64,
+        learning_rate: f64,
+    ) -> TrainResult {
+        let cfg = BackpropConfig {
+            learning_rate,
+            initial_learning_rate: learning_rate,
+            ..BackpropConfig::default()
+        };
+        run_train(TrainRequest {
+            creature,
+            training_data: data,
+            config: &cfg,
+            epochs: 1,
+            max_records: None,
+            seed: 1,
+            output_dir: out,
+            scorer: None,
+            apply: ApplyOptions {
+                step_scale,
+                ..ApplyOptions::default()
+            },
+            // Keep the candidate either way so the raw post-apply MSE of each
+            // step scale is comparable.
+            accept_always: true,
+            max_backtracks: 0,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn default_step_scale_improves_where_the_full_step_overshoots() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        write_linear_records(&data.join("0.bin"), 64);
+        let creature_path = dir.path().join("creature.json");
+        fs::write(&creature_path, dense_creature_json(8, 8)).unwrap();
+
+        let full = run_at_step(
+            &creature_path,
+            &data,
+            &dir.path().join("out-full"),
+            1.0,
+            0.5,
+        );
+        let default = run_at_step(
+            &creature_path,
+            &data,
+            &dir.path().join("out-default"),
+            DEFAULT_STEP_SCALE,
+            0.5,
+        );
+        assert!(
+            full.best_mse > full.baseline_mse,
+            "full step should overshoot: {} -> {}",
+            full.baseline_mse,
+            full.best_mse
+        );
+        assert!(
+            default.best_mse < default.baseline_mse,
+            "sweep-informed step should improve: {} -> {}",
+            default.baseline_mse,
+            default.best_mse
+        );
+    }
+
+    #[test]
+    fn decay_strategy_lowers_the_learning_rate_each_epoch() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let mut f = fs::File::create(data.join("0.bin")).unwrap();
+        f.write_all(&1.0f32.to_le_bytes()).unwrap();
+        f.write_all(&2.0f32.to_le_bytes()).unwrap();
+        let creature_path = dir.path().join("creature.json");
+        fs::write(
+            &creature_path,
+            r#"{
+              "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+              "neurons":[
+                {"type":"hidden","uuid":"h1","bias":0.0,"squash":"IDENTITY"},
+                {"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}
+              ],
+              "synapses":[
+                {"fromUUID":"input-0","toUUID":"h1","weight":1.0},
+                {"fromUUID":"h1","toUUID":"o1","weight":1.0}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let cfg = BackpropConfig {
+            learning_rate_strategy: crate::backprop::LearningRateStrategy::Decay,
+            learning_rate: 0.1,
+            initial_learning_rate: 0.1,
+            learning_rate_decay: 0.5,
+            ..BackpropConfig::default()
+        };
+        let out = dir.path().join("out");
+        run_train(TrainRequest {
+            creature: &creature_path,
+            training_data: &data,
+            config: &cfg,
+            epochs: 3,
+            max_records: Some(1),
+            seed: 1,
+            output_dir: &out,
+            scorer: None,
+            // accept_always keeps all three epochs running so the schedule is
+            // observable end to end.
+            apply: ApplyOptions::default(),
+            accept_always: true,
+            max_backtracks: 0,
+        })
+        .unwrap();
+        let journal = fs::read_to_string(out.join("journal.jsonl")).unwrap();
+        let rates: Vec<f64> = journal
+            .lines()
+            .filter(|l| l.contains("\"kind\":\"epoch\""))
+            .map(|l| {
+                serde_json::from_str::<TrainEpochRecord>(l)
+                    .unwrap()
+                    .learning_rate
+            })
+            .collect();
+        assert_eq!(rates.len(), 3);
+        assert!((rates[0] - 0.1).abs() < 1e-12, "epoch 1 lr {}", rates[0]);
+        assert!((rates[1] - 0.05).abs() < 1e-12, "epoch 2 lr {}", rates[1]);
+        assert!((rates[2] - 0.025).abs() < 1e-12, "epoch 3 lr {}", rates[2]);
+    }
+
+    #[test]
+    fn fixed_strategy_journals_a_constant_learning_rate() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let mut f = fs::File::create(data.join("0.bin")).unwrap();
+        f.write_all(&1.0f32.to_le_bytes()).unwrap();
+        f.write_all(&2.0f32.to_le_bytes()).unwrap();
+        let creature_path = dir.path().join("creature.json");
+        fs::write(
+            &creature_path,
+            r#"{
+              "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+              "neurons":[{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}],
+              "synapses":[{"fromUUID":"input-0","toUUID":"o1","weight":1.0}]
+            }"#,
+        )
+        .unwrap();
+        let out = dir.path().join("out");
+        run_train(TrainRequest {
+            creature: &creature_path,
+            training_data: &data,
+            config: &BackpropConfig::default(),
+            epochs: 2,
+            max_records: Some(1),
+            seed: 1,
+            output_dir: &out,
+            scorer: None,
+            apply: ApplyOptions::default(),
+            accept_always: true,
+            max_backtracks: 0,
+        })
+        .unwrap();
+        let journal = fs::read_to_string(out.join("journal.jsonl")).unwrap();
+        for line in journal.lines().filter(|l| l.contains("\"kind\":\"epoch\"")) {
+            let rec: TrainEpochRecord = serde_json::from_str(line).unwrap();
+            assert!((rec.learning_rate - 0.01).abs() < 1e-12);
         }
     }
 

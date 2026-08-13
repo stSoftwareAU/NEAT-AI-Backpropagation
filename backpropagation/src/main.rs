@@ -1,11 +1,13 @@
 //! Experimental standalone backpropagation CLI.
 
-use clap::{Parser, Subcommand};
-use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig};
+use clap::{Parser, Subcommand, ValueEnum};
+use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig, LearningRateStrategy};
 use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, run_compare};
 use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
-use neat_ai_backpropagation::train::{TrainRequest, default_output_dir, run_train};
+use neat_ai_backpropagation::train::{
+    DEFAULT_STEP_SCALE, TrainRequest, default_output_dir, run_train,
+};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -16,6 +18,55 @@ use std::process::ExitCode;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+/// Sweep's default grid stops at 1% — `train` must not default above it (#39).
+const SWEEP_DEFAULT_STEP_SCALES: &str = "0.000001,0.00001,0.0001,0.0005,0.001,0.002,0.005,0.01";
+
+/// Learning-rate strategy selectable from the CLI (mirrors [`LearningRateStrategy`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum LearningRateStrategyArg {
+    /// Constant learning rate.
+    Fixed,
+    /// Multiplicative decay each epoch.
+    Decay,
+    /// Boost / shrink from epoch-to-epoch MSE feedback.
+    Adaptive,
+    /// Decay with a periodic warm restart.
+    WarmRestart,
+}
+
+impl LearningRateStrategyArg {
+    /// Map the CLI value onto the library strategy.
+    fn to_config(self) -> LearningRateStrategy {
+        match self {
+            Self::Fixed => LearningRateStrategy::Fixed,
+            Self::Decay => LearningRateStrategy::Decay,
+            Self::Adaptive => LearningRateStrategy::Adaptive,
+            Self::WarmRestart => LearningRateStrategy::WarmRestart,
+        }
+    }
+}
+
+/// Build the `train` backprop config from its CLI arguments.
+fn train_backprop_config(
+    learning_rate: f64,
+    strategy: LearningRateStrategyArg,
+    learning_rate_decay: f64,
+    maximum_bias_adjustment_scale: f64,
+    maximum_weight_adjustment_scale: f64,
+    normalise_gradients: bool,
+) -> BackpropConfig {
+    BackpropConfig {
+        learning_rate,
+        initial_learning_rate: learning_rate,
+        learning_rate_strategy: strategy.to_config(),
+        learning_rate_decay,
+        maximum_bias_adjustment_scale,
+        maximum_weight_adjustment_scale,
+        normalise_gradients,
+        ..BackpropConfig::default()
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -62,9 +113,18 @@ enum Commands {
         /// Sparse-selection seed.
         #[arg(long, default_value_t = 1)]
         seed: u64,
-        /// Learning rate (fixed strategy).
+        /// Initial learning rate (see --learning-rate-strategy).
         #[arg(long, default_value_t = 0.01)]
         learning_rate: f64,
+        /// Learning-rate schedule across epochs.
+        #[arg(long, value_enum, default_value = "fixed")]
+        learning_rate_strategy: LearningRateStrategyArg,
+        /// Per-epoch decay factor for the decay / warm-restart strategies.
+        #[arg(long, default_value_t = 0.95)]
+        learning_rate_decay: f64,
+        /// Divide multi-path gradients by sqrt(path count) (NEAT-AI #1872).
+        #[arg(long, default_value_t = false)]
+        normalise_gradients: bool,
         /// Maximum |Δbias| per apply (TS trainDir default is 1).
         #[arg(long, default_value_t = 1.0)]
         maximum_bias_adjustment_scale: f64,
@@ -72,7 +132,7 @@ enum Commands {
         #[arg(long, default_value_t = 1.0)]
         maximum_weight_adjustment_scale: f64,
         /// Multiply (proposed − current) by this factor before writing.
-        #[arg(long, default_value_t = 1.0)]
+        #[arg(long, default_value_t = DEFAULT_STEP_SCALE)]
         step_scale: f64,
         /// Apply only output neurons and synapses that target them.
         #[arg(long, default_value_t = false)]
@@ -119,10 +179,7 @@ enum Commands {
         #[arg(long, default_value_t = 1.0)]
         maximum_weight_adjustment_scale: f64,
         /// Comma-separated step scales.
-        #[arg(
-            long,
-            default_value = "0.000001,0.00001,0.0001,0.0005,0.001,0.002,0.005,0.01"
-        )]
+        #[arg(long, default_value = SWEEP_DEFAULT_STEP_SCALES)]
         step_scales: String,
         /// Apply only output neurons and synapses that target them.
         #[arg(long, default_value_t = false)]
@@ -255,6 +312,9 @@ fn run() -> Result<(), String> {
             max_records,
             seed,
             learning_rate,
+            learning_rate_strategy,
+            learning_rate_decay,
+            normalise_gradients,
             maximum_bias_adjustment_scale,
             maximum_weight_adjustment_scale,
             step_scale,
@@ -265,13 +325,14 @@ fn run() -> Result<(), String> {
             scorer,
             output_dir,
         } => {
-            let cfg = BackpropConfig {
+            let cfg = train_backprop_config(
                 learning_rate,
-                initial_learning_rate: learning_rate,
+                learning_rate_strategy,
+                learning_rate_decay,
                 maximum_bias_adjustment_scale,
                 maximum_weight_adjustment_scale,
-                ..BackpropConfig::default()
-            };
+                normalise_gradients,
+            );
             let result = run_train(TrainRequest {
                 creature: &creature,
                 training_data: &training_data,
@@ -421,4 +482,107 @@ fn parse_step_scales(raw: &str) -> Result<Vec<f64>, String> {
         return Err("no step scales provided".into());
     }
     Ok(scales)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse a bare `train` invocation and hand back its arguments.
+    fn parse_train(extra: &[&str]) -> Commands {
+        let mut argv = vec!["neat_ai_backpropagation", "train", "creature.json", "data"];
+        argv.extend_from_slice(extra);
+        Cli::parse_from(argv).command
+    }
+
+    #[test]
+    fn train_step_scale_defaults_within_sweep_grid() {
+        let Commands::Train { step_scale, .. } = parse_train(&[]) else {
+            panic!("expected train");
+        };
+        let grid = parse_step_scales(SWEEP_DEFAULT_STEP_SCALES).unwrap();
+        let ceiling = grid.iter().copied().fold(f64::MIN, f64::max);
+        // #39: the old 1.0 default was 100× sweep's ceiling and overshot.
+        assert!(
+            step_scale <= ceiling,
+            "train default step scale {step_scale} exceeds sweep ceiling {ceiling}"
+        );
+        assert!((step_scale - DEFAULT_STEP_SCALE).abs() < 1e-12);
+    }
+
+    #[test]
+    fn train_clamps_default_to_one_not_ten() {
+        let Commands::Train {
+            maximum_bias_adjustment_scale,
+            maximum_weight_adjustment_scale,
+            ..
+        } = parse_train(&[])
+        else {
+            panic!("expected train");
+        };
+        // The ±10 library default mirrors the TS compare harness; the trainer
+        // must not inherit it (#39).
+        assert!((maximum_bias_adjustment_scale - 1.0).abs() < 1e-12);
+        assert!((maximum_weight_adjustment_scale - 1.0).abs() < 1e-12);
+        assert!(
+            (BackpropConfig::default().maximum_bias_adjustment_scale - 10.0).abs() < 1e-12,
+            "compare parity default must stay at the TS value"
+        );
+    }
+
+    #[test]
+    fn train_learning_rate_defaults_to_fixed_schedule() {
+        let Commands::Train {
+            learning_rate,
+            learning_rate_strategy,
+            normalise_gradients,
+            ..
+        } = parse_train(&[])
+        else {
+            panic!("expected train");
+        };
+        assert!((learning_rate - 0.01).abs() < 1e-12);
+        assert_eq!(learning_rate_strategy, LearningRateStrategyArg::Fixed);
+        assert!(!normalise_gradients);
+    }
+
+    #[test]
+    fn train_accepts_schedule_and_normalisation_flags() {
+        let Commands::Train {
+            learning_rate_strategy,
+            learning_rate_decay,
+            normalise_gradients,
+            ..
+        } = parse_train(&[
+            "--learning-rate-strategy",
+            "warm-restart",
+            "--learning-rate-decay",
+            "0.5",
+            "--normalise-gradients",
+        ])
+        else {
+            panic!("expected train");
+        };
+        assert_eq!(learning_rate_strategy, LearningRateStrategyArg::WarmRestart);
+        assert!((learning_rate_decay - 0.5).abs() < 1e-12);
+        assert!(normalise_gradients);
+    }
+
+    #[test]
+    fn train_config_carries_schedule_and_normalisation() {
+        let cfg = train_backprop_config(0.2, LearningRateStrategyArg::Decay, 0.5, 1.0, 2.0, true);
+        assert_eq!(cfg.learning_rate_strategy, LearningRateStrategy::Decay);
+        assert!((cfg.initial_learning_rate - 0.2).abs() < 1e-12);
+        assert!((cfg.learning_rate_decay - 0.5).abs() < 1e-12);
+        assert!((cfg.maximum_bias_adjustment_scale - 1.0).abs() < 1e-12);
+        assert!((cfg.maximum_weight_adjustment_scale - 2.0).abs() < 1e-12);
+        assert!(cfg.normalise_gradients);
+    }
+
+    #[test]
+    fn invalid_step_scales_are_rejected() {
+        assert!(parse_step_scales("0.01,-1").is_err());
+        assert!(parse_step_scales(" ").is_err());
+        assert_eq!(parse_step_scales("0.01, 0.5").unwrap(), vec![0.01, 0.5]);
+    }
 }
