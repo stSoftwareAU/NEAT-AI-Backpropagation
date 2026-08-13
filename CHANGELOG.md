@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The accumulate pass reduces each record's squared error through
+  `neat_core::mse_record` instead of its own fused loop, so this crate holds no
+  loss arithmetic (issue #33). `AccumulateReport::mse` is unchanged — core
+  applies the same `1/outputs` mean over the same activations.
 - `train --step-scale` now defaults to `0.01` (the top of `sweep`'s own grid)
   instead of `1.0`. A full coordinated jump moves every gene to a value
   proposed as if the others stayed put, which overshoots on large creatures —
@@ -21,6 +25,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `backpropagation/tests/mse_surface_agreement.rs` — cross-surface guard that
+  `compute_mse` (eval path) and `AccumulateReport::mse` (accumulate pass) agree
+  within `nearly_equal` on the same records, for a feed-forward creature and
+  for MINIMUM / MAXIMUM / IF aggregates, uncapped and under `max_records`
+  (issue #34).
 - `train --learning-rate-strategy` (`fixed`, `decay`, `adaptive`,
   `warm-restart`), `--learning-rate-decay`, and `--normalise-gradients` —
   `BackpropConfig` already supported all three but the trainer only ever ran a

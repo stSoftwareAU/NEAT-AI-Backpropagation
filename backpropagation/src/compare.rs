@@ -352,6 +352,65 @@ pub fn load_compare_dump(path: &Path) -> Result<CompareDump, String> {
 mod tests {
     use super::*;
     use crate::backprop::BiasSignal;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    /// One input feeding two identity outputs (`o1` ×1, `o2` ×2).
+    const TWO_OUTPUT: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+      "neurons":[
+        {"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"},
+        {"type":"output","uuid":"o2","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"fromUUID":"input-0","toUUID":"o1","weight":1.0},
+        {"fromUUID":"input-0","toUUID":"o2","weight":2.0}
+      ]
+    }"#;
+
+    /// Issue #33 parity guard: `CompareDump::mse` must stay on the value the
+    /// crate's own fused reduction produced before it delegated to
+    /// [`neat_core::mse_record`].
+    ///
+    /// Records `(x → t1, t2)`: `(1 → 2, 5)` predicts `(1, 2)` ⇒ `(1 + 9)/2 =
+    /// 5.0`; `(2 → 0, 1)` predicts `(2, 4)` ⇒ `(4 + 9)/2 = 6.5`. Mean over the
+    /// two records is `5.75`.
+    #[test]
+    fn run_compare_mse_matches_pre_delegation_baseline() {
+        const BASELINE_MSE: f64 = 5.75;
+        let dir = tempdir().unwrap();
+        let creature_path = dir.path().join("creature.json");
+        fs::write(&creature_path, TWO_OUTPUT).unwrap();
+        let data_dir = dir.path().join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let mut f = fs::File::create(data_dir.join("0.bin")).unwrap();
+        for v in [1.0f32, 2.0, 5.0, 2.0, 0.0, 1.0] {
+            f.write_all(&v.to_le_bytes()).unwrap();
+        }
+        drop(f);
+
+        let dump = run_compare(
+            &creature_path,
+            &data_dir,
+            &BackpropConfig::default(),
+            None,
+            1,
+            &dir.path().join("out.json"),
+        )
+        .unwrap();
+
+        assert_eq!(dump.records, 2);
+        assert!(
+            nearly_equal(dump.mse, BASELINE_MSE),
+            "mse {} drifted from the pre-delegation baseline {BASELINE_MSE}",
+            dump.mse
+        );
+        assert_eq!(
+            dump.mse - BASELINE_MSE,
+            0.0,
+            "the reduction must stay bit-identical, not merely within tolerance"
+        );
+    }
 
     #[test]
     fn dump_round_trip_nearly_equal() {

@@ -9,7 +9,7 @@ use crate::backprop::{BackpropConfig, LearningSignal};
 use neat_core::{
     CompiledNetwork, CreatureExport, NEURON_TYPE_CONSTANT, NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT,
     NEURON_TYPE_OUTPUT, NeuronInput, PropagateInput, SquashType, SynapseInput, SynapseType,
-    TrainingDataConfig, TrainingDataIterator, apply_get_range, parse_squash_name,
+    TrainingDataConfig, TrainingDataIterator, apply_get_range, mse_record, parse_squash_name,
     parse_synapse_type, propagate_topological_loop,
 };
 use rand::Rng;
@@ -424,6 +424,10 @@ pub fn accumulate_creature_learning(
 }
 
 /// Like [`accumulate_creature_learning`], plus forward-pass MSE and record count.
+///
+/// The per-record MSE reduction is [`neat_core::mse_record`] — this crate holds
+/// no loss arithmetic of its own (issue #33). The record loop stays because the
+/// same traced forward pass feeds the propagate step below it.
 pub fn accumulate_creature_learning_report(
     creature: &CreatureExport,
     network: &mut CompiledNetwork,
@@ -443,7 +447,6 @@ pub fn accumulate_creature_learning_report(
     let mut iter = TrainingDataIterator::new(training_data, td_cfg).map_err(|e| e.to_string())?;
     let mut count = 0u64;
     let mut mse_sum = 0.0f64;
-    let output_n = creature.output.max(1) as f64;
 
     while let Some(record) = iter.next_record().map_err(|e| e.to_string())? {
         if let Some(limit) = max_records
@@ -452,12 +455,12 @@ pub fn accumulate_creature_learning_report(
             break;
         }
         let traced = network.activate_and_trace(&record.inputs, creature.output);
-        let mut sq = 0.0f64;
-        for (pred, target) in traced.iter().zip(record.outputs.iter()) {
-            let d = f64::from(*pred - *target);
-            sq += d * d;
-        }
-        mse_sum += sq / output_n;
+        // `traced` leads with `creature.output` activations, then activations,
+        // hint values and aggregate trace data — only the leading slice is the
+        // prediction. `mse_record` divides by that slice's length, so a
+        // zero-output creature contributes core's documented `0.0` rather than
+        // needing the old `max(1)` guard.
+        mse_sum += mse_record(&record.outputs, &traced[..creature.output]);
         count += 1;
 
         if !layout.aggregates.is_empty() {
