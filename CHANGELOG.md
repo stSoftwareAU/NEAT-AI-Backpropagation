@@ -25,6 +25,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `backpropagation/tests/mse_surface_agreement.rs` — cross-surface guard that
+  `compute_mse` (eval path) and `AccumulateReport::mse` (accumulate pass) agree
+  within `nearly_equal` on the same records, for a feed-forward creature and
+  for MINIMUM / MAXIMUM / IF aggregates, uncapped and under `max_records`
+  (issue #34).
 - `train --learning-rate-strategy` (`fixed`, `decay`, `adaptive`,
   `warm-restart`), `--learning-rate-decay`, and `--normalise-gradients` —
   `BackpropConfig` already supported all three but the trainer only ever ran a
