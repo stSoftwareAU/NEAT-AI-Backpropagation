@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- `train::MIN_SCORE_IMPROVEMENT` — a `pub const` no code ever read. Its doc
+  comment described a score-improvement accept gate, but `run_train` accepts on
+  `accept_always || after_mse < best_mse` alone and never applied a score
+  threshold, so the constant documented behaviour that was never wired in.
+  Being `pub` it was invisible to the workspace `dead_code` lint. The 1e-6
+  production margin itself is unchanged — it is enforced by the GRQ consumer
+  (`grq_backprop_score_improves`), not by this crate (issue #36).
+
 ### Changed
 
 - The accumulate pass reduces each record's squared error through

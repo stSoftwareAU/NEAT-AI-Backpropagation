@@ -14,9 +14,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Minimum score improvement treated as a production accept (`rust_scorer`).
-pub const MIN_SCORE_IMPROVEMENT: f64 = 1e-6;
-
 /// Default apply step scale for a `train` run (#39).
 ///
 /// Every gene's proposal is computed as if the others stay put, so moving all
