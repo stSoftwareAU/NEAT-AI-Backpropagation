@@ -101,7 +101,10 @@ jobs:
     uses: ./.github/workflows/security.yml
     if: github.event_name == 'pull_request'
     with:
-      include-dependency-review: false
+      # Enabled deliberately (Issue #28): audit-check scans the resolved graph,
+      # dependency review is the only gate on the crates *this PR* adds.
+      # scripts/check-dependency-review.sh fails if it is switched off again.
+      include-dependency-review: true
 
   validation:
     name: Project Validation
@@ -173,6 +176,12 @@ jobs:
           set -euo pipefail
           ./scripts/test-check-renovate-config.sh
           ./scripts/check-renovate-config.sh
+
+      - name: Validate dependency review is enabled on pull requests
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-dependency-review.sh
+          ./scripts/check-dependency-review.sh
 
       - name: Validate default-branch protection policy
         env:

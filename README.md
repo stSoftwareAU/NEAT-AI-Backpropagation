@@ -168,6 +168,30 @@ flowchart LR
 it fails if the quarantine is missing, shorter than 24 hours, unparsable,
 shortened for an external crate, or if the `cargo` manager is switched off.
 
+## Dependency review
+
+[`security.yml`](./.github/workflows/security.yml) runs two complementary
+advisory gates on every pull request. `rustsec/audit-check` scans the resolved
+graph as a whole; `actions/dependency-review-action` scans the *diff* — the
+crates the PR itself adds or upgrades — and comments the summary on the PR.
+
+```mermaid
+flowchart LR
+    A[PR to Develop] --> B["ci.yml security job<br/>include-dependency-review: true"]
+    B --> C["rustsec/audit-check<br/>resolved graph"]
+    B --> D["dependency-review-action<br/>crates this PR adds"]
+    D --> E[advisory summary<br/>commented on the PR]
+    C --> F[ci-required]
+    D --> F
+    F --> G[merge]
+```
+
+`scripts/check-dependency-review.sh` gates that policy in `quality.sh` and CI:
+it fails if the step is missing or pinned to a movable tag, if the
+`include-dependency-review` input stops defaulting to `true`, if any caller
+passes `include-dependency-review: false`, or if no caller reaches the
+reusable workflow on a `pull_request` event.
+
 ## Code scanning
 
 `security.yml` only asks whether a *dependency* carries a known advisory.
