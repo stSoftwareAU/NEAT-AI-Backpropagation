@@ -25,6 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `scripts/check-branch-protection.sh` — verifies the live `Develop` ruleset
+  against the branch-protection policy now recorded in CONTRIBUTING.md
+  (pull request required, ≥ 1 approving review, code-owner review, the
+  `CI Required Checks` aggregator required, force-pushes blocked). Advisory in
+  `quality.sh` and CI because only an administrator can repair a ruleset
+  (issue #21).
 - `.github/workflows/codeql.yml` — CodeQL `security-and-quality` analysis of
   this crate's own Rust on pull requests, pushes to `Develop`, and a weekly
   cron, so an advisory or query pack published after a merge is applied without

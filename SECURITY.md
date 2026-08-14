@@ -76,6 +76,18 @@ rather than committed files. A repository administrator enables them under
 Once enabled they complement the gates above by raising a PR the moment an
 advisory lands.
 
+## Branch protection
+
+`Develop` is protected by a repository ruleset requiring a pull request, at
+least one approving review, code-owner review of
+[`.github/CODEOWNERS`](./.github/CODEOWNERS) paths, the `CI Required Checks`
+aggregator, and no force-pushes. The rules and the reasoning — including why
+signed commits are *not* required — are in
+[CONTRIBUTING.md](./CONTRIBUTING.md#branch-protection), and
+`./scripts/check-branch-protection.sh` checks the live ruleset against them.
+Like Dependabot above, a ruleset is a repository setting: only an administrator
+can change one, so the checker reports drift rather than enforcing it.
+
 ## Scope
 
 This policy covers the code in this repository. Vulnerabilities in the
