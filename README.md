@@ -192,6 +192,40 @@ slower than weekly), cannot upload results (`security-events: write`), does
 not analyse Rust, is missing either CodeQL step, or pins an action to a
 movable tag instead of a commit SHA.
 
+## Workflow linting
+
+Workflow YAML is the one thing no other gate reads — clippy, shellcheck and
+codespell all stop at the repository's own sources, so an invalid expression or
+an unknown `runs-on` used to surface only the next time the workflow ran. The
+`workflow-lint` job in [`ci.yml`](./.github/workflows/ci.yml) runs
+[`actionlint`](https://github.com/rhysd/actionlint) over
+`.github/workflows`, and feeds the `ci-required` aggregator so a lint failure
+blocks the merge. `actionlint` also pipes every `run:` block through the
+runner's shellcheck, which the `shell-checks` job never sees (it only walks
+`*.sh` files).
+
+```mermaid
+flowchart LR
+    A[PR to Develop] --> B["workflow-lint<br/>actionlint -color"]
+    A --> C[validation]
+    C --> D["check-actionlint-gate.sh<br/>the gate is still wired up"]
+    B --> E[ci-required]
+    D --> E
+    E --> F[merge]
+```
+
+The linter is installed from a version-pinned release whose SHA-256 is
+verified in the job, so a hijacked `actionlint` release cannot run unnoticed.
+`scripts/check-actionlint-gate.sh` gates the policy itself in `quality.sh` and
+CI: it fails if no job invokes `actionlint`, if the invocation is neutered
+(`continue-on-error: true`, `|| true`), if the job runs without
+`set -euo pipefail`, if no other job lists it in `needs:` (a lint that gates
+nothing), or if the linter is pulled from an unpinned or unverified source.
+
+Run it locally with the rest of the gate — `quality.sh` invokes `actionlint`
+directly, so install it first (`brew install actionlint`, or see the
+[install docs](https://github.com/rhysd/actionlint/blob/main/docs/install.md)).
+
 **Dependabot alerts and security updates** are a repository *setting*, not a
 committed file, so they cannot be enabled from the checkout — see
 [SECURITY.md](./SECURITY.md#automated-scanning). Renovate's

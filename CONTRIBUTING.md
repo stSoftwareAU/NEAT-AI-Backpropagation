@@ -24,6 +24,7 @@ The `neat-core` path dependency in
 
 - **Rust** — pinned in [`rust-toolchain.toml`](./rust-toolchain.toml)
 - **shellcheck** — lints bash scripts
+- **actionlint** — lints GitHub Actions workflow YAML (`brew install actionlint`)
 - **cargo-deny** — `cargo install cargo-deny --locked`
 - **codespell** — `pip install --user codespell`
 
@@ -33,7 +34,7 @@ The `neat-core` path dependency in
 ./quality.sh < /dev/null
 ```
 
-This mirrors CI: shellcheck, the auto-format workflow validator, the
+This mirrors CI: shellcheck, actionlint, the auto-format workflow validator, the
 version-increment workflow validator, the CodeQL workflow validator, the
 Renovate config validator, the branch-protection policy checker, codespell,
 cargo-deny, fmt `--check`, clippy with warnings denied, tests, and rustdoc.

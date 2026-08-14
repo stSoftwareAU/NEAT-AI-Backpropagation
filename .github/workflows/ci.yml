@@ -7,7 +7,8 @@
 #                └── security ─────────────┤
 #                                          ├──► ci-required  (aggregator)
 #   shell-checks ──────────────────────────┤
-#   spell-check ───────────────────────────┘
+#   spell-check ───────────────────────────┤
+#   workflow-lint ─────────────────────────┘
 name: CI
 
 on:
@@ -161,6 +162,12 @@ jobs:
           ./scripts/test-check-codeql-workflow.sh
           ./scripts/check-codeql-workflow.sh
 
+      - name: Validate the actionlint workflow-lint gate
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-actionlint-gate.sh
+          ./scripts/check-actionlint-gate.sh
+
       - name: Validate Renovate dependency-update config
         run: |
           set -euo pipefail
@@ -236,9 +243,44 @@ jobs:
       - name: Run codespell preflight
         run: ./scripts/spell-check.sh
 
+  workflow-lint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Pinned release + checksum: a hijacked actionlint release cannot land
+      # silently, and a tampered download fails the job instead of skipping it.
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --output "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum --check --strict
+          tar -xzf "$tarball" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          rm -f "$tarball" actionlint
+
+      - name: Lint GitHub Actions workflows
+        run: |
+          set -euo pipefail
+          actionlint -version
+          # No file arguments: actionlint discovers .github/workflows itself and
+          # pipes every run: block through the runner's shellcheck.
+          actionlint -color
+
   ci-required:
     name: CI Required Checks
-    needs: [validation, quality, security, shell-checks, spell-check]
+    needs: [validation, quality, security, shell-checks, spell-check, workflow-lint]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -250,6 +292,7 @@ jobs:
           SECURITY_RESULT: ${{ needs.security.result }}
           SHELL_CHECKS_RESULT: ${{ needs.shell-checks.result }}
           SPELL_CHECK_RESULT: ${{ needs.spell-check.result }}
+          WORKFLOW_LINT_RESULT: ${{ needs.workflow-lint.result }}
         run: |
           set -euo pipefail
           fail=0
@@ -267,6 +310,7 @@ jobs:
           check "security"     "$SECURITY_RESULT"
           check "shell-checks" "$SHELL_CHECKS_RESULT"
           check "spell-check"  "$SPELL_CHECK_RESULT"
+          check "workflow-lint" "$WORKFLOW_LINT_RESULT"
           if [[ "$fail" -ne 0 ]]; then
             echo "One or more gating jobs did not succeed — blocking merge." >&2
             exit 1

@@ -25,6 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A `workflow-lint` CI job runs `actionlint` over `.github/workflows` and feeds
+  the `ci-required` aggregator, so a workflow YAML regression fails the build
+  instead of surfacing on the next run. The linter is installed from a
+  version-pinned, checksum-verified release.
+  `scripts/check-actionlint-gate.sh` (tested by
+  `scripts/test-check-actionlint-gate.sh`) gates the policy in `quality.sh` and
+  CI: no invocation, a suppressed exit code, a non-strict shell, a lint job no
+  other job needs, or an unpinned/unverified linter all fail (issue #26).
 - `backpropagation/tests/scorer_boundary.rs` — process-boundary coverage for
   `score_creature`, the accept gate `run_train` uses when `--scorer` is set. A
   stub `rust_scorer` executable exercises the map and single-object stdout
