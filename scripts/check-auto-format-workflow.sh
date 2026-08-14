@@ -10,6 +10,8 @@
 #   6. Refuse to push onto a fork's PR branch.
 #   7. Use strict bash (`set -euo pipefail`).
 #   8. Authenticate the push with ACTIONS_PUSH (GITHUB_TOKEN fallback).
+#   9. Cover milestone branches — a `pull_request` branch filter that omits
+#      `milestone/*` leaves every milestone sub-issue PR ungated (Issue #27).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,6 +92,67 @@ if grep -qE 'secrets\.ACTIONS_PUSH[[:space:]]*\|\|[[:space:]]*secrets\.GITHUB_TO
   ok "push authenticates with ACTIONS_PUSH (GITHUB_TOKEN fallback)"
 else
   fail "no 'secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN' — bot pushes will gate PR checks behind Approve and run"
+fi
+
+# Emit one branch pattern per line from the workflow's `pull_request.branches`
+# filter, handling both block (`- Develop`) and flow (`[Develop, main]`) style.
+# No output means no filter, which in GitHub Actions means "every branch".
+pull_request_branch_patterns() {
+  awk '
+    { line = $0 }
+    line ~ /^[[:space:]]*#/ { next }
+    line ~ /^[[:space:]]*$/ { next }
+    { match(line, /^[[:space:]]*/); indent = RLENGTH }
+    line ~ /^[[:space:]]*pull_request:/ { in_pr = 1; in_br = 0; pr_indent = indent; next }
+    !in_pr { next }
+    indent <= pr_indent { in_pr = 0; in_br = 0; next }
+    line ~ /^[[:space:]]*branches:/ {
+      rest = line
+      sub(/^[[:space:]]*branches:[[:space:]]*/, "", rest)
+      if (rest ~ /^\[/) {
+        gsub(/[]["'"'"']/, "", rest)
+        n = split(rest, items, ",")
+        for (i = 1; i <= n; i++) {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", items[i])
+          if (items[i] != "") print items[i]
+        }
+        next
+      }
+      in_br = 1
+      br_indent = indent
+      next
+    }
+    in_br && line ~ /^[[:space:]]*-[[:space:]]*/ && indent >= br_indent {
+      item = line
+      sub(/^[[:space:]]*-[[:space:]]*/, "", item)
+      gsub(/["'"'"']/, "", item)
+      gsub(/[[:space:]]+$/, "", item)
+      sub(/[[:space:]]+#.*$/, "", item)
+      if (item != "") print item
+      next
+    }
+    { in_br = 0 }
+  ' "$WORKFLOW"
+}
+
+BRANCH_PATTERNS="$(pull_request_branch_patterns)"
+
+if [[ -z "$BRANCH_PATTERNS" ]]; then
+  ok "no pull_request branch filter — every PR, milestone branches included, is gated"
+else
+  MILESTONE_COVERED=0
+  while IFS= read -r pattern; do
+    # A wildcard rooted at `milestone/` covers every `milestone/<slug>` branch;
+    # a literal branch name covers only itself, so it does not count.
+    if [[ "$pattern" == milestone/*'*'* ]]; then
+      MILESTONE_COVERED=1
+    fi
+  done <<<"$BRANCH_PATTERNS"
+  if [[ "$MILESTONE_COVERED" -eq 1 ]]; then
+    ok "pull_request branch filter covers milestone/* branches"
+  else
+    fail "pull_request branch filter (${BRANCH_PATTERNS//$'\n'/, }) matches no milestone/<slug> branch — milestone sub-issue PRs would merge ungated (Issue #27)"
+  fi
 fi
 
 exit "$EXIT_CODE"
