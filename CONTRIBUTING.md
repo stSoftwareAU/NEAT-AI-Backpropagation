@@ -35,8 +35,45 @@ The `neat-core` path dependency in
 
 This mirrors CI: shellcheck, the auto-format workflow validator, the
 version-increment workflow validator, the CodeQL workflow validator, the
-Renovate config validator, codespell, cargo-deny, fmt `--check`, clippy with
-warnings denied, tests, and rustdoc.
+Renovate config validator, the branch-protection policy checker, codespell,
+cargo-deny, fmt `--check`, clippy with warnings denied, tests, and rustdoc.
+
+## Branch protection
+
+`Develop` is protected by a repository **ruleset**. The policy is deliberate,
+and `./scripts/check-branch-protection.sh` verifies it against the live API:
+
+| Rule | Setting | Why |
+| ---- | ------- | --- |
+| `pull_request` | required | No direct pushes to `Develop`; every change is reviewable before it merges. |
+| `required_approving_review_count` | ≥ 1 | A single account cannot merge its own change. |
+| `require_code_owner_review` | on | [`.github/CODEOWNERS`](./.github/CODEOWNERS) is advisory without it. `auto-format.yml` and `version-increment.yml` mint GitHub App push tokens, so an unreviewed workflow edit is an unreviewed secret grab. |
+| `required_status_checks` | `CI Required Checks` | The `ci-required` aggregator in [`ci.yml`](./.github/workflows/ci.yml) only gates merges when it is registered as required. |
+| `non_fast_forward` | required | Merged history on `Develop` cannot be rewritten by a force-push. |
+
+**Signed commits are not required.** Auto Format and Version Increment push
+unsigned bot commits back to PR branches, so requiring signatures would block
+the repository's own automation.
+
+Rulesets are a repository *setting*, not a committed file — the same situation
+as Dependabot alerts in [SECURITY.md](./SECURITY.md#automated-scanning). Only an
+administrator can change one, so the checker is **advisory** in `quality.sh` and
+in CI: drift is printed as a loud `FAIL` (and a CI warning annotation) rather
+than blocking every merge behind a setting contributors cannot fix. Run it any
+time:
+
+```bash
+./scripts/check-branch-protection.sh < /dev/null
+```
+
+An administrator repairs drift by patching the ruleset (id from
+`gh api repos/stSoftwareAU/NEAT-AI-Backpropagation/rulesets`):
+
+```bash
+gh api --method PUT \
+  repos/stSoftwareAU/NEAT-AI-Backpropagation/rulesets/RULESET_ID \
+  --input ruleset.json   # existing rules, plus the table above
+```
 
 Code scanning runs in GitHub Actions, not locally — see
 [Code scanning](./README.md#code-scanning). Changing

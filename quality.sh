@@ -53,6 +53,19 @@ echo "Validating Renovate dependency-update config..."
 ./scripts/test-check-renovate-config.sh
 ./scripts/check-renovate-config.sh
 
+echo "Validating default-branch protection policy..."
+./scripts/test-check-branch-protection.sh
+if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+  # Advisory: branch protection is a repository setting outside the checkout,
+  # so only an administrator can repair drift — see CONTRIBUTING.md.
+  if ! ./scripts/check-branch-protection.sh; then
+    echo "WARNING: Develop branch protection does not satisfy the committed policy"
+    echo "         — a repository administrator must apply it (CONTRIBUTING.md)"
+  fi
+else
+  echo "gh unavailable or unauthenticated — skipping the live branch-protection check"
+fi
+
 echo "Running codespell preflight..."
 if ! ./scripts/spell-check.sh; then
   echo "spell-check: FAILED — fix the typos above or update .codespellrc"

@@ -167,6 +167,17 @@ jobs:
           ./scripts/test-check-renovate-config.sh
           ./scripts/check-renovate-config.sh
 
+      - name: Validate default-branch protection policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-branch-protection.sh
+          # Advisory: only a repository administrator can repair ruleset drift,
+          # so report it as an annotation rather than blocking every merge.
+          ./scripts/check-branch-protection.sh \
+            || echo "::warning::Develop branch protection does not satisfy the policy in CONTRIBUTING.md — a repository administrator must apply it (Issue #21)"
+
   shell-checks:
     name: Shell Script Quality
     runs-on: ubuntu-latest
