@@ -45,6 +45,17 @@ echo "Validating auto-format PR workflow..."
 echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
 ./scripts/check-version-increment-workflow.sh
 
+echo "Linting GitHub Actions workflows (actionlint)..."
+if ! command -v actionlint &>/dev/null; then
+  echo "actionlint is required — install: https://github.com/rhysd/actionlint/blob/main/docs/install.md"
+  exit 1
+fi
+actionlint -no-color
+
+echo "Validating the actionlint workflow-lint gate..."
+./scripts/test-check-actionlint-gate.sh
+./scripts/check-actionlint-gate.sh
+
 echo "Validating CodeQL code-scanning workflow..."
 ./scripts/test-check-codeql-workflow.sh
 ./scripts/check-codeql-workflow.sh
