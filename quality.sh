@@ -65,6 +65,10 @@ echo "Validating Renovate dependency-update config..."
 ./scripts/test-check-renovate-config.sh
 ./scripts/check-renovate-config.sh
 
+echo "Validating dependency review is enabled on pull requests..."
+./scripts/test-check-dependency-review.sh
+./scripts/check-dependency-review.sh
+
 echo "Validating default-branch protection policy..."
 ./scripts/test-check-branch-protection.sh
 if command -v gh &>/dev/null && gh auth status &>/dev/null; then

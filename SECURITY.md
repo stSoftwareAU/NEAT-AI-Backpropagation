@@ -68,6 +68,7 @@ Always update to the latest commit on `Develop` to receive security fixes.
 | ---- | ----- | ------ |
 | CodeQL (`security-and-quality`) | [`.github/workflows/codeql.yml`](./.github/workflows/codeql.yml) — PRs, pushes to `Develop`, weekly cron | this repository's own Rust |
 | `rustsec/audit-check`, `cargo-deny` | [`.github/workflows/security.yml`](./.github/workflows/security.yml), `quality.sh` | advisories and licences in dependencies |
+| `actions/dependency-review-action` | [`.github/workflows/security.yml`](./.github/workflows/security.yml) — every pull request | the crates a PR adds or upgrades, summarised as a PR comment |
 | Renovate (`osvVulnerabilityAlerts`) | [`renovate.json`](./renovate.json) | advisory-driven crate bumps, no PR needed to trigger |
 
 Dependabot alerts and Dependabot security updates are repository settings
