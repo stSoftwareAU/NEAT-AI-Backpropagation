@@ -1,6 +1,8 @@
 # Auto-format / PR housekeeping job.
 #
-# Runs on pull requests targeting Develop. Applies `cargo fmt --all` and
+# Runs on pull requests targeting Develop or a `milestone/**` branch (milestone
+# sub-issue PRs merge into the shared milestone branch, so they need the same
+# gate — Issue #27). Applies `cargo fmt --all` and
 # refreshes `Cargo.lock` against the checked-out NEAT-AI-core path dependency
 # (`cargo update -p neat-core`). If the working tree changes, the fix is
 # committed and pushed back. Re-running on a clean branch is a no-op.
@@ -14,6 +16,7 @@ on:
     types: [opened, synchronize, reopened]
     branches:
       - Develop
+      - "milestone/**"
     paths-ignore:
       - "**.md"
       - "docs/**"
