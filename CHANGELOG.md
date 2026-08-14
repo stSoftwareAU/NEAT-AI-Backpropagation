@@ -25,6 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `backpropagation/tests/scorer_boundary.rs` — process-boundary coverage for
+  `score_creature`, the accept gate `run_train` uses when `--scorer` is set. A
+  stub `rust_scorer` executable exercises the map and single-object stdout
+  forms, the candidate-directory layout (`scorer-candidate/trained.json` plus
+  the training-data argument), the non-zero-exit error, an empty score map, and
+  unparsable stdout (issue #24).
 - Parity dump round-trip coverage in `backpropagation/src/compare.rs`:
   `run_compare` writes a dump that `load_compare_dump` reloads to an equal
   value, the on-disk field names (`camelCase` plus `fromUUID` / `toUUID`) are
