@@ -474,61 +474,169 @@ mod tests {
     }
 
     #[test]
-    fn bias_propose_uses_neat_core_calculate_bias() {
+    fn bias_propose_steps_towards_accumulated_mean_without_overshooting() {
         let cfg = BackpropConfig::default();
         let signal = BiasSignal {
             count: 10.0,
             total_adjusted_bias: 5.0,
             no_change: false,
         };
+        // Accumulated evidence says the bias should sit near 5/10; a single
+        // proposal is a partial step towards it, never past it.
+        let mean = signal.total_adjusted_bias / signal.count;
         let proposed = signal.propose(0.0, &cfg, 0.01);
-        let expected = calculate_bias(
-            10.0,
-            5.0,
-            0.0,
-            false,
-            cfg.generations,
-            cfg.plank_constant,
-            0.01,
-            cfg.maximum_bias_adjustment_scale,
-            cfg.limit_bias_scale,
-            0.0,
-            0.0,
+        assert!(
+            proposed > 0.0 && proposed < mean,
+            "expected 0 < {proposed} < {mean}"
         );
-        assert!(nearly_equal(proposed, expected));
+
+        let negative = BiasSignal {
+            total_adjusted_bias: -5.0,
+            ..signal.clone()
+        };
+        let proposed_negative = negative.propose(0.0, &cfg, 0.01);
+        assert!(
+            proposed_negative < 0.0 && proposed_negative > -mean,
+            "expected {} < {proposed_negative} < 0",
+            -mean
+        );
+
+        // A larger learning rate takes a larger step towards the same mean.
+        let faster = signal.propose(0.0, &cfg, 0.02);
+        assert!(faster > proposed && faster < mean, "expected step to grow");
     }
 
     #[test]
-    fn weight_propose_uses_neat_core_calculate_weight() {
+    fn bias_propose_step_never_exceeds_maximum_bias_adjustment_scale() {
+        let cfg = BackpropConfig {
+            maximum_bias_adjustment_scale: 0.25,
+            ..Default::default()
+        };
+        let signal = BiasSignal {
+            count: 10.0,
+            total_adjusted_bias: 1_000_000.0,
+            no_change: false,
+        };
+        let current = 0.0;
+        let proposed = signal.propose(current, &cfg, 0.01);
+        assert!(
+            proposed > current,
+            "an enormous signal still moves the bias"
+        );
+        assert!(
+            (proposed - current).abs() <= cfg.maximum_bias_adjustment_scale + FLOAT_ABS_TOL,
+            "step {} exceeded the clamp {}",
+            proposed - current,
+            cfg.maximum_bias_adjustment_scale
+        );
+    }
+
+    #[test]
+    fn bias_propose_returns_current_bias_when_adjustment_disabled() {
+        let cfg = BackpropConfig {
+            disable_bias_adjustment: true,
+            ..Default::default()
+        };
+        let signal = BiasSignal {
+            count: 10.0,
+            total_adjusted_bias: 5.0,
+            no_change: false,
+        };
+        assert_eq!(signal.propose(0.75, &cfg, 0.01), 0.75);
+    }
+
+    #[test]
+    fn bias_propose_returns_current_bias_without_usable_signal() {
         let cfg = BackpropConfig::default();
-        let signal = WeightSignal {
+        let empty = BiasSignal::default();
+        assert_eq!(empty.propose(0.75, &cfg, 0.01), 0.75);
+
+        let flagged = BiasSignal {
+            count: 10.0,
+            total_adjusted_bias: 5.0,
+            no_change: true,
+        };
+        assert_eq!(flagged.propose(0.75, &cfg, 0.01), 0.75);
+    }
+
+    /// Signal whose positive activation mass carries `adjusted` units of
+    /// adjusted value per unit of activation — i.e. the accumulated evidence
+    /// argues the weight should be `adjusted`.
+    fn positive_weight_signal(adjusted: f64) -> WeightSignal {
+        WeightSignal {
             count: 4.0,
             total_positive_activation: 2.0,
             total_negative_activation: 0.0,
             count_positive: 4.0,
             count_negative: 0.0,
-            total_positive_adjusted_value: 1.0,
+            total_positive_adjusted_value: adjusted * 2.0,
             total_negative_adjusted_value: 0.0,
-        };
-        let proposed = signal.propose(0.5, &cfg, 0.01);
-        let expected = calculate_weight(
-            4.0,
-            2.0,
-            0.0,
-            4.0,
-            0.0,
-            1.0,
-            0.0,
-            0.5,
-            cfg.generations,
-            cfg.plank_constant,
-            0.01,
-            cfg.maximum_weight_adjustment_scale,
-            cfg.limit_weight_scale,
-            0.0,
-            0.0,
+        }
+    }
+
+    #[test]
+    fn weight_propose_steps_towards_accumulated_target_without_overshooting() {
+        let cfg = BackpropConfig::default();
+        let current = 0.5;
+
+        let upwards = positive_weight_signal(1.0).propose(current, &cfg, 0.01);
+        assert!(
+            upwards > current && upwards < 1.0,
+            "expected {current} < {upwards} < 1.0"
         );
-        assert!(nearly_equal(proposed, expected));
+
+        let downwards = positive_weight_signal(0.0).propose(current, &cfg, 0.01);
+        assert!(
+            downwards < current && downwards > 0.0,
+            "expected 0.0 < {downwards} < {current}"
+        );
+
+        let faster = positive_weight_signal(1.0).propose(current, &cfg, 0.02);
+        assert!(faster > upwards && faster < 1.0, "expected step to grow");
+    }
+
+    #[test]
+    fn weight_propose_step_never_exceeds_maximum_weight_adjustment_scale() {
+        let cfg = BackpropConfig {
+            maximum_weight_adjustment_scale: 0.25,
+            ..Default::default()
+        };
+        let current = 0.5;
+        let proposed = positive_weight_signal(500_000.0).propose(current, &cfg, 0.01);
+        assert!(
+            proposed > current,
+            "an enormous signal still moves the weight"
+        );
+        assert!(
+            (proposed - current).abs() <= cfg.maximum_weight_adjustment_scale + FLOAT_ABS_TOL,
+            "step {} exceeded the clamp {}",
+            proposed - current,
+            cfg.maximum_weight_adjustment_scale
+        );
+    }
+
+    #[test]
+    fn weight_propose_returns_current_weight_when_adjustment_disabled() {
+        let cfg = BackpropConfig {
+            disable_weight_adjustment: true,
+            ..Default::default()
+        };
+        assert_eq!(positive_weight_signal(1.0).propose(0.5, &cfg, 0.01), 0.5);
+    }
+
+    #[test]
+    fn weight_propose_returns_current_weight_without_usable_signal() {
+        let cfg = BackpropConfig::default();
+        let empty = WeightSignal::default();
+        assert_eq!(empty.propose(0.5, &cfg, 0.01), 0.5);
+
+        // Counted accumulations carrying no activation mass are not evidence.
+        let no_activation = WeightSignal {
+            count: 4.0,
+            count_positive: 4.0,
+            ..WeightSignal::default()
+        };
+        assert_eq!(no_activation.propose(0.5, &cfg, 0.01), 0.5);
     }
 
     #[test]
