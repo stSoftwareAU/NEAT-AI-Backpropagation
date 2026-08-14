@@ -353,6 +353,7 @@ mod tests {
     use super::*;
     use crate::backprop::BiasSignal;
     use std::io::Write;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     /// One input feeding two identity outputs (`o1` ×1, `o2` ×2).
@@ -367,6 +368,236 @@ mod tests {
         {"fromUUID":"input-0","toUUID":"o2","weight":2.0}
       ]
     }"#;
+
+    /// Identity chain `input-0 → h1 → o1`, so every gene accumulates on every
+    /// record and the dump carries a non-empty neuron *and* synapse surface.
+    const IDENTITY_CHAIN: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h1","bias":0.25,"squash":"IDENTITY"},
+        {"type":"output","uuid":"o1","bias":-0.5,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"fromUUID":"input-0","toUUID":"h1","weight":0.75},
+        {"fromUUID":"h1","toUUID":"o1","weight":1.5}
+      ]
+    }"#;
+
+    /// Write `creature` plus a one-file `.bin` corpus of `(input, target)`
+    /// pairs into a fresh temp directory. Returns `(dir, creature_path,
+    /// data_dir)`.
+    fn fixture(creature: &str, records: &[(f32, f32)]) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempdir().unwrap();
+        let creature_path = dir.path().join("creature.json");
+        fs::write(&creature_path, creature).unwrap();
+        let data_dir = dir.path().join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let mut f = fs::File::create(data_dir.join("0.bin")).unwrap();
+        for (input, target) in records {
+            f.write_all(&input.to_le_bytes()).unwrap();
+            f.write_all(&target.to_le_bytes()).unwrap();
+        }
+        drop(f);
+        (dir, creature_path, data_dir)
+    }
+
+    /// Issue #23: the parity dump's file round-trip — `run_compare` writes the
+    /// JSON, `load_compare_dump` reads it back — had no coverage, so a serde
+    /// rename drift on either side could break Rust ↔ TypeScript parity with a
+    /// green suite. Reloading must reproduce the returned dump exactly.
+    #[test]
+    fn compare_dump_survives_the_file_round_trip() {
+        let (dir, creature_path, data_dir) =
+            fixture(IDENTITY_CHAIN, &[(1.0, 2.0), (2.0, 0.0), (-1.0, 0.5)]);
+        // A nested `--out` also exercises the parent-directory creation.
+        let out_path = dir.path().join("dumps").join("rust-compare.json");
+
+        let dump = run_compare(
+            &creature_path,
+            &data_dir,
+            &BackpropConfig::default(),
+            None,
+            23,
+            &out_path,
+        )
+        .unwrap();
+        assert!(out_path.is_file(), "run_compare did not write {out_path:?}");
+
+        let reloaded = load_compare_dump(&out_path).unwrap();
+
+        assert_eq!(
+            reloaded, dump,
+            "the reloaded dump must equal the one run_compare returned"
+        );
+        assert_eq!(reloaded.records, 3);
+        assert_eq!(
+            reloaded.mse, dump.mse,
+            "mse must round-trip bit-identically"
+        );
+        assert_eq!(
+            reloaded
+                .neurons
+                .iter()
+                .map(|n| n.uuid.as_str())
+                .collect::<Vec<_>>(),
+            ["h1", "o1"],
+            "neuron UUID keys drifted across the round-trip"
+        );
+        assert_eq!(
+            reloaded
+                .synapses
+                .iter()
+                .map(|s| (s.from_uuid.as_str(), s.to_uuid.as_str()))
+                .collect::<Vec<_>>(),
+            [("input-0", "h1"), ("h1", "o1")],
+            "synapse UUID keys drifted across the round-trip"
+        );
+        assert!(
+            reloaded.neurons.iter().any(|n| n.bias_count > 0.0),
+            "fixture accumulated nothing — the round-trip would be vacuous"
+        );
+        assert!(
+            diff_compare_dumps(&dump, &reloaded, true)
+                .unwrap()
+                .mismatches
+                .is_empty(),
+            "a strict diff of the dump against its own reload must be clean"
+        );
+    }
+
+    /// The on-disk field names are the wire contract with the Deno harness
+    /// (`camelCase`, plus the explicit `fromUUID` / `toUUID` renames). Assert
+    /// them on the serialised bytes so a rename fails here, not in production
+    /// parity.
+    #[test]
+    fn dump_file_keeps_the_typescript_wire_field_names() {
+        let (dir, creature_path, data_dir) = fixture(IDENTITY_CHAIN, &[(1.0, 2.0), (2.0, 0.0)]);
+        let out_path = dir.path().join("rust-compare.json");
+        run_compare(
+            &creature_path,
+            &data_dir,
+            &BackpropConfig::default(),
+            None,
+            23,
+            &out_path,
+        )
+        .unwrap();
+
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        for key in [
+            "version",
+            "records",
+            "mse",
+            "learningRate",
+            "neurons",
+            "synapses",
+        ] {
+            assert!(
+                value.get(key).is_some(),
+                "dump is missing top-level `{key}`"
+            );
+        }
+        let neuron = &value["neurons"][0];
+        for key in [
+            "uuid",
+            "biasCount",
+            "totalAdjustedBias",
+            "currentBias",
+            "proposedBias",
+        ] {
+            assert!(neuron.get(key).is_some(), "neuron row is missing `{key}`");
+        }
+        let synapse = &value["synapses"][0];
+        for key in [
+            "fromUUID",
+            "toUUID",
+            "count",
+            "currentWeight",
+            "proposedWeight",
+        ] {
+            assert!(synapse.get(key).is_some(), "synapse row is missing `{key}`");
+        }
+    }
+
+    /// The diff had only ever been run against an identical dump, so its
+    /// mismatch-detection side was never exercised. Perturbing one reloaded
+    /// `proposedBias` beyond tolerance must be reported.
+    #[test]
+    fn diff_reports_a_perturbed_proposed_bias() {
+        let (dir, creature_path, data_dir) = fixture(IDENTITY_CHAIN, &[(1.0, 2.0), (2.0, 0.0)]);
+        let out_path = dir.path().join("rust-compare.json");
+        let dump = run_compare(
+            &creature_path,
+            &data_dir,
+            &BackpropConfig::default(),
+            None,
+            23,
+            &out_path,
+        )
+        .unwrap();
+
+        let mut other = load_compare_dump(&out_path).unwrap();
+        let target = other
+            .neurons
+            .iter_mut()
+            .find(|n| n.bias_count > 0.0)
+            .expect("fixture must accumulate at least one neuron bias");
+        let uuid = target.uuid.clone();
+        let original = target.proposed_bias;
+        target.proposed_bias = original + 1.0;
+
+        let report = diff_compare_dumps(&dump, &other, false).unwrap();
+
+        let hit = report
+            .mismatches
+            .iter()
+            .find(|m| m.path == format!("neuron[{uuid}].proposedBias"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "perturbed proposedBias went unreported: {:?}",
+                    report.mismatches
+                )
+            });
+        assert_eq!(hit.left, original);
+        assert_eq!(hit.right, original + 1.0);
+        assert!(
+            report.overlap_neurons > 0,
+            "the perturbed neuron must be in the overlap"
+        );
+    }
+
+    /// A missing or corrupt dump must fail loud rather than yielding an empty
+    /// dump that a later diff would read as parity.
+    #[test]
+    fn load_compare_dump_fails_loudly_on_bad_input() {
+        let dir = tempdir().unwrap();
+        assert!(
+            load_compare_dump(&dir.path().join("absent.json")).is_err(),
+            "a missing dump must be an error"
+        );
+
+        let truncated = dir.path().join("truncated.json");
+        fs::write(&truncated, r#"{"version":"test","records":2"#).unwrap();
+        assert!(
+            load_compare_dump(&truncated).is_err(),
+            "malformed JSON must be an error"
+        );
+
+        let wrong_names = dir.path().join("wrong-names.json");
+        fs::write(
+            &wrong_names,
+            r#"{"version":"test","records":2,"mse":0.0,"learningRate":0.01,
+                "neurons":[],
+                "synapses":[{"from_uuid":"input-0","to_uuid":"o1","count":1.0,
+                             "currentWeight":1.0,"proposedWeight":1.0}]}"#,
+        )
+        .unwrap();
+        assert!(
+            load_compare_dump(&wrong_names).is_err(),
+            "snake_case synapse UUID keys must be rejected, not silently defaulted"
+        );
+    }
 
     /// Issue #33 parity guard: `CompareDump::mse` must stay on the value the
     /// crate's own fused reduction produced before it delegated to

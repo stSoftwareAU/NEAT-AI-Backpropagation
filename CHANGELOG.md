@@ -25,6 +25,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Parity dump round-trip coverage in `backpropagation/src/compare.rs`:
+  `run_compare` writes a dump that `load_compare_dump` reloads to an equal
+  value, the on-disk field names (`camelCase` plus `fromUUID` / `toUUID`) are
+  asserted on the serialised JSON so a rename cannot break Rust ↔ TypeScript
+  parity silently, `diff_compare_dumps` is checked against a perturbed
+  `proposedBias`, and `load_compare_dump` fails loud on a missing, truncated,
+  or wrongly-named dump (issue #23).
 - `scripts/check-branch-protection.sh` — verifies the live `Develop` ruleset
   against the branch-protection policy now recorded in CONTRIBUTING.md
   (pull request required, ≥ 1 approving review, code-owner review, the
