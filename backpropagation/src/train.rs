@@ -324,19 +324,56 @@ mod tests {
     use std::io::Write;
     use tempfile::tempdir;
 
+    /// Journalling the crate version is what remote GRQ runners use to spot a
+    /// stale binary, so assert it off a real `run_train` journal rather than
+    /// off a struct literal (#25).
     #[test]
     fn journal_header_carries_crate_version() {
-        let header = TrainJournalHeader {
-            kind: "runHeader".into(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            seed: 1,
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let mut f = fs::File::create(data.join("0.bin")).unwrap();
+        // input=1 → identity chain → 1; target=2 so there is error to learn.
+        f.write_all(&1.0f32.to_le_bytes()).unwrap();
+        f.write_all(&2.0f32.to_le_bytes()).unwrap();
+        let creature_path = dir.path().join("creature.json");
+        fs::write(
+            &creature_path,
+            r#"{
+              "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+              "neurons":[
+                {"type":"hidden","uuid":"h1","bias":0.0,"squash":"IDENTITY"},
+                {"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}
+              ],
+              "synapses":[
+                {"fromUUID":"input-0","toUUID":"h1","weight":1.0},
+                {"fromUUID":"h1","toUUID":"o1","weight":1.0}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let out = dir.path().join("out");
+        run_train(TrainRequest {
+            creature: &creature_path,
+            training_data: &data,
+            config: &BackpropConfig::default(),
             epochs: 1,
-            max_records: Some(4),
-            learning_rate: 0.01,
-            step_scale: 1.0,
-            outputs_only: false,
-        };
+            max_records: Some(1),
+            seed: 7,
+            output_dir: &out,
+            scorer: None,
+            apply: ApplyOptions::default(),
+            accept_always: false,
+            max_backtracks: 0,
+        })
+        .unwrap();
+
+        let journal = fs::read_to_string(out.join("journal.jsonl")).unwrap();
+        let first_line = journal.lines().next().expect("journal has a header line");
+        let header: TrainJournalHeader = serde_json::from_str(first_line).unwrap();
+        assert_eq!(header.kind, "runHeader");
         assert_eq!(header.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(header.seed, 7);
     }
 
     #[test]
