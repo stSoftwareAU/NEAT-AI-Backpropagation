@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// Parsed fields from a scorer result object.
@@ -73,11 +73,6 @@ fn parse_scorer_stdout(stdout: &[u8]) -> Result<BTreeMap<String, ScoreResult>, S
         return Ok(map);
     }
     Err(format!("could not parse scorer stdout: {text}"))
-}
-
-/// Default scorer binary name on PATH.
-pub fn default_scorer_path() -> PathBuf {
-    PathBuf::from("rust_scorer")
 }
 
 #[cfg(test)]

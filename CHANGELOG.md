@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- `scorer::default_scorer_path()` — a `pub fn` no code ever called. It returned
+  a bare `rust_scorer` PATH lookup for a fallback the CLI never adopted:
+  `--scorer` is `Option<PathBuf>` with no default and `run_train` simply skips
+  scoring when it is omitted. Being `pub` it was invisible to the workspace
+  `dead_code` lint (issue #37).
 - `train::MIN_SCORE_IMPROVEMENT` — a `pub const` no code ever read. Its doc
   comment described a score-improvement accept gate, but `run_train` accepts on
   `accept_always || after_mse < best_mse` alone and never applied a score
