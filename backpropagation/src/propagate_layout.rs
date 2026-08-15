@@ -6,10 +6,11 @@
 //! creature/training-data bridge (issue #2).
 
 use crate::backprop::{BackpropConfig, LearningSignal};
+use crate::sampling::{RecordCursor, RecordSelection};
 use neat_core::{
     CompiledNetwork, CreatureExport, NEURON_TYPE_CONSTANT, NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT,
     NEURON_TYPE_OUTPUT, NeuronInput, PropagateInput, SquashType, SynapseInput, SynapseType,
-    TrainingDataConfig, TrainingDataIterator, apply_get_range, mse_record, parse_squash_name,
+    TrainingDataConfig, TrainingRecord, apply_get_range, mse_record, parse_squash_name,
     parse_synapse_type, propagate_topological_loop,
 };
 use rand::Rng;
@@ -473,6 +474,29 @@ pub fn accumulate_creature_learning_report(
     max_records: Option<u64>,
     rng: &mut impl Rng,
 ) -> Result<AccumulateReport, String> {
+    accumulate_creature_learning_selected(
+        creature,
+        network,
+        training_data,
+        config,
+        RecordSelection::Prefix(max_records),
+        rng,
+    )
+}
+
+/// [`accumulate_creature_learning_report`] over an explicit [`RecordSelection`].
+///
+/// Passing the same selection here and to [`crate::mse::compute_mse_selected`]
+/// is what keeps an epoch's accumulate and eval passes on the identical record
+/// set, so an accept / rollback decision compares like with like (issue #77).
+pub fn accumulate_creature_learning_selected(
+    creature: &CreatureExport,
+    network: &mut CompiledNetwork,
+    training_data: &Path,
+    config: &BackpropConfig,
+    selection: RecordSelection<'_>,
+    rng: &mut impl Rng,
+) -> Result<AccumulateReport, String> {
     let layout = PropagateLayout::from_creature(creature)?;
     let sparse = select_sparse(creature, &layout, config, rng);
     let mut learning = LearningSignal::new(creature.neurons.len(), creature.synapses.len());
@@ -481,16 +505,16 @@ pub fn accumulate_creature_learning_report(
     let mut inward_indices = layout.inward_synapse_indices.clone();
 
     let td_cfg = TrainingDataConfig::new(creature.input, creature.output);
-    let mut iter = TrainingDataIterator::new(training_data, td_cfg).map_err(|e| e.to_string())?;
+    let mut cursor = RecordCursor::open(training_data, td_cfg, selection)?;
+    // Reused across records — refilled in place, so the loop allocates once.
+    let mut record = TrainingRecord {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    };
     let mut count = 0u64;
     let mut mse_sum = 0.0f64;
 
-    while let Some(record) = iter.next_record().map_err(|e| e.to_string())? {
-        if let Some(limit) = max_records
-            && count >= limit
-        {
-            break;
-        }
+    while cursor.next_into(&mut record)? {
         let traced = network.activate_and_trace(&record.inputs, creature.output);
         // `traced` leads with `creature.output` activations, then activations,
         // hint values and aggregate trace data — only the leading slice is the

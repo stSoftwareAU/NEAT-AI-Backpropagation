@@ -108,11 +108,19 @@ enum Commands {
         #[arg(long, default_value_t = 1)]
         epochs: u64,
         /// Max records per epoch / eval (omit for the full directory).
+        ///
+        /// Honoured as a rate over the whole corpus: every `.bin` file
+        /// contributes ceil(file_records × max_records / total_records)
+        /// seeded-random records, matching NEAT-AI trainingSampleRate.
         #[arg(long)]
         max_records: Option<u64>,
-        /// Sparse-selection seed.
+        /// Sparse-selection and record-sampling seed.
         #[arg(long, default_value_t = 1)]
         seed: u64,
+        /// Take each file's leading records for --max-records instead of a
+        /// seeded random draw (NEAT-AI disableRandomSamples).
+        #[arg(long, default_value_t = false)]
+        disable_random_samples: bool,
         /// Initial learning rate (see --learning-rate-strategy).
         #[arg(long, default_value_t = 0.01)]
         learning_rate: f64,
@@ -311,6 +319,7 @@ fn run() -> Result<(), String> {
             epochs,
             max_records,
             seed,
+            disable_random_samples,
             learning_rate,
             learning_rate_strategy,
             learning_rate_decay,
@@ -340,6 +349,7 @@ fn run() -> Result<(), String> {
                 epochs,
                 max_records,
                 seed,
+                disable_random_samples,
                 output_dir: &output_dir,
                 scorer: scorer.as_deref(),
                 apply: ApplyOptions {
@@ -577,6 +587,33 @@ mod tests {
         assert!((cfg.maximum_bias_adjustment_scale - 1.0).abs() < 1e-12);
         assert!((cfg.maximum_weight_adjustment_scale - 2.0).abs() < 1e-12);
         assert!(cfg.normalise_gradients);
+    }
+
+    /// `--max-records` defaults to a seeded *random* draw (#77) — the flag has
+    /// to be asked for, and the bridge relies on that default.
+    #[test]
+    fn record_sampling_is_random_unless_disabled() {
+        let Commands::Train {
+            disable_random_samples,
+            seed,
+            ..
+        } = parse_train(&[])
+        else {
+            panic!("expected train");
+        };
+        assert!(!disable_random_samples);
+        assert_eq!(seed, 1);
+
+        let Commands::Train {
+            disable_random_samples,
+            seed,
+            ..
+        } = parse_train(&["--disable-random-samples", "--seed", "42"])
+        else {
+            panic!("expected train");
+        };
+        assert!(disable_random_samples);
+        assert_eq!(seed, 42);
     }
 
     #[test]

@@ -4,8 +4,18 @@
 //! shape onto core's streaming helper and keeps the fail-loud empty-corpus
 //! contract that `train` and `sweep` rely on (issue #32).
 
-use neat_core::{CompiledNetwork, CreatureExport, mse_mean_streaming};
+use crate::sampling::{RecordCursor, RecordSelection};
+use neat_core::{
+    CompiledNetwork, CreatureExport, TrainingDataConfig, TrainingRecord, mse_mean_streaming,
+    mse_sum_batch_packed,
+};
 use std::path::Path;
+
+/// Records packed per call into core's fused batch helper on the sampled path.
+///
+/// Large enough for core's 8-way SIMD tier to dominate, small enough that the
+/// packed buffer stays cache-friendly on a wide creature.
+const SAMPLED_BATCH_RECORDS: usize = 1024;
 
 /// Whole-creature mean squared error via a forward pass (no backprop).
 ///
@@ -27,18 +37,89 @@ pub fn compute_mse(
     training_data: &Path,
     max_records: Option<u64>,
 ) -> Result<(f64, u64), String> {
-    let (mse, count) = mse_mean_streaming(
+    compute_mse_selected(
+        creature,
         network,
         training_data,
-        creature.input,
-        creature.output,
-        creature.forward_only,
-        max_records,
-    )?;
+        RecordSelection::Prefix(max_records),
+    )
+}
+
+/// [`compute_mse`] over an explicit [`RecordSelection`].
+///
+/// A [`RecordSelection::Prefix`] takes core's streaming route unchanged. A
+/// [`RecordSelection::Sample`] seeks to the sampled indexes and feeds them to
+/// core's fused batch helper in blocks, so the sampled surface reports the
+/// same quantity as the streaming one (issue #77).
+pub fn compute_mse_selected(
+    creature: &CreatureExport,
+    network: &mut CompiledNetwork,
+    training_data: &Path,
+    selection: RecordSelection<'_>,
+) -> Result<(f64, u64), String> {
+    let (mse, count) = match selection {
+        RecordSelection::Prefix(max_records) => mse_mean_streaming(
+            network,
+            training_data,
+            creature.input,
+            creature.output,
+            creature.forward_only,
+            max_records,
+        )?,
+        RecordSelection::Sample(_) => sampled_mse(creature, network, training_data, selection)?,
+    };
     if count == 0 {
         return Err("MSE: no training records scored".into());
     }
     Ok((mse, count))
+}
+
+/// Score a planned sample by packing its records into core's batch helper.
+fn sampled_mse(
+    creature: &CreatureExport,
+    network: &mut CompiledNetwork,
+    training_data: &Path,
+    selection: RecordSelection<'_>,
+) -> Result<(f64, u64), String> {
+    let config = TrainingDataConfig::new(creature.input, creature.output);
+    let values_per_record = config.values_per_record();
+    let mut cursor = RecordCursor::open(training_data, config, selection)?;
+    let mut record = TrainingRecord {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    };
+    let mut packed: Vec<f32> = Vec::with_capacity(SAMPLED_BATCH_RECORDS * values_per_record);
+    let mut sum_error = 0.0f64;
+    let mut count = 0u64;
+
+    while cursor.next_into(&mut record)? {
+        packed.extend_from_slice(&record.inputs);
+        packed.extend_from_slice(&record.outputs);
+        count += 1;
+        if packed.len() >= SAMPLED_BATCH_RECORDS * values_per_record {
+            sum_error += mse_sum_batch_packed(
+                network,
+                &packed,
+                creature.input,
+                creature.output,
+                creature.forward_only,
+            );
+            packed.clear();
+        }
+    }
+    if !packed.is_empty() {
+        sum_error += mse_sum_batch_packed(
+            network,
+            &packed,
+            creature.input,
+            creature.output,
+            creature.forward_only,
+        );
+    }
+    if count == 0 {
+        return Ok((0.0, 0));
+    }
+    Ok((sum_error / count as f64, count))
 }
 
 #[cfg(test)]

@@ -96,6 +96,56 @@ flowchart LR
     E -- no --> G[rollback]
 ```
 
+### Train record sampling (issue #77)
+
+`train --max-records N` is a **rate**, not a prefix. NEAT-AI forwards
+`TrainOptions.trainingSampleRate` as `--max-records`, and its TypeScript
+`selectFileSampleIndexes` draws the same fraction from *every* `.bin`
+file. Taking the first *N* records in scan order instead would over-fit
+the earliest files of the corpus and never look at the later years, so
+`train` ports the TypeScript selection:
+
+1. Total the records across the directory, then resolve the cap to a rate
+   of `N / total_records` (capped at `1.0`).
+2. Per file, shuffle the record indexes with a `--seed`-derived RNG,
+   take `ceil(file_records × rate)` of them, and **sort the take
+   ascending** so disk reads stay sequential.
+3. Use that one sample for the whole run — baseline MSE, every epoch's
+   accumulate, and every candidate's post-apply MSE — so an accept /
+   rollback decision always compares like with like.
+
+Because the per-file take is ceiled, the realised count can exceed `N` by
+at most one record per file. That is the TypeScript behaviour and the
+contract this crate matches.
+
+| Flag | Effect |
+| ---- | ------ |
+| `--max-records N` | Sample a rate of `N / total_records` from every file |
+| `--seed S` | Reproducible draw — same seed, same records, same MSE |
+| `--disable-random-samples` | Skip the shuffle: each file's leading prefix (NEAT-AI `disableRandomSamples`) |
+
+The header line of `journal.jsonl` records `maxRecords`,
+`sampledRecords`, `totalRecords` and `disableRandomSamples`, so a remote
+runner can audit which slice an epoch scored.
+
+```mermaid
+flowchart TD
+    A["--max-records N"] --> B["rate = N / total records"]
+    B --> C{"--disable-random-samples?"}
+    C -- no --> D["shuffle indexes<br/>(seeded by --seed)"]
+    C -- yes --> E[keep 0..n order]
+    D --> F["take ceil(file records × rate)"]
+    E --> F
+    F --> G[sort ascending]
+    G --> H[one sample per run]
+    H --> I[accumulate]
+    H --> J[before / after MSE]
+```
+
+Only `train` samples. `compare`, `sweep`, and `gradient-check` keep the
+prefix cap — they are parity and diagnostic surfaces where reading the
+same leading bytes as the TypeScript harness is the point.
+
 `--learning-rate` is the *initial* rate; `--learning-rate-strategy`
 (`fixed`, `decay`, `adaptive`, `warm-restart`) plus `--learning-rate-decay`
 schedule it per epoch, and each epoch's resolved rate is journalled as

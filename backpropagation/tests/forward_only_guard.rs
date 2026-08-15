@@ -137,6 +137,7 @@ fn train_rejects_a_recurrent_creature() {
         epochs: 1,
         max_records: Some(1),
         seed: 1,
+        disable_random_samples: false,
         output_dir: &dir.path().join("out"),
         scorer: None,
         apply: ApplyOptions::default(),

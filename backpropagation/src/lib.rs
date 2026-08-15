@@ -12,6 +12,7 @@ pub mod creature_io;
 pub mod gradient_check;
 pub mod mse;
 pub mod propagate_layout;
+pub mod sampling;
 pub mod scorer;
 pub mod sweep;
 pub mod tags;
@@ -33,11 +34,15 @@ pub use gradient_check::{
     ClassStats, GeneClass, GeneProbeRow, GradientCheckRequest, GradientCheckSummary,
     run_gradient_check,
 };
-pub use mse::compute_mse;
+pub use mse::{compute_mse, compute_mse_selected};
 pub use propagate_layout::{
     AccumulateReport, PropagateLayout, accumulate_creature_learning,
-    accumulate_creature_learning_report,
+    accumulate_creature_learning_report, accumulate_creature_learning_selected,
+};
+pub use sampling::{
+    FileSample, RecordCursor, RecordSample, RecordSelection, plan_record_sample,
+    select_file_sample_indexes,
 };
 pub use scorer::{ScoreResult, score_creature};
 pub use sweep::{SweepRequest, SweepRow, SweepSummary, run_sweep};
-pub use train::{DEFAULT_STEP_SCALE, TrainJournalHeader, TrainResult, run_train};
+pub use train::{DEFAULT_STEP_SCALE, TrainJournalHeader, TrainRequest, TrainResult, run_train};
