@@ -40,6 +40,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Semgrep SAST scanning** — `.github/workflows/semgrep.yml` runs `semgrep ci
+  --config p/default` over every pull request in the digest-pinned official
+  Semgrep image, a second opinion alongside CodeQL that also reads the shell and
+  workflow YAML the Rust analysis never sees. `--no-suppress-errors` overrides
+  the `semgrep ci` default that exits 0 when Semgrep itself errors, so a crashed
+  scan fails the job instead of reading as a clean one. The scan is
+  unauthenticated when `SEMGREP_APP_TOKEN` is unset, so bot pull requests are
+  covered identically. One rule is excluded and justified in the workflow —
+  `renovate-missing-minimum-release-age` demands a ≥ 7-day embargo, which
+  contradicts the 24-hour quarantine committed in `renovate.json`.
+  `scripts/check-semgrep-workflow.sh` gates the policy in `quality.sh` and CI
+  (issue #43).
 - **Gitleaks secrets detection** — `.github/workflows/gitleaks.yml` scans every
   pull request diff for committed credentials. Licensed runs use
   `gitleaks-action@v2`; licence-less runs (Renovate, Dependabot — bot PRs get no
