@@ -8,6 +8,7 @@
 
 pub mod backprop;
 pub mod compare;
+pub mod creature_io;
 pub mod gradient_check;
 pub mod mse;
 pub mod propagate_layout;
@@ -24,6 +25,9 @@ pub use backprop::{
 pub use compare::{
     CompareDiffReport, CompareDump, NeuronCompare, SynapseCompare, build_compare_dump,
     diff_compare_dumps,
+};
+pub use creature_io::{
+    FORWARD_ONLY_REQUIRED, load_forward_only_creature, parse_forward_only_creature,
 };
 pub use gradient_check::{
     ClassStats, GeneClass, GeneProbeRow, GradientCheckRequest, GradientCheckSummary,

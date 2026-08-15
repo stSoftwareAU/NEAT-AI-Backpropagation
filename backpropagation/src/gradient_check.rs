@@ -9,9 +9,10 @@
 //! with near-zero FD are excluded from the percentage).
 
 use crate::backprop::{BackpropConfig, LearningSignal, calculate_learning_rate};
+use crate::creature_io::load_forward_only_creature;
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
-use neat_core::{CreatureExport, compile_creature, parse_creature_json};
+use neat_core::{CreatureExport, compile_creature};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -153,15 +154,8 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
     if !(req.fd_eps.is_finite() && req.fd_eps > 0.0) {
         return Err("fd-eps must be positive and finite".into());
     }
+    let creature = load_forward_only_creature(req.creature)?;
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
-    let text = fs::read_to_string(req.creature).map_err(|e| e.to_string())?;
-    let creature = parse_creature_json(&text).map_err(|e| e.to_string())?;
-    if !creature.forward_only {
-        return Err(
-            "this trainer supports forward-only creatures only (no re-entrant / recurrent graphs)"
-                .into(),
-        );
-    }
 
     let lr = calculate_learning_rate(req.config, 0, None);
     let step = if req.step_scale.is_finite() && req.step_scale > 0.0 {

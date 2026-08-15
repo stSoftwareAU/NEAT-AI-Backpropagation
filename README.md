@@ -104,7 +104,11 @@ schedule it per epoch, and each epoch's resolved rate is journalled as
 neuron's signal.
 `gradient-check` (issue #40) compares per-gene proposal Δ to a
 finite-difference ∂MSE/∂θ and reports sign-agreement by gene class.
-Recurrent / re-entrant creatures are refused.
+
+Recurrent / re-entrant creatures are refused by every subcommand that
+drives the accumulate engine — `compare`, `gradient-check`, `sweep`, and
+`train` — through the shared
+`creature_io::load_forward_only_creature` loader (issue #54).
 
 ## Production win protocol
 
