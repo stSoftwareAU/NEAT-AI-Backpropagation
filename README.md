@@ -44,7 +44,7 @@ cargo run -p neat_ai_backpropagation --release -- train \
   /tmp/grq-train-slice \
   --epochs 4 --max-records 2048 --seed 1 \
   --scorer ../NEAT-AI-scorer/target/release/rust_scorer \
-  --output-dir .backprop
+  --output-dir .backprop --trace-store .backprop/traces
 
 cargo run -p neat_ai_backpropagation --release -- sweep \
   ~/src/GRQ-cluster/network.json \
@@ -145,6 +145,51 @@ flowchart TD
 Only `train` samples. `compare`, `sweep`, and `gradient-check` keep the
 prefix cap — they are parity and diagnostic surfaces where reading the
 same leading bytes as the TypeScript harness is the point.
+
+### Train trace store (issue #78)
+
+`train --trace-store DIR` is NEAT-AI's `TrainOptions.traceStore`. The
+TypeScript trainer snapshots `creature.traceJSON()` whenever an
+iteration makes the network worse, and those snapshots are how a failed
+fine-tune gets diagnosed gene by gene. `train` writes the same wire
+format, so a Rust epoch is as debuggable as a TypeScript one:
+
+| Epoch outcome | Artifact |
+| ------------- | -------- |
+| Lowered the best MSE | `<output-dir>/best-trace.json` (beside `best.json`) |
+| Did not | `<store>/failed/epoch-<N>.json` |
+
+The split keys off the MSE, not off the accept flag, so under
+`--accept-always` a kept-but-worse candidate is still filed as a failed
+candidate. Without `--trace-store` no trace is written at all.
+
+A trace is a NEAT-AI `CreatureTrace`: the ordinary UUID-only creature
+export with a `trace` object added to every gene the epoch accumulated.
+Neuron `trace` is NEAT-AI's `NeuronState` (`count`, `totalBias`,
+`totalAdjustedBias`, `hintValue`, `maximumActivation`,
+`minimumActivation`, `totalActivation`, `totalErrorAbsolute`,
+`noChange`); synapse `trace` is its `SynapseState` (`count`, the
+positive / negative activation and adjusted-value masses, and their
+counts). A gene with a zero accumulation count carries no `trace` key,
+matching `traceJSON()`'s own `if (state.count)` guard, and — as in
+TypeScript — constant neurons are never traced.
+
+The genes in the artifact are the **candidate** the epoch produced (the
+creature that was measured better or worse); the `trace` state is the
+accumulation over the incumbent that proposed it. That is the same
+pairing NEAT-AI writes, and it is what makes a rejected candidate
+readable: the weights that were tried, beside the evidence that argued
+for them.
+
+```mermaid
+flowchart TD
+    A[epoch: accumulate on incumbent] --> B[apply → candidate]
+    B --> C{post-apply MSE lower<br/>than best so far?}
+    C -- yes --> D["&lt;output-dir&gt;/best-trace.json"]
+    C -- no --> E["&lt;store&gt;/failed/epoch-N.json"]
+    A -. per-gene trace state .-> D
+    A -. per-gene trace state .-> E
+```
 
 `--learning-rate` is the *initial* rate; `--learning-rate-strategy`
 (`fixed`, `decay`, `adaptive`, `warm-restart`) plus `--learning-rate-decay`

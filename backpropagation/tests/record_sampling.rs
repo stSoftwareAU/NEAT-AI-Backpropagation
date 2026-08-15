@@ -86,6 +86,7 @@ fn train_baseline_mse(
         apply: ApplyOptions::default(),
         accept_always: false,
         max_backtracks: 0,
+        trace_store: None,
         disable_random_samples,
     })
     .unwrap()

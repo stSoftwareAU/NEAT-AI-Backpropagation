@@ -161,6 +161,14 @@ enum Commands {
         /// Output directory for `best.json` and `journal.jsonl`.
         #[arg(long, default_value_os_t = default_output_dir())]
         output_dir: PathBuf,
+        /// NEAT-AI traceStore directory for CreatureTrace artifacts.
+        ///
+        /// An epoch that lowered the best MSE writes `best-trace.json` beside
+        /// `best.json`; one that did not writes
+        /// `<store>/failed/epoch-<N>.json`, matching NEAT-AI's failed-candidate
+        /// store. Omit to write no traces.
+        #[arg(long)]
+        trace_store: Option<PathBuf>,
     },
     /// Accumulate once, then apply the same learning at many step scales.
     Sweep {
@@ -333,6 +341,7 @@ fn run() -> Result<(), String> {
             max_backtracks,
             scorer,
             output_dir,
+            trace_store,
         } => {
             let cfg = train_backprop_config(
                 learning_rate,
@@ -359,6 +368,7 @@ fn run() -> Result<(), String> {
                 },
                 accept_always,
                 max_backtracks,
+                trace_store: trace_store.as_deref(),
             })?;
             eprintln!(
                 "train: baseline_mse={:.12} best_mse={:.12} accepted_epochs={}",
