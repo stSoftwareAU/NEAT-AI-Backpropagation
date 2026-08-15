@@ -65,6 +65,10 @@ echo "Validating Gitleaks secrets-detection workflow..."
 ./scripts/test-check-gitleaks-workflow.sh
 ./scripts/check-gitleaks-workflow.sh
 
+echo "Validating Semgrep SAST scanning workflow..."
+./scripts/test-check-semgrep-workflow.sh
+./scripts/check-semgrep-workflow.sh
+
 echo "Validating Renovate dependency-update config..."
 ./scripts/test-check-renovate-config.sh
 ./scripts/check-renovate-config.sh

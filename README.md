@@ -247,6 +247,46 @@ it fails if the workflow is missing, does not run on pull requests to
 checks out a shallow clone the commit range cannot resolve against, or pulls
 either the action or the CLI from an unpinned or unverified source.
 
+## Static analysis (Semgrep)
+
+CodeQL and Semgrep read the same tree with independently maintained rules, so a
+pattern one engine misses the other still has a chance of catching.
+[`semgrep.yml`](./.github/workflows/semgrep.yml) runs `semgrep ci --config
+p/default` on every pull request, inside the official Semgrep image pinned to a
+`@sha256:` digest — and unlike the Rust-only CodeQL analysis it also reads the
+repository's shell scripts and workflow YAML.
+
+`semgrep ci` suppresses its own errors by default: when Semgrep itself fails it
+exits 0, and a crashed scan reads as a clean one. The job passes
+`--no-suppress-errors` so that failure blocks the merge like any finding.
+`SEMGREP_APP_TOKEN` is optional — with no Semgrep Cloud account the secret is
+empty and the scan runs unauthenticated against the explicit rule set, so
+bot-authored pull requests (Renovate, Dependabot), which receive no Actions
+secrets, are scanned exactly the same.
+
+One `p/default` rule is excluded, named and justified in the workflow:
+`renovate-missing-minimum-release-age` demands a ≥ 7-day embargo on every
+`packageRules` entry, which contradicts the deliberate 24-hour quarantine (and
+no embargo for internal `stSoftwareAU` code) committed in
+[`renovate.json`](./renovate.json) — see
+[Dependency updates](#dependency-updates). JSON has no comment syntax, so an
+inline `nosemgrep` is not available.
+
+```mermaid
+flowchart LR
+    A[PR to Develop] --> B["semgrep/semgrep image<br/>pinned by digest"]
+    B --> C["semgrep ci --config p/default<br/>--no-suppress-errors"]
+    C --> D["finding → job fails"]
+    C --> E["semgrep error → job fails"]
+```
+
+`scripts/check-semgrep-workflow.sh` gates that policy in `quality.sh` and CI:
+it fails if the workflow is missing, does not run on pull requests to
+`Develop`, never invokes a scan, configures no rule set, neuters the verdict
+(`|| true`, `continue-on-error: true`, `--suppress-errors`), drops
+`--no-suppress-errors`, runs the scan outside strict bash, or pulls the action,
+container image, or CLI from an unpinned source.
+
 ## Workflow linting
 
 Workflow YAML is the one thing no other gate reads — clippy, shellcheck and

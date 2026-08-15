@@ -1,0 +1,68 @@
+# Semgrep SAST scanning (Issue #43).
+#
+# CodeQL analyses this crate's Rust with GitHub's own query packs. Semgrep reads
+# the same tree with a second, independently maintained rule set (`p/default`),
+# covering the shell scripts and workflow YAML the Rust analysis never sees — so
+# a pattern one engine misses still has a chance of being caught by the other.
+#
+# The scan runs in the official Semgrep image, pinned to a digest so a
+# republished tag cannot run unreviewed code in CI. `semgrep ci` suppresses its
+# own errors by default (exit 0 when Semgrep itself fails), which would report a
+# crashed scan as a clean one — `--no-suppress-errors` makes that failure loud.
+#
+# SEMGREP_APP_TOKEN is optional: when the organisation has no Semgrep Cloud
+# account the secret is empty and the scan runs unauthenticated against the
+# explicit `--config` rule set, so bot-authored pull requests (Renovate,
+# Dependabot), which receive no Actions secrets, are scanned exactly the same.
+#
+# scripts/check-semgrep-workflow.sh enforces the rules above.
+name: Semgrep
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - Develop
+      - "milestone/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semgrep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: SAST Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: semgrep/semgrep@sha256:67319956da3dcb58baf5b322899c15458e3963e7018a86aeeb5cd224e69cb77a  # v1.173.0
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Full history: `semgrep ci` diffs the pull request against its base
+          # commit, which does not resolve in a shallow clone.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Semgrep scan
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          semgrep --version
+          # A finding exits non-zero and blocks the merge; --no-suppress-errors
+          # means an internal Semgrep failure does the same instead of passing.
+          #
+          # The one excluded rule demands a >= 7-day Renovate embargo on every
+          # packageRules entry. This repository runs a deliberate 24-hour
+          # quarantine for external crates and none for internal stSoftwareAU
+          # code (see renovate.json, gated by check-renovate-config.sh), so the
+          # rule contradicts a committed policy rather than finding a defect —
+          # and JSON has no comment syntax for an inline `nosemgrep`.
+          semgrep ci --config p/default --no-suppress-errors \
+            --exclude-rule=package_managers.renovate.renovate-missing-minimum-release-age.renovate-missing-minimum-release-age

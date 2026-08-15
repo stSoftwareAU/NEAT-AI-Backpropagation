@@ -36,7 +36,8 @@ The `neat-core` path dependency in
 
 This mirrors CI: shellcheck, actionlint, the auto-format workflow validator, the
 version-increment workflow validator, the CodeQL workflow validator, the
-Gitleaks workflow validator, the Renovate config validator, the
+Gitleaks workflow validator, the Semgrep workflow validator, the
+Renovate config validator, the
 branch-protection policy checker, codespell,
 cargo-deny, fmt `--check`, clippy with warnings denied, tests, and rustdoc.
 
@@ -86,6 +87,11 @@ Every pull request diff is scanned for committed secrets — see
 [Secrets detection](./README.md#secrets-detection). Changing
 [`.github/workflows/gitleaks.yml`](./.github/workflows/gitleaks.yml) must keep
 `./scripts/check-gitleaks-workflow.sh` green.
+
+Every pull request is also scanned by Semgrep — see
+[Static analysis](./README.md#static-analysis-semgrep). Changing
+[`.github/workflows/semgrep.yml`](./.github/workflows/semgrep.yml) must keep
+`./scripts/check-semgrep-workflow.sh` green.
 
 External crate bumps arrive as Renovate PRs under a 24-hour quarantine — see
 [Dependency updates](./README.md#dependency-updates). Changing

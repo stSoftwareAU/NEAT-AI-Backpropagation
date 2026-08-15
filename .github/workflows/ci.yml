@@ -139,6 +139,7 @@ jobs:
             ".github/CODEOWNERS"
             ".github/workflows/codeql.yml"
             ".github/workflows/gitleaks.yml"
+            ".github/workflows/semgrep.yml"
             "SECURITY.md"
             "neat-core.expected-version"
             "renovate.json"
@@ -177,6 +178,12 @@ jobs:
           set -euo pipefail
           ./scripts/test-check-gitleaks-workflow.sh
           ./scripts/check-gitleaks-workflow.sh
+
+      - name: Validate Semgrep SAST scanning workflow
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-semgrep-workflow.sh
+          ./scripts/check-semgrep-workflow.sh
 
       - name: Validate Renovate dependency-update config
         run: |
