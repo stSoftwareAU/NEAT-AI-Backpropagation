@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `train --trace-store DIR` writes NEAT-AI `CreatureTrace` artifacts. An epoch
+  that lowered the best MSE writes `best-trace.json` beside `best.json`; one
+  that did not writes `<store>/failed/epoch-<N>.json`, the same failed-candidate
+  store `TrainOptions.traceStore` fills in TypeScript. The payload is the
+  UUID-only creature export with NEAT-AI `NeuronState` / `SynapseState` objects
+  on every gene the epoch accumulated, so a Rust epoch is as debuggable as a
+  TypeScript one and the NEAT-AI bridge can attach it to `TrainingResult.trace`
+  (issue #78).
+
 ### Fixed
 
 - `compare` now refuses a recurrent / re-entrant creature instead of running the

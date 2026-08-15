@@ -16,6 +16,7 @@ pub mod sampling;
 pub mod scorer;
 pub mod sweep;
 pub mod tags;
+pub mod trace;
 pub mod train;
 
 pub use backprop::{
@@ -36,7 +37,7 @@ pub use gradient_check::{
 };
 pub use mse::{compute_mse, compute_mse_selected};
 pub use propagate_layout::{
-    AccumulateReport, PropagateLayout, accumulate_creature_learning,
+    AccumulateReport, NeuronTraceStats, PropagateLayout, accumulate_creature_learning,
     accumulate_creature_learning_report, accumulate_creature_learning_selected,
 };
 pub use sampling::{
@@ -45,4 +46,8 @@ pub use sampling::{
 };
 pub use scorer::{ScoreResult, score_creature};
 pub use sweep::{SweepRequest, SweepRow, SweepSummary, run_sweep};
-pub use train::{DEFAULT_STEP_SCALE, TrainJournalHeader, TrainRequest, TrainResult, run_train};
+pub use trace::{NeuronTraceState, SynapseTraceState, build_creature_trace, write_creature_trace};
+pub use train::{
+    BEST_TRACE_FILE, DEFAULT_STEP_SCALE, FAILED_TRACE_DIR, TrainJournalHeader, TrainRequest,
+    TrainResult, run_train,
+};

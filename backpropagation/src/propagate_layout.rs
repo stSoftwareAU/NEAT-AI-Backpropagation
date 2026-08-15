@@ -9,9 +9,9 @@ use crate::backprop::{BackpropConfig, LearningSignal};
 use crate::sampling::{RecordCursor, RecordSelection};
 use neat_core::{
     CompiledNetwork, CreatureExport, NEURON_TYPE_CONSTANT, NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT,
-    NEURON_TYPE_OUTPUT, NeuronInput, PropagateInput, SquashType, SynapseInput, SynapseType,
-    TrainingDataConfig, TrainingRecord, apply_get_range, mse_record, parse_squash_name,
-    parse_synapse_type, propagate_topological_loop,
+    NEURON_TYPE_OUTPUT, NeuronInput, PropagateInput, PropagateOutcome, SquashType, StandardOutcome,
+    SynapseInput, SynapseType, TrainingDataConfig, TrainingRecord, apply_get_range, mse_record,
+    parse_squash_name, parse_synapse_type, propagate_topological_loop,
 };
 use rand::Rng;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -428,11 +428,59 @@ pub fn select_sparse(
     }
 }
 
+/// Per-neuron trace state gathered while accumulating (issue #78).
+///
+/// These are the NEAT-AI `NeuronState` fields that are *not* part of the
+/// learning proposal — activation range, hint value and the raw bias / error
+/// mass — so [`crate::trace`] can serialise a `CreatureTrace` without the
+/// learning accumulators having to carry debugging state.
+#[derive(Debug, Clone, Default)]
+pub struct NeuronTraceStats {
+    /// Records whose forward pass activated this neuron.
+    pub records: u64,
+    /// Sum of the per-record `totalBias` deltas.
+    pub total_bias: f64,
+    /// Sum of the per-record absolute error deltas.
+    pub total_error_absolute: f64,
+    /// Sum of the per-record activations.
+    pub total_activation: f64,
+    /// Largest activation seen (`0.0` when no record activated the neuron).
+    pub maximum_activation: f64,
+    /// Smallest activation seen (`0.0` when no record activated the neuron).
+    pub minimum_activation: f64,
+    /// Hint value of the last record.
+    pub hint_value: f64,
+}
+
+impl NeuronTraceStats {
+    /// Fold one record's activation and hint value into the range statistics.
+    fn observe_activation(&mut self, activation: f64, hint_value: f64) {
+        if self.records == 0 {
+            self.maximum_activation = activation;
+            self.minimum_activation = activation;
+        } else {
+            self.maximum_activation = self.maximum_activation.max(activation);
+            self.minimum_activation = self.minimum_activation.min(activation);
+        }
+        self.records += 1;
+        self.total_activation += activation;
+        self.hint_value = hint_value;
+    }
+
+    /// Fold one record's standard backprop outcome into the mass statistics.
+    fn accumulate_standard(&mut self, outcome: &StandardOutcome) {
+        self.total_bias += f64::from(outcome.total_bias_delta);
+        self.total_error_absolute += f64::from(outcome.total_error_absolute_delta);
+    }
+}
+
 /// Result of one analyse-without-apply pass over training records.
 #[derive(Debug, Clone)]
 pub struct AccumulateReport {
     /// Per-neuron / per-synapse learning accumulators.
     pub learning: LearningSignal,
+    /// Per-neuron trace state, indexed by `CreatureExport.neurons` position.
+    pub neuron_traces: Vec<NeuronTraceStats>,
     /// Mean squared error of the forward pass (same records as learning).
     pub mse: f64,
     /// Number of records consumed.
@@ -500,6 +548,7 @@ pub fn accumulate_creature_learning_selected(
     let layout = PropagateLayout::from_creature(creature)?;
     let sparse = select_sparse(creature, &layout, config, rng);
     let mut learning = LearningSignal::new(creature.neurons.len(), creature.synapses.len());
+    let mut neuron_traces = vec![NeuronTraceStats::default(); creature.neurons.len()];
     // Working inward adjacency — aggregate slices are rewritten per record.
     let mut inward_counts = layout.inward_counts.clone();
     let mut inward_indices = layout.inward_synapse_indices.clone();
@@ -545,6 +594,14 @@ pub fn accumulate_creature_learning_selected(
                     .copied()
                     .unwrap_or(activation)
             };
+            // Trace state is the debugging half of the pass (issue #78): the
+            // activation range every gene saw, kept whether or not a trace
+            // store is configured so `train` never has to accumulate twice.
+            if prop_idx >= layout.input_count
+                && let Some(stats) = neuron_traces.get_mut(prop_idx - layout.input_count)
+            {
+                stats.observe_activation(f64::from(activation), f64::from(hint));
+            }
             neurons.push(NeuronInput {
                 squash_type: tmpl.squash_type,
                 neuron_type: tmpl.neuron_type,
@@ -587,6 +644,13 @@ pub fn accumulate_creature_learning_selected(
 
         let output = propagate_topological_loop(&input);
         learning.accumulate_propagate_output(&output, layout.input_count);
+        for (prop_idx, outcome) in output.neurons.iter().enumerate().skip(layout.input_count) {
+            if let PropagateOutcome::Standard(standard) = outcome
+                && let Some(stats) = neuron_traces.get_mut(prop_idx - layout.input_count)
+            {
+                stats.accumulate_standard(standard);
+            }
+        }
     }
 
     if count == 0 {
@@ -594,6 +658,7 @@ pub fn accumulate_creature_learning_selected(
     }
     Ok(AccumulateReport {
         learning,
+        neuron_traces,
         mse: mse_sum / count as f64,
         records: count,
     })

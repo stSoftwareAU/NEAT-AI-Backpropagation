@@ -10,6 +10,7 @@ use crate::propagate_layout::accumulate_creature_learning_selected;
 use crate::sampling::{RecordSample, RecordSelection, plan_record_sample};
 use crate::scorer::{ScoreResult, score_creature};
 use crate::tags::{BackpropProgress, CreatureMeta, serialize_creature_with_meta};
+use crate::trace::{build_creature_trace, write_creature_trace};
 use neat_core::{CreatureExport, TrainingDataConfig, compile_creature, creature_to_json_pretty};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -24,6 +25,13 @@ use std::path::{Path, PathBuf};
 /// default grid tops out at 1% — the trainer starts there rather than 100×
 /// above it, and the backtracking line search shrinks further when needed.
 pub const DEFAULT_STEP_SCALE: f64 = 0.01;
+
+/// Trace of the best epoch, written beside `best.json` (issue #78).
+pub const BEST_TRACE_FILE: &str = "best-trace.json";
+
+/// Sub-directory of the trace store holding rejected candidates, mirroring
+/// NEAT-AI's `traceStore/failed/` (issue #78).
+pub const FAILED_TRACE_DIR: &str = "failed";
 
 /// Journal header written at the start of a train run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +151,13 @@ pub struct TrainRequest<'a> {
     /// accumulated learning at step/2, step/4, … up to this many halvings
     /// before declaring the epoch dry. `0` = single attempt (old behaviour).
     pub max_backtracks: u32,
+    /// Optional NEAT-AI `traceStore` directory (issue #78).
+    ///
+    /// When set, every epoch writes a `CreatureTrace`: an epoch that lowered
+    /// the best MSE lands on [`BEST_TRACE_FILE`] beside `best.json`, and one
+    /// that did not lands in `<store>/failed/epoch-<N>.json` — the same
+    /// failed-candidate store NEAT-AI's TypeScript trainer writes.
+    pub trace_store: Option<&'a Path>,
 }
 
 /// Run the experimental trainer and write `journal.jsonl` + `best.json`.
@@ -252,6 +267,21 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             creature_to_json_pretty(&candidate).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
+        // NEAT-AI's traceStore keys off "did this iteration make the network
+        // worse", not off the accept flag — under --accept-always a kept but
+        // worse candidate is still a failed candidate worth capturing (#78).
+        let improved = after_mse < best_mse;
+        if let Some(store) = req.trace_store {
+            let trace = build_creature_trace(&candidate, &report)?;
+            let path = if improved {
+                req.output_dir.join(BEST_TRACE_FILE)
+            } else {
+                store
+                    .join(FAILED_TRACE_DIR)
+                    .join(format!("epoch-{epoch}.json"))
+            };
+            write_creature_trace(&path, &trace)?;
+        }
         if accepted {
             incumbent = candidate;
             best_mse = after_mse;
@@ -392,6 +422,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 0,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap();
@@ -445,6 +476,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: true,
             max_backtracks: 0,
+            trace_store: None,
         })
         .unwrap();
 
@@ -500,6 +532,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 0,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap();
@@ -547,6 +580,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 2,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap();
@@ -607,6 +641,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 0,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap();
@@ -623,6 +658,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 8,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap();
@@ -715,6 +751,7 @@ mod tests {
             // step scale is comparable.
             accept_always: true,
             max_backtracks: 0,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap()
@@ -803,6 +840,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: true,
             max_backtracks: 0,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap();
@@ -853,6 +891,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: true,
             max_backtracks: 0,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap();
@@ -893,6 +932,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 0,
+            trace_store: None,
             disable_random_samples: false,
         })
         .unwrap_err();

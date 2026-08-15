@@ -143,6 +143,7 @@ fn train_rejects_a_recurrent_creature() {
         apply: ApplyOptions::default(),
         accept_always: false,
         max_backtracks: 0,
+        trace_store: None,
     })
     .expect_err("train must reject a recurrent creature");
 
