@@ -3,11 +3,12 @@
 use crate::backprop::{
     ApplyOptions, BackpropConfig, apply_learnings_with, calculate_learning_rate, count_apply_deltas,
 };
+use crate::creature_io::parse_forward_only_creature;
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
 use crate::scorer::{ScoreResult, score_creature};
 use crate::tags::{BackpropProgress, CreatureMeta, serialize_creature_with_meta};
-use neat_core::{CreatureExport, compile_creature, creature_to_json_pretty, parse_creature_json};
+use neat_core::{CreatureExport, compile_creature, creature_to_json_pretty};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
@@ -127,16 +128,12 @@ pub struct TrainRequest<'a> {
 
 /// Run the experimental trainer and write `journal.jsonl` + `best.json`.
 pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
-    fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
+    // `train` also mines the raw text for tags, so it parses the text it read
+    // rather than re-reading via `load_forward_only_creature`.
     let text = fs::read_to_string(req.creature).map_err(|e| e.to_string())?;
+    let mut incumbent = parse_forward_only_creature(&text)?;
     let mut meta = CreatureMeta::from_creature_json(&text);
-    let mut incumbent = parse_creature_json(&text).map_err(|e| e.to_string())?;
-    if !incumbent.forward_only {
-        return Err(
-            "this trainer supports forward-only creatures only (no re-entrant / recurrent graphs)"
-                .into(),
-        );
-    }
+    fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
     let initial_lr = calculate_learning_rate(req.config, 0, None);
 
     let mut network = compile_creature(&incumbent).map_err(|e| e.to_string())?;

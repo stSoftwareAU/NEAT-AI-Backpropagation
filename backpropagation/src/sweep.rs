@@ -3,9 +3,10 @@
 use crate::backprop::{
     ApplyOptions, BackpropConfig, apply_learnings_with, calculate_learning_rate, count_apply_deltas,
 };
+use crate::creature_io::load_forward_only_creature;
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
-use neat_core::{compile_creature, creature_to_json_pretty, parse_creature_json};
+use neat_core::{compile_creature, creature_to_json_pretty};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
@@ -84,15 +85,8 @@ pub fn run_sweep(req: SweepRequest<'_>) -> Result<SweepSummary, String> {
     if req.outputs_only && req.hidden_only {
         return Err("sweep cannot set both outputs-only and hidden-only".into());
     }
+    let incumbent = load_forward_only_creature(req.creature)?;
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
-    let text = fs::read_to_string(req.creature).map_err(|e| e.to_string())?;
-    let incumbent = parse_creature_json(&text).map_err(|e| e.to_string())?;
-    if !incumbent.forward_only {
-        return Err(
-            "this trainer supports forward-only creatures only (no re-entrant / recurrent graphs)"
-                .into(),
-        );
-    }
     let lr = calculate_learning_rate(req.config, 0, None);
     let (baseline_train_mse, baseline_eval_mse) = if req.skip_mse {
         (0.0, None)

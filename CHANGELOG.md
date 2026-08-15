@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `compare` now refuses a recurrent / re-entrant creature instead of running the
+  unsupported accumulate path and writing a parity dump. The read → parse →
+  forward-only-guard preamble had been copy-pasted across `gradient-check`,
+  `sweep`, and `train`, and `compare` was the copy that never got the guard. All
+  four now call the new `creature_io::load_forward_only_creature`
+  (`parse_forward_only_creature` for `train`, which also mines the raw text for
+  tags), so the supported-graph rule and its wording have a single owner
+  (issue #54).
+
 ### Removed
 
 - `scorer::default_scorer_path()` — a `pub fn` no code ever called. It returned

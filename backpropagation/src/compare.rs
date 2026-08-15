@@ -3,8 +3,9 @@
 use crate::backprop::{
     BackpropConfig, LearningSignal, apply_learnings, calculate_learning_rate, nearly_equal,
 };
+use crate::creature_io::load_forward_only_creature;
 use crate::propagate_layout::accumulate_creature_learning_report;
-use neat_core::{CreatureExport, compile_creature, parse_creature_json};
+use neat_core::{CreatureExport, compile_creature};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
@@ -120,8 +121,7 @@ pub fn run_compare(
     seed: u64,
     out_path: &Path,
 ) -> Result<CompareDump, String> {
-    let text = fs::read_to_string(creature_path).map_err(|e| e.to_string())?;
-    let creature = parse_creature_json(&text).map_err(|e| e.to_string())?;
+    let creature = load_forward_only_creature(creature_path)?;
     let mut network = compile_creature(&creature).map_err(|e| e.to_string())?;
     let mut rng = StdRng::seed_from_u64(seed);
     let report = accumulate_creature_learning_report(
@@ -352,6 +352,7 @@ pub fn load_compare_dump(path: &Path) -> Result<CompareDump, String> {
 mod tests {
     use super::*;
     use crate::backprop::BiasSignal;
+    use neat_core::parse_creature_json;
     use std::io::Write;
     use std::path::PathBuf;
     use tempfile::tempdir;
