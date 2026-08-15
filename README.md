@@ -216,6 +216,37 @@ slower than weekly), cannot upload results (`security-events: write`), does
 not analyse Rust, is missing either CodeQL step, or pins an action to a
 movable tag instead of a commit SHA.
 
+## Secrets detection
+
+CodeQL reads code, not credentials. A secret committed by accident cannot be
+undone by a revert — it has to be rotated — so
+[`gitleaks.yml`](./.github/workflows/gitleaks.yml) scans the pull request diff
+before it reaches `Develop`.
+
+`gitleaks-action@v2` needs an organisation licence (`GITLEAKS_LICENSE`), and
+bot-authored pull requests (Renovate, Dependabot) receive no Actions secrets —
+the action then exits with a licence error. The workflow branches on whether
+the licence is present and falls back to the free, open-source `gitleaks` CLI,
+installed from a version-pinned release whose SHA-256 is verified in the job.
+Without that fallback a bot PR would report green while scanning nothing.
+
+```mermaid
+flowchart LR
+    A[PR to Develop] --> B["checkout<br/>fetch-depth: 0"]
+    B --> C{GITLEAKS_LICENSE set?}
+    C -- yes --> D["gitleaks-action@v2<br/>(licensed)"]
+    C -- no --> E["gitleaks CLI<br/>pinned + checksum verified"]
+    D --> F["leak found → job fails"]
+    E --> F
+```
+
+`scripts/check-gitleaks-workflow.sh` gates that policy in `quality.sh` and CI:
+it fails if the workflow is missing, does not run on pull requests to
+`Develop`, never invokes a scan, neuters the verdict (`|| true`,
+`continue-on-error: true`, `--exit-code 0`), drops the licence-less fallback,
+checks out a shallow clone the commit range cannot resolve against, or pulls
+either the action or the CLI from an unpinned or unverified source.
+
 ## Workflow linting
 
 Workflow YAML is the one thing no other gate reads — clippy, shellcheck and
