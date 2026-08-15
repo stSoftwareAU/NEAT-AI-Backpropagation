@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- A `cdylib` C ABI for an in-process `trainDir`, so NEAT-AI can `dlopen` the
+  library instead of spawning the CLI on every memetic run. `neat_backprop_train`
+  takes UTF-8 JSON in and hands back an owned buffer with an explicit length
+  (`NeatBackpropBuffer`), released through `neat_backprop_buffer_free`;
+  `neat_backprop_abi_version` / `neat_backprop_version` are the probes. The
+  creature crosses the boundary as JSON text, not a path, and every CLI `train`
+  flag NEAT-AI forwards — including `--max-records` sampling (#77) and
+  `--trace-store` (#78) — is a request field. Null pointers, non-UTF-8 bytes,
+  malformed JSON, trainer errors and caught panics all return a non-zero status
+  *and* a message in the same buffer. Declarations live in
+  `include/neat_ai_backpropagation.h` (issue #84).
+
+### Changed
+
+- `TrainRequest.creature` is now a `TrainCreature` — `Path(&Path)` for the CLI
+  or `Json(&str)` for the C ABI — so an in-process caller does not have to write
+  the creature to a temporary file first. `TrainResult` gained `best_json`, the
+  exact bytes written to `best.json`, so the ABI returns the trained creature
+  without re-reading it (issue #84).
+
 ### Fixed
 
 - `compare` now refuses a recurrent / re-entrant creature instead of running the

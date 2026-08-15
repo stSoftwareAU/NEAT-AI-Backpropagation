@@ -10,9 +10,13 @@ readme = "../README.md"
 [lints]
 workspace = true
 
+# Issue #84 - cdylib exposes the C ABI in `src/ffi.rs` for an in-process
+# `trainDir` (Deno FFI); rlib is retained so the CLI binary and the native
+# tests keep linking as before.
 [lib]
 name = "neat_ai_backpropagation"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "neat_ai_backpropagation"

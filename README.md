@@ -212,6 +212,79 @@ drives the accumulate engine — `compare`, `gradient-check`, `sweep`, and
 `train` — through the shared
 `creature_io::load_forward_only_creature` loader (issue #54).
 
+## C ABI — in-process `trainDir` (issue #84)
+
+NEAT-AI reached this crate by **spawning** the CLI, which costs a process
+launch and a JSON temp directory on every memetic `trainDir`. The crate
+also ships a `cdylib` exposing the same `train` contract as C symbols a
+Deno FFI (or any C) caller can `dlopen`:
+
+```bash
+cargo build --release -p neat_ai_backpropagation
+# target/release/libneat_ai_backpropagation.{dylib,so,dll}
+```
+
+Declarations live in
+[`include/neat_ai_backpropagation.h`](./include/neat_ai_backpropagation.h);
+the implementation is `backpropagation/src/ffi.rs`.
+
+| Symbol | Purpose |
+| ------ | ------- |
+| `neat_backprop_abi_version() -> uint32_t` | Wire-contract revision (currently `1`) |
+| `neat_backprop_version() -> const char *` | Static NUL-terminated crate version |
+| `neat_backprop_train(request, request_len, out) -> int32_t` | One `trainDir` run |
+| `neat_backprop_buffer_free(buffer)` | Release a buffer the library produced |
+
+Requests and responses are UTF-8 JSON carried in owned buffers with
+explicit lengths (`NeatBackpropBuffer { data, len, capacity }`), so the
+caller never guesses a length and never mixes allocators — every buffer
+goes back through `neat_backprop_buffer_free`.
+
+The request takes the creature as **JSON text** (`creatureJson`, UUID-only
+export), not a path, so nothing round-trips through a temporary file.
+Every other field is optional and defaults to the matching CLI `train`
+flag — `epochs`, `maxRecords`, `seed`, `disableRandomSamples`,
+`learningRate`, `learningRateStrategy`, `learningRateDecay`,
+`normaliseGradients`, `maximumBiasAdjustmentScale`,
+`maximumWeightAdjustmentScale`, `stepScale`, `outputsOnly`, `hiddenOnly`,
+`acceptAlways`, `maxBacktracks`, `scorer`, `traceStore` — so the sampling
+(#77) and trace-store (#78) work is reachable from the ABI, not only from
+the CLI. An unknown field is rejected rather than ignored.
+
+The response carries `bestCreatureJson` (the exact bytes written to
+`best.json`), `baselineMse`, `bestMse`, `acceptedEpochs`, the `bestPath` /
+`journalPath` written, the trace artefact paths when a store was
+requested, and the scorer results when a scorer was supplied.
+
+Failure is loud at every step: a null pointer, non-UTF-8 bytes, malformed
+JSON, a trainer error, or a panic caught at the boundary all return a
+non-zero status **and** put the message in the same out buffer. There is
+no silent fallback — a caller must never treat an empty buffer as success.
+
+```mermaid
+sequenceDiagram
+    participant Deno as NEAT-AI (Deno FFI)
+    participant Lib as libneat_ai_backpropagation
+    participant Train as run_train
+    Deno->>Lib: neat_backprop_train(request JSON bytes, out)
+    Lib->>Lib: decode request (unknown field → status 1)
+    Lib->>Train: TrainCreature::Json + TrainRequest
+    Train-->>Lib: TrainResult / Err(message)
+    Lib-->>Deno: status + owned buffer (response JSON or error)
+    Deno->>Lib: neat_backprop_buffer_free(out)
+```
+
+| Status | Meaning |
+| ------ | ------- |
+| `0` `NEAT_BACKPROP_OK` | Buffer holds the response JSON |
+| `1` `NEAT_BACKPROP_ERR_INVALID_ARGUMENT` | Null / non-UTF-8 / malformed request |
+| `2` `NEAT_BACKPROP_ERR_TRAIN_FAILED` | The trainer failed; buffer holds its message |
+| `3` `NEAT_BACKPROP_ERR_PANIC` | A panic was caught at the boundary |
+
+Retiring the process spawn on the NEAT-AI side (`RustTrainDirBridge.ts`)
+is a follow-up in that repository; this crate only owns the library it
+`dlopen`s.
+
 ## Production win protocol
 
 Locked targets:

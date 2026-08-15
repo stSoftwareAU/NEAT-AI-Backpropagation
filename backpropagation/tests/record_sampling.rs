@@ -12,8 +12,8 @@
 
 use neat_ai_backpropagation::sampling::{RecordSelection, plan_record_sample};
 use neat_ai_backpropagation::{
-    ApplyOptions, BackpropConfig, TrainRequest, accumulate_creature_learning_selected,
-    compute_mse_selected, nearly_equal, run_train,
+    ApplyOptions, BackpropConfig, TrainCreature, TrainRequest,
+    accumulate_creature_learning_selected, compute_mse_selected, nearly_equal, run_train,
 };
 use neat_core::{TrainingDataConfig, compile_creature, parse_creature_json};
 use rand::SeedableRng;
@@ -75,7 +75,7 @@ fn train_baseline_mse(
     disable_random_samples: bool,
 ) -> f64 {
     run_train(TrainRequest {
-        creature,
+        creature: TrainCreature::Path(creature),
         training_data: data,
         config: &BackpropConfig::default(),
         epochs: 1,

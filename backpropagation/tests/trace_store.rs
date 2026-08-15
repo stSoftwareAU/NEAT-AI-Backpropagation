@@ -13,11 +13,13 @@
 //!   every gene and per-gene `trace` state.
 
 use neat_ai_backpropagation::trace::{NeuronTraceState, SynapseTraceState};
-use neat_ai_backpropagation::{ApplyOptions, BackpropConfig, TrainRequest, run_train};
+use neat_ai_backpropagation::{
+    ApplyOptions, BackpropConfig, TrainCreature, TrainRequest, run_train,
+};
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::{TempDir, tempdir};
 
 /// Identity chain: input 1 activates `h1` then `o1`, so the prediction is 1.
@@ -54,7 +56,7 @@ fn fixture(target: f32) -> (TempDir, PathBuf, PathBuf) {
 /// past the target — a guaranteed rejection with real accumulated state. The
 /// default `0.01` rate closes part of the gap and is accepted.
 fn train(
-    creature: &PathBuf,
+    creature: &Path,
     data: &PathBuf,
     out: &PathBuf,
     trace_store: Option<&PathBuf>,
@@ -66,7 +68,7 @@ fn train(
         ..BackpropConfig::default()
     };
     run_train(TrainRequest {
-        creature,
+        creature: TrainCreature::Path(creature),
         training_data: data,
         config: &config,
         epochs: 1,
