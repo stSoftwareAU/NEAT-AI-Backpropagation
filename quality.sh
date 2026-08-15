@@ -69,6 +69,10 @@ echo "Validating Semgrep SAST scanning workflow..."
 ./scripts/test-check-semgrep-workflow.sh
 ./scripts/check-semgrep-workflow.sh
 
+echo "Validating Markdown Lint workflow..."
+./scripts/test-check-markdown-lint-workflow.sh
+./scripts/check-markdown-lint-workflow.sh
+
 echo "Validating Renovate dependency-update config..."
 ./scripts/test-check-renovate-config.sh
 ./scripts/check-renovate-config.sh

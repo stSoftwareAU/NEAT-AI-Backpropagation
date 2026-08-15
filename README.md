@@ -326,6 +326,38 @@ committed file, so they cannot be enabled from the checkout — see
 [SECURITY.md](./SECURITY.md#automated-scanning). Renovate's
 `osvVulnerabilityAlerts` already raises an advisory-driven PR without them.
 
+## Markdown linting
+
+[`.markdownlint-cli2.yaml`](./.markdownlint-cli2.yaml) has been committed since
+the README rewrite, but nothing in CI read it: the structural rules it keeps on
+(heading hierarchy, list indentation, fencing) were advisory, so every
+hand-written README, CHANGELOG and audit note drifted on its own.
+[`markdown-lint.yml`](./.github/workflows/markdown-lint.yml) runs
+[`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2) against
+that config on every pull request, and a violation blocks the merge.
+
+The job reports; it never rewrites. `--fix` would edit the runner's throwaway
+checkout and exit 0, merging the violation unfixed while the job read green.
+`markdownlint-cli2` is installed at an exact version for the same reason the
+actions are pinned to commit SHAs — a hijacked release must not run unreviewed
+code in CI.
+
+```mermaid
+flowchart LR
+    A[PR to Develop] --> B["setup-node<br/>lts/*"]
+    B --> C["npm install -g<br/>markdownlint-cli2@0.23.2"]
+    C --> D["markdownlint-cli2<br/>globs + rules from<br/>.markdownlint-cli2.yaml"]
+    D --> E["violation → job fails"]
+```
+
+`scripts/check-markdown-lint-workflow.sh` gates that policy in `quality.sh` and
+CI: it fails if the workflow is missing, does not run on pull requests to
+`Develop`, never invokes a lint (a step merely *named* for one, or an install
+with no invocation), rewrites instead of reporting (`--fix`, the action's
+`fix: true`), neuters the verdict (`|| true`, `continue-on-error: true`), runs
+the CLI outside strict bash, or pulls the action or the linter from an unpinned
+source.
+
 ## Local quality
 
 ```bash

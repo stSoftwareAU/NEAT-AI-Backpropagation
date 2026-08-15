@@ -37,7 +37,7 @@ The `neat-core` path dependency in
 This mirrors CI: shellcheck, actionlint, the auto-format workflow validator, the
 version-increment workflow validator, the CodeQL workflow validator, the
 Gitleaks workflow validator, the Semgrep workflow validator, the
-Renovate config validator, the
+Markdown Lint workflow validator, the Renovate config validator, the
 branch-protection policy checker, codespell,
 cargo-deny, fmt `--check`, clippy with warnings denied, tests, and rustdoc.
 
@@ -92,6 +92,12 @@ Every pull request is also scanned by Semgrep — see
 [Static analysis](./README.md#static-analysis-semgrep). Changing
 [`.github/workflows/semgrep.yml`](./.github/workflows/semgrep.yml) must keep
 `./scripts/check-semgrep-workflow.sh` green.
+
+Every pull request's Markdown is linted against
+[`.markdownlint-cli2.yaml`](./.markdownlint-cli2.yaml) — see
+[Markdown linting](./README.md#markdown-linting). Changing
+[`.github/workflows/markdown-lint.yml`](./.github/workflows/markdown-lint.yml)
+must keep `./scripts/check-markdown-lint-workflow.sh` green.
 
 External crate bumps arrive as Renovate PRs under a 24-hour quarantine — see
 [Dependency updates](./README.md#dependency-updates). Changing

@@ -40,6 +40,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Markdown linting** — `.github/workflows/markdown-lint.yml` runs
+  `markdownlint-cli2` against the `.markdownlint-cli2.yaml` config that had been
+  committed since issue #39 but that nothing in CI ever read, so a heading,
+  indentation or fencing violation now blocks the merge instead of drifting. The
+  job reports rather than rewrites: `--fix` would edit the runner's throwaway
+  checkout and exit 0, merging the violation unfixed. The linter is installed at
+  an exact version, and `scripts/check-markdown-lint-workflow.sh` gates the
+  policy in `quality.sh` and CI (issue #44).
 - **Semgrep SAST scanning** — `.github/workflows/semgrep.yml` runs `semgrep ci
   --config p/default` over every pull request in the digest-pinned official
   Semgrep image, a second opinion alongside CodeQL that also reads the shell and

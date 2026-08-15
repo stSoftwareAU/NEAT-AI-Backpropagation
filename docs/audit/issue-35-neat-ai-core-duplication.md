@@ -78,7 +78,7 @@ Every module in `backpropagation/src/` appears, including the rejections.
 
 ### Scope note
 
-#35 scopes the comparison to `backpropagation` versus `neat-core`. Findings 2,
+Issue #35 scopes the comparison to `backpropagation` versus `neat-core`. Findings 2,
 3 and 4 involve **NEAT-AI-Lamarck**, which #35 does not name. They are included
 because #30's stated end goal is wider than one repo pair — *"remove duplicate
 code across NEAT-AI\* repos, everything in its sensible location, high
@@ -258,7 +258,7 @@ Home: **`NEAT-AI-scorer`**.
 
 ### Finding 5 — scorer `stream_score.rs` → `mse_mean_streaming`: **rejected**
 
-#35 requires this convergence to be filed in `NEAT-AI-scorer` referencing
+Issue #35 requires this convergence to be filed in `NEAT-AI-scorer` referencing
 `NEAT-AI-core#538`, **or explicitly rejected with a reason**. It is rejected.
 
 `NEAT-AI-core#538` is closed and `mse_mean_streaming` landed

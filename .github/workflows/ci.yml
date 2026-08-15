@@ -185,6 +185,12 @@ jobs:
           ./scripts/test-check-semgrep-workflow.sh
           ./scripts/check-semgrep-workflow.sh
 
+      - name: Validate Markdown Lint workflow
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-markdown-lint-workflow.sh
+          ./scripts/check-markdown-lint-workflow.sh
+
       - name: Validate Renovate dependency-update config
         run: |
           set -euo pipefail
