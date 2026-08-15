@@ -191,6 +191,13 @@ flowchart TD
     A -. per-gene trace state .-> E
 ```
 
+NEAT-AI's `RustTrainDirBridge` drives both ends of that store (issue #81):
+it passes `TrainOptions.traceStore` through as `--trace-store`, and reads
+`<output-dir>/best-trace.json` back as `TrainingResult.trace` instead of
+synthesising one from `best.json`. An older binary that predates the flag
+fails the run loudly with clap's unknown-argument error — rebuild the
+sibling checkout rather than dropping the option.
+
 `--learning-rate` is the *initial* rate; `--learning-rate-strategy`
 (`fixed`, `decay`, `adaptive`, `warm-restart`) plus `--learning-rate-decay`
 schedule it per epoch, and each epoch's resolved rate is journalled as
