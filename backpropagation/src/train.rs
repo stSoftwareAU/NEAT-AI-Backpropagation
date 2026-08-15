@@ -1,7 +1,8 @@
 //! `trainDir`-style epoch loop: accumulate → apply if MSE improved → else rollback.
 
 use crate::backprop::{
-    ApplyOptions, BackpropConfig, apply_learnings_with, calculate_learning_rate, count_apply_deltas,
+    ApplyOptions, BackpropConfig, apply_learnings_with, calculate_learning_rate,
+    count_apply_deltas, effective_step_scale,
 };
 use crate::creature_io::parse_forward_only_creature;
 use crate::mse::compute_mse;
@@ -182,11 +183,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         // Backtracking line search (#38): the accumulate above is the
         // expensive part — on a rejected apply, halve the step and re-test
         // the same learning instead of discarding the epoch.
-        let mut step_scale = if req.apply.step_scale.is_finite() && req.apply.step_scale > 0.0 {
-            req.apply.step_scale.min(1.0)
-        } else {
-            1.0
-        };
+        let mut step_scale = effective_step_scale(req.apply.step_scale);
         let mut backtracks = 0u32;
         let (candidate, deltas, after_mse, accepted) = loop {
             let candidate = apply_learnings_with(

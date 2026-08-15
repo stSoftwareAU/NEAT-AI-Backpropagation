@@ -8,7 +8,9 @@
 //! `proposal_delta · ∂MSE/∂θ < 0`. Sign agreement is that predicate (genes
 //! with near-zero FD are excluded from the percentage).
 
-use crate::backprop::{BackpropConfig, LearningSignal, calculate_learning_rate};
+use crate::backprop::{
+    BackpropConfig, LearningSignal, calculate_learning_rate, effective_step_scale,
+};
 use crate::creature_io::load_forward_only_creature;
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
@@ -158,11 +160,7 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
 
     let lr = calculate_learning_rate(req.config, 0, None);
-    let step = if req.step_scale.is_finite() && req.step_scale > 0.0 {
-        req.step_scale.min(1.0)
-    } else {
-        1.0
-    };
+    let step = effective_step_scale(req.step_scale);
 
     let mut network = compile_creature(&creature).map_err(|e| e.to_string())?;
     let (baseline_mse, _) =

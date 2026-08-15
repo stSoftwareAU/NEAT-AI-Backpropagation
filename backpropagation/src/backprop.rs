@@ -327,6 +327,21 @@ pub fn apply_learnings(
     )
 }
 
+/// Resolve the effective step scale from a raw one (#55).
+///
+/// The rule: use the raw value when it is finite and positive, capped at
+/// `1.0`; otherwise fall back to the full step of `1.0`. Every caller that
+/// needs the step — `apply_learnings_with`, `run_gradient_check` and
+/// `run_train` — resolves it here, so the step a journal reports and the step
+/// backtracking halves can never drift from the step actually applied.
+pub(crate) fn effective_step_scale(raw: f64) -> f64 {
+    if raw.is_finite() && raw > 0.0 {
+        raw.min(1.0)
+    } else {
+        1.0
+    }
+}
+
 /// [`apply_learnings`] with an explicit step scale / output-only filter.
 pub fn apply_learnings_with(
     creature: &CreatureExport,
@@ -335,11 +350,7 @@ pub fn apply_learnings_with(
     learning_rate: f64,
     options: ApplyOptions,
 ) -> CreatureExport {
-    let step = if options.step_scale.is_finite() && options.step_scale > 0.0 {
-        options.step_scale.min(1.0)
-    } else {
-        1.0
-    };
+    let step = effective_step_scale(options.step_scale);
     let output_uuids: std::collections::HashSet<&str> = creature
         .neurons
         .iter()
@@ -774,5 +785,79 @@ mod tests {
         assert!(counts.hidden_biases + counts.hidden_weights > 0);
         assert_eq!(counts.output_biases, 0);
         assert_eq!(counts.output_weights, 0);
+    }
+
+    #[test]
+    fn effective_step_scale_passes_through_a_finite_positive_value() {
+        assert!(nearly_equal(effective_step_scale(0.25), 0.25));
+        assert!(nearly_equal(effective_step_scale(0.01), 0.01));
+        assert!(nearly_equal(effective_step_scale(1.0), 1.0));
+        // A subnormal step is still a legitimate step, not a default.
+        assert!(nearly_equal(
+            effective_step_scale(f64::MIN_POSITIVE),
+            f64::MIN_POSITIVE
+        ));
+    }
+
+    #[test]
+    fn effective_step_scale_caps_at_one() {
+        assert!(nearly_equal(effective_step_scale(1.5), 1.0));
+        assert!(nearly_equal(effective_step_scale(f64::MAX), 1.0));
+    }
+
+    #[test]
+    fn effective_step_scale_defaults_to_one_for_unusable_values() {
+        for raw in [0.0, -0.0, -0.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                nearly_equal(effective_step_scale(raw), 1.0),
+                "expected {raw} to resolve to 1.0"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_learnings_with_resolves_its_step_through_the_shared_rule() {
+        use neat_core::parse_creature_json;
+        let creature = parse_creature_json(
+            r#"{
+              "input":1,"output":1,"forwardOnly":true,
+              "neurons":[{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}],
+              "synapses":[{"fromUUID":"input-0","toUUID":"o1","weight":1.0}]
+            }"#,
+        )
+        .unwrap();
+        let mut signal = LearningSignal::new(1, 1);
+        signal.biases[0] = BiasSignal {
+            count: 10.0,
+            total_adjusted_bias: 5.0,
+            no_change: false,
+        };
+        let cfg = BackpropConfig::default();
+        let apply = |step_scale: f64| {
+            apply_learnings_with(
+                &creature,
+                &signal,
+                &cfg,
+                0.01,
+                ApplyOptions {
+                    step_scale,
+                    ..ApplyOptions::default()
+                },
+            )
+            .neurons[0]
+                .bias
+        };
+
+        let full = apply(1.0);
+        // Over-cap, non-finite and non-positive scales all collapse onto the
+        // full step — the same rule `effective_step_scale` encodes.
+        for raw in [5.0, f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            assert!(
+                nearly_equal(apply(raw), full),
+                "step_scale {raw} should apply the same step as 1.0"
+            );
+        }
+        // A usable fraction still applies a proportionally smaller step.
+        assert!(nearly_equal(apply(0.5), full * 0.5));
     }
 }
