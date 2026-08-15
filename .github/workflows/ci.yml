@@ -138,6 +138,7 @@ jobs:
             "backpropagation/src/main.rs"
             ".github/CODEOWNERS"
             ".github/workflows/codeql.yml"
+            ".github/workflows/gitleaks.yml"
             "SECURITY.md"
             "neat-core.expected-version"
             "renovate.json"
@@ -170,6 +171,12 @@ jobs:
           set -euo pipefail
           ./scripts/test-check-actionlint-gate.sh
           ./scripts/check-actionlint-gate.sh
+
+      - name: Validate Gitleaks secrets-detection workflow
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-gitleaks-workflow.sh
+          ./scripts/check-gitleaks-workflow.sh
 
       - name: Validate Renovate dependency-update config
         run: |

@@ -36,7 +36,8 @@ The `neat-core` path dependency in
 
 This mirrors CI: shellcheck, actionlint, the auto-format workflow validator, the
 version-increment workflow validator, the CodeQL workflow validator, the
-Renovate config validator, the branch-protection policy checker, codespell,
+Gitleaks workflow validator, the Renovate config validator, the
+branch-protection policy checker, codespell,
 cargo-deny, fmt `--check`, clippy with warnings denied, tests, and rustdoc.
 
 ## Branch protection
@@ -80,6 +81,11 @@ Code scanning runs in GitHub Actions, not locally — see
 [Code scanning](./README.md#code-scanning). Changing
 [`.github/workflows/codeql.yml`](./.github/workflows/codeql.yml) must keep
 `./scripts/check-codeql-workflow.sh` green.
+
+Every pull request diff is scanned for committed secrets — see
+[Secrets detection](./README.md#secrets-detection). Changing
+[`.github/workflows/gitleaks.yml`](./.github/workflows/gitleaks.yml) must keep
+`./scripts/check-gitleaks-workflow.sh` green.
 
 External crate bumps arrive as Renovate PRs under a 24-hour quarantine — see
 [Dependency updates](./README.md#dependency-updates). Changing

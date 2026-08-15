@@ -61,6 +61,10 @@ echo "Validating CodeQL code-scanning workflow..."
 ./scripts/test-check-codeql-workflow.sh
 ./scripts/check-codeql-workflow.sh
 
+echo "Validating Gitleaks secrets-detection workflow..."
+./scripts/test-check-gitleaks-workflow.sh
+./scripts/check-gitleaks-workflow.sh
+
 echo "Validating Renovate dependency-update config..."
 ./scripts/test-check-renovate-config.sh
 ./scripts/check-renovate-config.sh

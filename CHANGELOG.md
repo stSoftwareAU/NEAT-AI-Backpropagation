@@ -40,6 +40,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Gitleaks secrets detection** — `.github/workflows/gitleaks.yml` scans every
+  pull request diff for committed credentials. Licensed runs use
+  `gitleaks-action@v2`; licence-less runs (Renovate, Dependabot — bot PRs get no
+  Actions secrets) fall back to the version-pinned, checksum-verified
+  open-source CLI, so those diffs are scanned rather than silently skipped.
+  `scripts/check-gitleaks-workflow.sh` gates the policy in `quality.sh` and CI
+  (issue #42).
 - A `workflow-lint` CI job runs `actionlint` over `.github/workflows` and feeds
   the `ci-required` aggregator, so a workflow YAML regression fails the build
   instead of surfacing on the next run. The linter is installed from a

@@ -1,0 +1,90 @@
+name: Gitleaks
+
+# Detect secrets in pull request diffs (Issue #42).
+#
+# A committed credential cannot be undone by a revert — it has to be rotated —
+# so the scan runs on the pull request, before the secret reaches Develop.
+# Third-party actions are pinned to 40-character commit SHAs so a hijacked tag
+# cannot exfiltrate CI secrets.
+#
+# gitleaks-action@v2 requires an organisation licence (GITLEAKS_LICENSE) on
+# org-owned repositories. Renovate- and Dependabot-authored pull requests do
+# not receive Actions secrets, so the licence is empty for them and the action
+# exits with ErrLicense. Those licence-less runs fall back to the free,
+# open-source gitleaks CLI, which needs no licence — without the fallback the
+# job would report green while scanning nothing.
+#
+# scripts/check-gitleaks-workflow.sh enforces the rules above.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - Develop
+      - "milestone/**"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: gitleaks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Exposed at job level so step-level `if:` can branch on whether the org
+    # licence secret is present — the `secrets` context is not available in
+    # `if:` conditions, but `env` is.
+    env:
+      GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Full history: the computed `<base_sha>..<head_sha>` range does not
+          # resolve in a shallow clone, and gitleaks would scan nothing.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch origin "$BASE_REF:$BASE_REF" || true
+
+      # Licensed path: when the organisation Gitleaks Pro licence is available,
+      # use the upstream action so the licence is applied.
+      - name: Gitleaks (licensed action)
+        if: env.GITLEAKS_LICENSE != ''
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      # Licence-less fallback (Renovate / Dependabot pull requests): the free
+      # open-source CLI needs no licence and scans the same commit range.
+      - name: Gitleaks (open-source CLI fallback)
+        if: env.GITLEAKS_LICENSE == ''
+        env:
+          # Pinned release + checksum: a hijacked gitleaks release cannot land
+          # silently, and a tampered download fails the job instead of being
+          # reported as a clean scan.
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          curl --fail --silent --show-error --location --output "$archive" "$url"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" gitleaks
+          ./gitleaks version
+          # --redact keeps the secret itself out of the public build log.
+          ./gitleaks git --redact --no-banner --exit-code 1 \
+            --log-opts="${BASE_SHA}..${HEAD_SHA}" .
