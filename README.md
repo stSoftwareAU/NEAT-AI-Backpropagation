@@ -126,8 +126,11 @@ Locked targets:
    slice; `diff` must report no field mismatches (abs `1e-9` / rel
    `1e-6`).
 3. Accumulate on the **full** production directory (not one year file)
-   **without** `--outputs-only`, so IF/MIN/MAX linearisation can move
-   hidden genes. A win is `rust_scorer` on all 2,262,277 records up by
+   **without** `--outputs-only`, so aggregate linearisation can move
+   hidden genes. Every aggregate squash neat-core owns
+   (`SquashType::is_aggregate()` — IF/MIN/MAX plus the deprecated
+   HYPOT/HYPOTv2/MEAN) is linearised; MIN/MAX keep the winning link, IF
+   the taken branch, and the deprecated three every inward link. A win is `rust_scorer` on all 2,262,277 records up by
    more than `1e-6`. Saturated full-net applies overfit a slice and
    **lower** the full-corpus score — treat slice MSE as a hint only.
 

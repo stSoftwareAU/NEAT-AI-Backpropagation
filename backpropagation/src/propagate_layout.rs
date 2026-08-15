@@ -39,11 +39,12 @@ pub struct PropagateLayout {
     pub reverse_topo_order: Vec<u32>,
     /// UUID → propagate neuron index.
     pub uuid_to_prop: HashMap<String, usize>,
-    /// Aggregate (MINIMUM / MAXIMUM / IF) neurons, linearised per record.
+    /// Aggregate neurons (neat-core's six aggregate squashes), linearised per
+    /// record.
     pub aggregates: Vec<AggregateNeuron>,
 }
 
-/// Aggregate squash whose activation selects a subset of its inward links.
+/// Aggregate squash whose activation reduces its inward links as a set.
 ///
 /// neat-core's reverse-topological loop hands these back as
 /// [`neat_core::PropagateOutcome::Special`] and stops — the TypeScript trainer
@@ -59,6 +60,16 @@ pub enum AggregateKind {
     /// Activation is the positive or negative branch sum (+ bias), gated by the
     /// sign of the condition links.
     If,
+    /// Every inward link contributes: the deprecated `HYPOT`, `HYPOTv2` and
+    /// `MEAN` aggregates select no subset, so none of their links is dropped
+    /// (issue #52).
+    ///
+    /// The linear presentation is exact for none of the three — `MEAN` divides
+    /// the link sum by the link count and the hypotenuse pair sums squares —
+    /// so blame is an approximation. It is the same approximation the loop
+    /// already makes for `MINIMUM` / `MAXIMUM` bias, and it keeps the neuron on
+    /// the propagate path instead of dropping it.
+    AllInward,
 }
 
 /// One aggregate neuron and its inward links, grouped by synapse role.
@@ -72,22 +83,40 @@ pub struct AggregateNeuron {
     pub links: Vec<(u32, SynapseType)>,
 }
 
-/// Map a squash name onto its aggregate rule, if any.
-fn aggregate_kind_for(squash: SquashType) -> Option<AggregateKind> {
-    match squash {
-        SquashType::Minimum => Some(AggregateKind::Minimum),
-        SquashType::Maximum => Some(AggregateKind::Maximum),
-        SquashType::If => Some(AggregateKind::If),
-        _ => None,
+/// Map a squash onto its aggregate linearisation rule, if any.
+///
+/// Membership is [`SquashType::is_aggregate`] — neat-core owns that list and
+/// this crate must not restate it (issue #52). Only the *kind* mapping is
+/// local, and an aggregate core knows about but this crate has no rule for is
+/// a hard error rather than a silent fall-through onto the weighted-sum path.
+fn aggregate_kind_for(squash: SquashType) -> Result<Option<AggregateKind>, String> {
+    if !squash.is_aggregate() {
+        return Ok(None);
     }
+    let kind = match squash {
+        SquashType::Minimum => AggregateKind::Minimum,
+        SquashType::Maximum => AggregateKind::Maximum,
+        SquashType::If => AggregateKind::If,
+        SquashType::Hypotenuse | SquashType::HypotenuseV2 | SquashType::Mean => {
+            AggregateKind::AllInward
+        }
+        other => {
+            return Err(format!(
+                "neat-core reports {other:?} as an aggregate squash but this crate has no \
+                 linearisation rule for it — add one to aggregate_kind_for"
+            ));
+        }
+    };
+    Ok(Some(kind))
 }
 
 /// Static per-neuron fields (activation filled per record).
 #[derive(Debug, Clone)]
 pub struct NeuronTemplate {
-    /// Squash discriminant **as presented to the propagate loop**: aggregate
-    /// squashes (MINIMUM / MAXIMUM / IF) are presented as `IDENTITY` because
-    /// their carrying links are selected per record (see [`AggregateNeuron`]).
+    /// Squash discriminant **as presented to the propagate loop**: every
+    /// aggregate squash ([`SquashType::is_aggregate`]) is presented as
+    /// `IDENTITY` because its carrying links are selected per record (see
+    /// [`AggregateNeuron`]).
     pub squash_type: u8,
     /// Neuron category code.
     pub neuron_type: u8,
@@ -161,7 +190,7 @@ impl PropagateLayout {
             };
             // Aggregates are linearised onto their carrying links per record,
             // so the loop sees a plain sum over that selection.
-            let kind = aggregate_kind_for(squash);
+            let kind = aggregate_kind_for(squash)?;
             aggregate_kinds[input_count + i] = kind;
             let presented = if kind.is_some() {
                 SquashType::Identity as u8
@@ -262,6 +291,8 @@ impl PropagateLayout {
     /// - `IF` keeps the taken branch: positive/standard links when the
     ///   condition links sum above zero, negative links otherwise. Condition
     ///   links gate the branch and never carry its error.
+    /// - `HYPOT` / `HYPOTv2` / `MEAN` keep every inward link — they reduce the
+    ///   whole set rather than selecting from it (issue #52).
     ///
     /// An aggregate with no eligible link is presented with an empty inward
     /// list — bias still accumulates, nothing propagates upstream.
@@ -311,6 +342,12 @@ impl PropagateLayout {
                             indices[start + written] = syn_idx;
                             written += 1;
                         }
+                    }
+                }
+                AggregateKind::AllInward => {
+                    for &(syn_idx, _) in &aggregate.links {
+                        indices[start + written] = syn_idx;
+                        written += 1;
                     }
                 }
             }
@@ -701,6 +738,80 @@ mod tests {
             0.0,
             "condition links gate the branch, they do not carry its error"
         );
+    }
+
+    #[test]
+    fn every_core_aggregate_squash_has_a_linearisation_rule() {
+        // neat-core's `is_aggregate()` owns the membership list; this crate may
+        // only own the *kind* mapping (issue #52).
+        for code in 0u8..=u8::MAX {
+            let squash = SquashType::from(code);
+            assert_eq!(
+                aggregate_kind_for(squash)
+                    .expect("every aggregate needs a rule")
+                    .is_some(),
+                squash.is_aggregate(),
+                "{squash:?} (code {code}) disagrees with neat-core's aggregate membership"
+            );
+        }
+    }
+
+    #[test]
+    fn deprecated_aggregates_carry_every_inward_link() {
+        // HYPOT / HYPOTv2 / MEAN reduce every inward link, so none is dropped.
+        for name in ["HYPOT", "HYPOTv2", "MEAN"] {
+            let creature =
+                parse_creature_json(&AGGREGATE_OUTPUT.replace("{SQUASH}", name)).unwrap();
+            let layout = PropagateLayout::from_creature(&creature).unwrap();
+            let o1 = layout.uuid_to_prop["o1"];
+            assert_eq!(
+                layout.neuron_templates[o1].squash_type,
+                SquashType::Identity as u8,
+                "{name} must be presented to the propagate loop as IDENTITY"
+            );
+            let mut counts = layout.inward_counts.clone();
+            let mut indices = layout.inward_synapse_indices.clone();
+            // activations: input-0 = 1, h1 = 1, h2 = 2, o1 (unused here).
+            layout.linearise_aggregates(&[1.0, 1.0, 2.0, 1.5], &mut counts, &mut indices);
+            assert_eq!(counts[o1], 2, "{name} must keep both inward links");
+        }
+    }
+
+    #[test]
+    fn minimum_keeps_only_the_winning_inward_link() {
+        let creature =
+            parse_creature_json(&AGGREGATE_OUTPUT.replace("{SQUASH}", "MINIMUM")).unwrap();
+        let layout = PropagateLayout::from_creature(&creature).unwrap();
+        let o1 = layout.uuid_to_prop["o1"];
+        let mut counts = layout.inward_counts.clone();
+        let mut indices = layout.inward_synapse_indices.clone();
+        layout.linearise_aggregates(&[1.0, 1.0, 2.0, 1.0], &mut counts, &mut indices);
+        assert_eq!(counts[o1], 1, "MINIMUM is winner-take-all");
+    }
+
+    #[test]
+    fn mean_output_propagates_blame_to_every_branch() {
+        // o1 = mean(h1=1, h2=2) = 1.5; target 3 ⇒ both branches carry blame.
+        let (creature, learning) =
+            learn_one(&AGGREGATE_OUTPUT.replace("{SQUASH}", "MEAN"), 1.0, 3.0);
+        assert!(
+            bias_count(&creature, &learning, "o1") > 0.0,
+            "MEAN output must accumulate a bias signal"
+        );
+        assert!(bias_count(&creature, &learning, "h1") > 0.0);
+        assert!(bias_count(&creature, &learning, "h2") > 0.0);
+        assert!(weight_count(&creature, &learning, "h1") > 0.0);
+        assert!(weight_count(&creature, &learning, "h2") > 0.0);
+    }
+
+    #[test]
+    fn hypotenuse_output_propagates_blame_to_every_branch() {
+        // o1 = hypot(h1=1, h2=2) ≈ 2.236; target 4 ⇒ both branches carry blame.
+        let (creature, learning) =
+            learn_one(&AGGREGATE_OUTPUT.replace("{SQUASH}", "HYPOT"), 1.0, 4.0);
+        assert!(bias_count(&creature, &learning, "o1") > 0.0);
+        assert!(bias_count(&creature, &learning, "h1") > 0.0);
+        assert!(bias_count(&creature, &learning, "h2") > 0.0);
     }
 
     #[test]
