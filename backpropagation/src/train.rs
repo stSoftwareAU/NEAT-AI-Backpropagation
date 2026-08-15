@@ -5,11 +5,12 @@ use crate::backprop::{
     count_apply_deltas, effective_step_scale,
 };
 use crate::creature_io::parse_forward_only_creature;
-use crate::mse::compute_mse;
-use crate::propagate_layout::accumulate_creature_learning_report;
+use crate::mse::compute_mse_selected;
+use crate::propagate_layout::accumulate_creature_learning_selected;
+use crate::sampling::{RecordSample, RecordSelection, plan_record_sample};
 use crate::scorer::{ScoreResult, score_creature};
 use crate::tags::{BackpropProgress, CreatureMeta, serialize_creature_with_meta};
-use neat_core::{CreatureExport, compile_creature, creature_to_json_pretty};
+use neat_core::{CreatureExport, TrainingDataConfig, compile_creature, creature_to_json_pretty};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,16 @@ pub struct TrainJournalHeader {
     pub epochs: u64,
     /// Optional record cap.
     pub max_records: Option<u64>,
+    /// Records the sampled cap actually draws (absent when uncapped).
+    #[serde(default)]
+    pub sampled_records: Option<u64>,
+    /// Records the whole corpus holds (absent when uncapped).
+    #[serde(default)]
+    pub total_records: Option<u64>,
+    /// Whether the cap took each file's leading prefix instead of a seeded
+    /// random draw (#77).
+    #[serde(default)]
+    pub disable_random_samples: bool,
     /// Learning rate used for apply.
     pub learning_rate: f64,
     /// Apply step scale.
@@ -108,10 +119,17 @@ pub struct TrainRequest<'a> {
     pub config: &'a BackpropConfig,
     /// Epochs to run.
     pub epochs: u64,
-    /// Optional record cap (same cap used for accumulate and eval MSE).
+    /// Optional record cap (same sample used for accumulate and eval MSE).
+    ///
+    /// The cap is honoured as a *rate* over the whole corpus: every `.bin`
+    /// file contributes `ceil(file_records × cap / total_records)` records
+    /// (issue #77), matching NEAT-AI `selectFileSampleIndexes`.
     pub max_records: Option<u64>,
-    /// RNG seed.
+    /// RNG seed — drives both the sparse gene selection and the record sample.
     pub seed: u64,
+    /// When true, the record sample is each file's leading prefix instead of a
+    /// seeded random draw (NEAT-AI `disableRandomSamples`, issue #77).
+    pub disable_random_samples: bool,
     /// Output directory for journal + best creature.
     pub output_dir: &'a Path,
     /// Optional `rust_scorer` binary. When set, scores baseline and best.
@@ -137,9 +155,28 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
     let initial_lr = calculate_learning_rate(req.config, 0, None);
 
+    // Plan the epoch sample once per run, not per epoch. NEAT-AI's TypeScript
+    // trainer caches its per-file index sets for the whole `trainDir` call, so
+    // every epoch — and both passes inside an epoch — see the same records and
+    // accept / rollback stays a like-for-like comparison (issue #77).
+    let sample: Option<RecordSample> = match req.max_records {
+        Some(cap) => Some(plan_record_sample(
+            req.training_data,
+            &TrainingDataConfig::new(incumbent.input, incumbent.output),
+            cap,
+            req.seed,
+            req.disable_random_samples,
+        )?),
+        None => None,
+    };
+    let selection = match &sample {
+        Some(s) => RecordSelection::Sample(s),
+        None => RecordSelection::Prefix(None),
+    };
+
     let mut network = compile_creature(&incumbent).map_err(|e| e.to_string())?;
     let (baseline_mse, _) =
-        compute_mse(&incumbent, &mut network, req.training_data, req.max_records)?;
+        compute_mse_selected(&incumbent, &mut network, req.training_data, selection)?;
 
     let journal_path = req.output_dir.join("journal.jsonl");
     let header = TrainJournalHeader {
@@ -148,6 +185,9 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         seed: req.seed,
         epochs: req.epochs,
         max_records: req.max_records,
+        sampled_records: sample.as_ref().map(RecordSample::selected),
+        total_records: sample.as_ref().map(RecordSample::total_records),
+        disable_random_samples: req.disable_random_samples,
         learning_rate: initial_lr,
         step_scale: req.apply.step_scale,
         outputs_only: req.apply.outputs_only,
@@ -172,12 +212,12 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         );
         previous_mse = Some(best_mse);
         let mut net = compile_creature(&incumbent).map_err(|e| e.to_string())?;
-        let report = accumulate_creature_learning_report(
+        let report = accumulate_creature_learning_selected(
             &incumbent,
             &mut net,
             req.training_data,
             req.config,
-            req.max_records,
+            selection,
             &mut rng,
         )?;
         // Backtracking line search (#38): the accumulate above is the
@@ -198,12 +238,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             );
             let deltas = count_apply_deltas(&incumbent, &candidate, req.config.plank_constant);
             let mut cand_net = compile_creature(&candidate).map_err(|e| e.to_string())?;
-            let (after_mse, _) = compute_mse(
-                &candidate,
-                &mut cand_net,
-                req.training_data,
-                req.max_records,
-            )?;
+            let (after_mse, _) =
+                compute_mse_selected(&candidate, &mut cand_net, req.training_data, selection)?;
             let accepted = req.accept_always || after_mse < best_mse;
             if accepted || backtracks >= req.max_backtracks {
                 break (candidate, deltas, after_mse, accepted);
@@ -356,6 +392,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 0,
+            disable_random_samples: false,
         })
         .unwrap();
 
@@ -365,6 +402,63 @@ mod tests {
         assert_eq!(header.kind, "runHeader");
         assert_eq!(header.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(header.seed, 7);
+    }
+
+    /// The journal is how a remote GRQ runner audits which slice an epoch
+    /// scored, so the sampled cap has to be visible there (#77).
+    #[test]
+    fn journal_header_records_the_sampled_slice() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        // Two files of ten records: a cap of 4 is a rate of 0.2, so each file
+        // contributes ceil(10 × 0.2) = 2 records.
+        for file in 0..2u32 {
+            let mut f = fs::File::create(data.join(format!("{file}.bin"))).unwrap();
+            for i in 0..10u32 {
+                f.write_all(&1.0f32.to_le_bytes()).unwrap();
+                f.write_all(&((file * 10 + i) as f32).to_le_bytes())
+                    .unwrap();
+            }
+        }
+        let creature_path = dir.path().join("creature.json");
+        fs::write(
+            &creature_path,
+            r#"{
+              "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+              "neurons":[{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}],
+              "synapses":[{"fromUUID":"input-0","toUUID":"o1","weight":1.0}]
+            }"#,
+        )
+        .unwrap();
+        let out = dir.path().join("out");
+        run_train(TrainRequest {
+            creature: &creature_path,
+            training_data: &data,
+            config: &BackpropConfig::default(),
+            epochs: 1,
+            max_records: Some(4),
+            seed: 3,
+            disable_random_samples: false,
+            output_dir: &out,
+            scorer: None,
+            apply: ApplyOptions::default(),
+            accept_always: true,
+            max_backtracks: 0,
+        })
+        .unwrap();
+
+        let journal = fs::read_to_string(out.join("journal.jsonl")).unwrap();
+        let mut lines = journal.lines();
+        let header: TrainJournalHeader = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(header.max_records, Some(4));
+        assert_eq!(header.sampled_records, Some(4));
+        assert_eq!(header.total_records, Some(20));
+        assert!(!header.disable_random_samples);
+
+        // The epoch scored the sampled slice, not the whole corpus.
+        let epoch: TrainEpochRecord = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(epoch.records, 4);
     }
 
     #[test]
@@ -406,6 +500,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 0,
+            disable_random_samples: false,
         })
         .unwrap();
         assert!(result.baseline_mse > 0.0);
@@ -452,6 +547,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 2,
+            disable_random_samples: false,
         })
         .unwrap();
         assert_eq!(result.accepted_epochs, 0);
@@ -511,6 +607,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 0,
+            disable_random_samples: false,
         })
         .unwrap();
         let out_ls = dir.path().join("out-ls");
@@ -526,6 +623,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 8,
+            disable_random_samples: false,
         })
         .unwrap();
         // The line-search run must never do worse than the single-attempt
@@ -617,6 +715,7 @@ mod tests {
             // step scale is comparable.
             accept_always: true,
             max_backtracks: 0,
+            disable_random_samples: false,
         })
         .unwrap()
     }
@@ -704,6 +803,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: true,
             max_backtracks: 0,
+            disable_random_samples: false,
         })
         .unwrap();
         let journal = fs::read_to_string(out.join("journal.jsonl")).unwrap();
@@ -753,6 +853,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: true,
             max_backtracks: 0,
+            disable_random_samples: false,
         })
         .unwrap();
         let journal = fs::read_to_string(out.join("journal.jsonl")).unwrap();
@@ -792,6 +893,7 @@ mod tests {
             apply: ApplyOptions::default(),
             accept_always: false,
             max_backtracks: 0,
+            disable_random_samples: false,
         })
         .unwrap_err();
         assert!(err.contains("forward-only"));
