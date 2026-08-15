@@ -6,15 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- The step-scale sanitising rule (finite and positive, capped at `1.0`,
-  otherwise `1.0`) now lives in one place — `backprop::effective_step_scale`.
-  `apply_learnings_with`, `run_gradient_check` and `run_train` each held their
-  own copy, so a policy change had to land identically on all three or the step
-  the journal reports and backtracking halves would silently disagree with the
-  step actually applied. Behaviour is unchanged (issue #55).
-
 ### Fixed
 
 - `compare` now refuses a recurrent / re-entrant creature instead of running the
@@ -43,6 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The step-scale sanitising rule (finite and positive, capped at `1.0`,
+  otherwise `1.0`) now lives in one place — `backprop::effective_step_scale`.
+  `apply_learnings_with`, `run_gradient_check` and `run_train` each held their
+  own copy, so a policy change had to land identically on all three or the step
+  the journal reports and backtracking halves would silently disagree with the
+  step actually applied. Behaviour is unchanged (issue #55).
 - The accumulate pass reduces each record's squared error through
   `neat_core::mse_record` instead of its own fused loop, so this crate holds no
   loss arithmetic (issue #33). `AccumulateReport::mse` is unchanged — core
