@@ -6,22 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
-
-- `train --max-records N` now draws a **seeded random** sample instead of the
-  first *N* records in directory scan order. The cap resolves to a rate of
-  `N / total_records`, and every `.bin` file contributes
-  `ceil(file_records × rate)` shuffled-then-sorted indexes — a port of NEAT-AI's
-  TypeScript `selectFileSampleIndexes`, which NEAT-AI feeds through
-  `TrainOptions.trainingSampleRate`. A capped epoch therefore spans the whole
-  corpus rather than over-fitting its earliest files. `--seed` makes the draw
-  reproducible and the new `--disable-random-samples` reduces it to each file's
-  leading prefix (NEAT-AI `disableRandomSamples`). The sample is planned once
-  per run, so baseline MSE, every epoch's accumulate and every candidate's
-  post-apply MSE score the identical records and accept / rollback stays a
-  like-for-like comparison. `journal.jsonl` gains `sampledRecords`,
-  `totalRecords` and `disableRandomSamples` (issue #77).
-
 ### Fixed
 
 - `compare` now refuses a recurrent / re-entrant creature instead of running the
@@ -73,6 +57,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `train --max-records N` now draws a **seeded random** sample instead of the
+  first *N* records in directory scan order. The cap resolves to a rate of
+  `N / total_records`, and every `.bin` file contributes
+  `ceil(file_records × rate)` shuffled-then-sorted indexes — a port of NEAT-AI's
+  TypeScript `selectFileSampleIndexes`, which NEAT-AI feeds through
+  `TrainOptions.trainingSampleRate`. A capped epoch therefore spans the whole
+  corpus rather than over-fitting its earliest files. `--seed` makes the draw
+  reproducible and the new `--disable-random-samples` reduces it to each file's
+  leading prefix (NEAT-AI `disableRandomSamples`). The sample is planned once
+  per run, so baseline MSE, every epoch's accumulate and every candidate's
+  post-apply MSE score the identical records and accept / rollback stays a
+  like-for-like comparison. `journal.jsonl` gains `sampledRecords`,
+  `totalRecords` and `disableRandomSamples` (issue #77).
 - **Markdown linting** — `.github/workflows/markdown-lint.yml` runs
   `markdownlint-cli2` against the `.markdownlint-cli2.yaml` config that had been
   committed since issue #39 but that nothing in CI ever read, so a heading,
