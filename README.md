@@ -46,9 +46,7 @@ Same-host binaries also get `-C target-cpu=native` from
 [`.cargo/config.toml`](./.cargo/config.toml) (non-`wasm32` only). GRQ
 hosts build with `cargo build --release` on the machine that runs the
 artefact. An exported `RUSTFLAGS` **replaces** that config list — do not
-set both unless you re-include `target-cpu=native`. There is no
-`RELEASING.md` / `AGENTS.md` in this repo; this section is the build
-contract.
+set both unless you re-include `target-cpu=native`.
 
 ## CLI
 
