@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Refuse a `neat_ai_backpropagation` crate version strictly behind
+  `origin/Develop` (`scripts/check-crate-version-no-downgrade.sh`, wired into
+  `quality.sh` and the version-increment bump script). A merge conflict that
+  took Develop's older token used to look like “already different” and skip
+  the bot — remotes would rebuild a downgraded trainDir / FFI binary. Equal
+  versions may still auto-patch-bump; ahead versions are accepted without a
+  further bump (issue #87).
+
 - A `cdylib` C ABI for an in-process `trainDir`, so NEAT-AI can `dlopen` the
   library instead of spawning the CLI on every memetic run. `neat_backprop_train`
   takes UTF-8 JSON in and hands back an owned buffer with an explicit length

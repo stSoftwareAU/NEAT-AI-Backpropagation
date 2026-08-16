@@ -3,7 +3,10 @@
 #
 # Remotes rebuild neat_ai_backpropagation when the crate version changes. This
 # job bumps the patch on PRs that touch source if the branch has not already
-# bumped. Re-running after a bump is a no-op (idempotent).
+# bumped *ahead* of Develop. A head version strictly behind Develop fails the
+# bump script (exit 2) rather than looking like a deliberate bump — silent
+# downgrades break trainDir / FFI consumers (issue #87). Re-running after a
+# valid bump is a no-op (idempotent).
 #
 # Push auth matches auto-format.yml (App token → ACTIONS_PUSH → GITHUB_TOKEN).
 name: Version Increment
@@ -18,6 +21,7 @@ on:
       - "backpropagation/Cargo.toml"
       - "Cargo.lock"
       - "scripts/bump-backpropagation-version.sh"
+      - "scripts/check-crate-version-no-downgrade.sh"
       - ".github/workflows/version-increment.yml"
 
 permissions:
