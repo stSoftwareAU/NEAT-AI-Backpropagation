@@ -1,0 +1,7 @@
+# Same-host release binaries (GRQ / local `cargo build --release` on the
+# machine that runs the artefact). Never for wasm32 — those targets must
+# not inherit host CPU features. Stable Cargo has no per-profile rustflags;
+# an exported RUSTFLAGS replaces this list entirely (issue #88 /
+# VibeCoding#4159).
+[target.'cfg(not(target_arch = "wasm32"))']
+rustflags = ["-C", "target-cpu=native"]

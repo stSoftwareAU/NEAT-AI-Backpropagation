@@ -2,15 +2,20 @@
 members = ["backpropagation"]
 resolver = "2"
 
+# Fastest practical compile (VibeCoding#4159 / issue #88): keep panic
+# file:line, drop full DWARF. Default opt-level = 0 and incremental stay.
+[profile.dev]
+debug = "line-tables-only"
+
+# Fully optimised artefact (compile time irrelevant). Fat LTO + one
+# codegen unit workspace-wide — not scoped to a single package.
 [profile.release]
 opt-level = 3
-lto = true
+lto = "fat"
+codegen-units = 1
 
 [profile.release.package."*"]
 opt-level = 3
-
-[profile.release.package.neat_ai_backpropagation]
-codegen-units = 1
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

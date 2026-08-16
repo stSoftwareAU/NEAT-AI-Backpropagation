@@ -9,6 +9,8 @@
 !.markdownlint.json
 !.markdownlintignore
 !.markdownlint-cli2.yaml
+!.cargo/
+!.cargo/config.toml
 
 /target/
 **/*.rs.bk

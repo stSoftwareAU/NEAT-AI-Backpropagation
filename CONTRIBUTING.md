@@ -22,7 +22,11 @@ The `neat-core` path dependency in
 
 ## Prerequisites
 
-- **Rust** — pinned in [`rust-toolchain.toml`](./rust-toolchain.toml)
+- **Rust** — pinned in [`rust-toolchain.toml`](./rust-toolchain.toml).
+  Workspace profiles: fast `dev` (`debug = "line-tables-only"`), fully
+  optimised `release` (`opt-level = 3`, fat LTO, `codegen-units = 1`),
+  plus same-host `-C target-cpu=native` in [`.cargo/config.toml`](./.cargo/config.toml)
+  (see README **Build profiles**, issue #88).
 - **shellcheck** — lints bash scripts
 - **actionlint** — lints GitHub Actions workflow YAML (`brew install actionlint`)
 - **cargo-deny** — `cargo install cargo-deny --locked`
