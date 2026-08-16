@@ -3,18 +3,21 @@
 #
 # Mirrors GRQ-taxation's version-increment job / runlib.sh contract: remotes
 # rebuild when Cargo.toml version changes. Idempotent — skips when the PR
-# branch already differs from base or an auto-increment commit exists.
+# branch is already *ahead* of base or an auto-increment commit exists.
+# A head version strictly *behind* base fails (exit 2); treating a downgrade
+# as "already different" used to ship silent trainDir / FFI rebuilds of an
+# older crate (issue #87).
 #
 # Exit codes:
 #   0  version bumped (or --check would bump)
 #   1  no bump needed
-#   2  usage / parse error
+#   2  usage / parse error / version downgrade vs base
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-MANIFEST="$REPO_ROOT/backpropagation/Cargo.toml"
-LOCKFILE="$REPO_ROOT/Cargo.lock"
+MANIFEST=""
+LOCKFILE=""
 SRC_PATH="backpropagation/src"
 BASE_REF="origin/Develop"
 CHECK_ONLY=0
@@ -22,13 +25,15 @@ COMMIT_SUBJECT="chore: auto-increment versions for changed projects"
 
 usage() {
   cat <<'EOF'
-Usage: bump-backpropagation-version.sh [--base-ref REF] [--check]
+Usage: bump-backpropagation-version.sh [--base-ref REF] [--repo-root DIR] [--check]
 
   --base-ref REF   Git ref to diff against (default: origin/Develop).
+  --repo-root DIR  Repository root (default: parent of scripts/).
   --check          Report whether a bump is needed; do not modify files.
 
-Exit 0 when a bump is applied (or would be with --check), 1 when skipped,
-2 on error.
+Exit 0 when a bump is applied (or would be with --check), 1 when skipped
+(equal-or-ahead with nothing to do), 2 on error or when head is strictly
+behind base.
 EOF
 }
 
@@ -36,6 +41,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --base-ref)
       BASE_REF="${2:?--base-ref requires a value}"
+      shift 2
+      ;;
+    --repo-root)
+      REPO_ROOT="$(cd "${2:?--repo-root requires a value}" && pwd)"
       shift 2
       ;;
     --check)
@@ -54,6 +63,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+MANIFEST="$REPO_ROOT/backpropagation/Cargo.toml"
+LOCKFILE="$REPO_ROOT/Cargo.lock"
+
 cd "$REPO_ROOT"
 
 if [[ ! -f "$MANIFEST" ]]; then
@@ -65,12 +77,6 @@ if ! git show-ref --verify --quiet "$BASE_REF" \
   && ! git rev-parse --verify --quiet "$BASE_REF" >/dev/null; then
   echo "FAIL: base ref not found: $BASE_REF" >&2
   exit 2
-fi
-
-# Skip when an auto-increment commit is already on this branch.
-if git log --oneline "${BASE_REF}..HEAD" --grep="$COMMIT_SUBJECT" | grep -q .; then
-  echo "OK   auto-increment commit already present vs $BASE_REF — skip"
-  exit 1
 fi
 
 read_version() {
@@ -86,8 +92,29 @@ if [[ -z "$CURRENT_VERSION" ]]; then
   exit 2
 fi
 
+# Refuse downgrades before any skip path (auto-increment commit included).
+if [[ -n "$BASE_VERSION" ]]; then
+  downgrade_status=0
+  "$SCRIPT_DIR/check-crate-version-no-downgrade.sh" \
+    --base-version "$BASE_VERSION" --head-version "$CURRENT_VERSION" \
+    || downgrade_status=$?
+  if [[ "$downgrade_status" -eq 1 ]]; then
+    exit 2
+  fi
+  if [[ "$downgrade_status" -ne 0 ]]; then
+    exit "$downgrade_status"
+  fi
+fi
+
+# Skip when an auto-increment commit is already on this branch.
+if git log --oneline "${BASE_REF}..HEAD" --grep="$COMMIT_SUBJECT" | grep -q .; then
+  echo "OK   auto-increment commit already present vs $BASE_REF — skip"
+  exit 1
+fi
+
+# Ahead of base: accept without forcing another bump. Equal may still patch-bump.
 if [[ -n "$BASE_VERSION" && "$CURRENT_VERSION" != "$BASE_VERSION" ]]; then
-  echo "OK   version already differs from base ($BASE_VERSION -> $CURRENT_VERSION) — skip"
+  echo "OK   version already ahead of base ($BASE_VERSION -> $CURRENT_VERSION) — skip"
   exit 1
 fi
 
