@@ -20,65 +20,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *and* a message in the same buffer. Declarations live in
   `include/neat_ai_backpropagation.h` (issue #84).
 
-### Changed
-
-- `TrainRequest.creature` is now a `TrainCreature` — `Path(&Path)` for the CLI
-  or `Json(&str)` for the C ABI — so an in-process caller does not have to write
-  the creature to a temporary file first. `TrainResult` gained `best_json`, the
-  exact bytes written to `best.json`, so the ABI returns the trained creature
-  without re-reading it (issue #84).
-
-### Fixed
-
-- `compare` now refuses a recurrent / re-entrant creature instead of running the
-  unsupported accumulate path and writing a parity dump. The read → parse →
-  forward-only-guard preamble had been copy-pasted across `gradient-check`,
-  `sweep`, and `train`, and `compare` was the copy that never got the guard. All
-  four now call the new `creature_io::load_forward_only_creature`
-  (`parse_forward_only_creature` for `train`, which also mines the raw text for
-  tags), so the supported-graph rule and its wording have a single owner
-  (issue #54).
-
-### Removed
-
-- `scorer::default_scorer_path()` — a `pub fn` no code ever called. It returned
-  a bare `rust_scorer` PATH lookup for a fallback the CLI never adopted:
-  `--scorer` is `Option<PathBuf>` with no default and `run_train` simply skips
-  scoring when it is omitted. Being `pub` it was invisible to the workspace
-  `dead_code` lint (issue #37).
-- `train::MIN_SCORE_IMPROVEMENT` — a `pub const` no code ever read. Its doc
-  comment described a score-improvement accept gate, but `run_train` accepts on
-  `accept_always || after_mse < best_mse` alone and never applied a score
-  threshold, so the constant documented behaviour that was never wired in.
-  Being `pub` it was invisible to the workspace `dead_code` lint. The 1e-6
-  production margin itself is unchanged — it is enforced by the GRQ consumer
-  (`grq_backprop_score_improves`), not by this crate (issue #36).
-
-### Changed
-
-- The step-scale sanitising rule (finite and positive, capped at `1.0`,
-  otherwise `1.0`) now lives in one place — `backprop::effective_step_scale`.
-  `apply_learnings_with`, `run_gradient_check` and `run_train` each held their
-  own copy, so a policy change had to land identically on all three or the step
-  the journal reports and backtracking halves would silently disagree with the
-  step actually applied. Behaviour is unchanged (issue #55).
-- The accumulate pass reduces each record's squared error through
-  `neat_core::mse_record` instead of its own fused loop, so this crate holds no
-  loss arithmetic (issue #33). `AccumulateReport::mse` is unchanged — core
-  applies the same `1/outputs` mean over the same activations.
-- `train --step-scale` now defaults to `0.01` (the top of `sweep`'s own grid)
-  instead of `1.0`. A full coordinated jump moves every gene to a value
-  proposed as if the others stayed put, which overshoots on large creatures —
-  on the GRQ network it raised train-slice MSE 0.6515 → 0.7505 (issue #39).
-- `train` resolves the learning rate **per epoch** from the configured
-  strategy and journals it as `learningRate` on each epoch record. Previously
-  only iteration 0 was ever evaluated (issue #39).
-- The `backpropagation` tag — used verbatim as the GRQ check-in commit subject
-  — is now marked `🌀` and drops the word "Backprop":
-  `🌀 · 2 accepts / 4 epochs · score: … improved by …` (issue #31).
-
-### Added
-
 - `train --trace-store DIR` writes NEAT-AI `CreatureTrace` artifacts. An epoch
   that lowered the best MSE writes `best-trace.json` beside `best.json`; one
   that did not writes `<store>/failed/epoch-<N>.json`, the same failed-candidate
@@ -191,3 +132,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   overfit and are not a win (see `docs/production-win.json`).
 - Train refuses re-entrant creatures (`forwardOnly: false`). Optional
   `--hidden-only`, `--accept-always`, and `sweep --skip-mse`.
+
+### Changed
+
+- `TrainRequest.creature` is now a `TrainCreature` — `Path(&Path)` for the CLI
+  or `Json(&str)` for the C ABI — so an in-process caller does not have to write
+  the creature to a temporary file first. `TrainResult` gained `best_json`, the
+  exact bytes written to `best.json`, so the ABI returns the trained creature
+  without re-reading it (issue #84).
+
+- The step-scale sanitising rule (finite and positive, capped at `1.0`,
+  otherwise `1.0`) now lives in one place — `backprop::effective_step_scale`.
+  `apply_learnings_with`, `run_gradient_check` and `run_train` each held their
+  own copy, so a policy change had to land identically on all three or the step
+  the journal reports and backtracking halves would silently disagree with the
+  step actually applied. Behaviour is unchanged (issue #55).
+- The accumulate pass reduces each record's squared error through
+  `neat_core::mse_record` instead of its own fused loop, so this crate holds no
+  loss arithmetic (issue #33). `AccumulateReport::mse` is unchanged — core
+  applies the same `1/outputs` mean over the same activations.
+- `train --step-scale` now defaults to `0.01` (the top of `sweep`'s own grid)
+  instead of `1.0`. A full coordinated jump moves every gene to a value
+  proposed as if the others stayed put, which overshoots on large creatures —
+  on the GRQ network it raised train-slice MSE 0.6515 → 0.7505 (issue #39).
+- `train` resolves the learning rate **per epoch** from the configured
+  strategy and journals it as `learningRate` on each epoch record. Previously
+  only iteration 0 was ever evaluated (issue #39).
+- The `backpropagation` tag — used verbatim as the GRQ check-in commit subject
+  — is now marked `🌀` and drops the word "Backprop":
+  `🌀 · 2 accepts / 4 epochs · score: … improved by …` (issue #31).
+
+### Fixed
+
+- `compare` now refuses a recurrent / re-entrant creature instead of running the
+  unsupported accumulate path and writing a parity dump. The read → parse →
+  forward-only-guard preamble had been copy-pasted across `gradient-check`,
+  `sweep`, and `train`, and `compare` was the copy that never got the guard. All
+  four now call the new `creature_io::load_forward_only_creature`
+  (`parse_forward_only_creature` for `train`, which also mines the raw text for
+  tags), so the supported-graph rule and its wording have a single owner
+  (issue #54).
+
+### Removed
+
+- `scorer::default_scorer_path()` — a `pub fn` no code ever called. It returned
+  a bare `rust_scorer` PATH lookup for a fallback the CLI never adopted:
+  `--scorer` is `Option<PathBuf>` with no default and `run_train` simply skips
+  scoring when it is omitted. Being `pub` it was invisible to the workspace
+  `dead_code` lint (issue #37).
+- `train::MIN_SCORE_IMPROVEMENT` — a `pub const` no code ever read. Its doc
+  comment described a score-improvement accept gate, but `run_train` accepts on
+  `accept_always || after_mse < best_mse` alone and never applied a score
+  threshold, so the constant documented behaviour that was never wired in.
+  Being `pub` it was invisible to the workspace `dead_code` lint. The 1e-6
+  production margin itself is unchanged — it is enforced by the GRQ consumer
+  (`grq_backprop_score_improves`), not by this crate (issue #36).
