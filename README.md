@@ -1,3 +1,5 @@
+![NEAT-AI-Backpropagation](https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI/Develop/docs/brand/social-previews/neat-ai-backpropagation.png)
+
 # NEAT-AI-Backpropagation
 
 Experimental standalone Rust backpropagation for **production** NEAT-AI
