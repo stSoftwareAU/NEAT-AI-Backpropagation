@@ -124,10 +124,16 @@ stale binaries on remote machines.
 CI also runs a **Version Increment** workflow
 ([`.github/workflows/version-increment.yml`](./.github/workflows/version-increment.yml))
 that auto-increments the patch on a pull request when `backpropagation/src/`
-has changed — but only if the PR branch has not already bumped it (same
-approach as GRQ-taxation). Bumping locally when your change touches
+has changed — but only if the PR branch is not already *ahead* of Develop
+(same approach as GRQ-taxation). Bumping locally when your change touches
 `backpropagation/src/` keeps the version correct and avoids an extra bot
 commit.
+
+**Never ship a crate version behind `origin/Develop`.** A merge conflict that
+silently takes Develop's older `version` used to look like “already bumped”
+and skip the bot — remotes would then rebuild an older `trainDir` / FFI
+binary. `scripts/check-crate-version-no-downgrade.sh` (and the bump script)
+refuse that with `sort -V`; `quality.sh` runs the gate on every PR.
 
 Docs-only or CI-config-only changes do not need a bump. Record notable changes
 under **[Unreleased]** in [`CHANGELOG.md`](./CHANGELOG.md).

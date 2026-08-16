@@ -46,6 +46,10 @@ echo "Validating auto-format PR workflow..."
 echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
 ./scripts/check-version-increment-workflow.sh
 
+echo "Validating crate version never downgrades vs Develop (issue #87)..."
+./scripts/test-check-crate-version-no-downgrade.sh
+./scripts/check-crate-version-no-downgrade.sh
+
 echo "Linting GitHub Actions workflows (actionlint)..."
 if ! command -v actionlint &>/dev/null; then
   echo "actionlint is required — install: https://github.com/rhysd/actionlint/blob/main/docs/install.md"
