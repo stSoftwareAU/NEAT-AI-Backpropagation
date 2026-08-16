@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Root `README.md` opens with a full-width banner hot-linking the hub social
+  preview `neat-ai-backpropagation.png` from NEAT-AI `Develop`, so crate and
+  GitHub README branding stay in sync with the single source of artwork
+  (issue #83).
+
 - A `cdylib` C ABI for an in-process `trainDir`, so NEAT-AI can `dlopen` the
   library instead of spawning the CLI on every memetic run. `neat_backprop_train`
   takes UTF-8 JSON in and hands back an owned buffer with an explicit length
