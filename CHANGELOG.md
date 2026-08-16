@@ -147,6 +147,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Workspace build profiles follow VibeCoding#4159 / issue #88: `dev` uses
+  `debug = "line-tables-only"` for faster rebuilds; `release` is
+  workspace-wide `opt-level = 3`, `lto = "fat"`, `codegen-units = 1`
+  (no longer scoped only to `neat_ai_backpropagation`); non-`wasm32`
+  builds get `-C target-cpu=native` from `.cargo/config.toml` for
+  same-host GRQ / local release artefacts.
 - `train` no longer prints a per-epoch progress line to stderr. Epoch detail
   remains in `journal.jsonl`; the CLI still prints the one-line
   `train: baseline_mse=… best_mse=…` summary. Quiets Deno FFI / parallel

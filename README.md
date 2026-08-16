@@ -30,6 +30,26 @@ parent/
 
 Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.95.0`).
 
+### Build profiles
+
+Workspace root [`Cargo.toml`](./Cargo.toml) follows the fleet rule
+([VibeCoding#4159](https://github.com/stSoftwareAU/VibeCoding/issues/4159) /
+issue #88): **dev compiles as fast as practical; release is fully
+optimised** (compile time irrelevant). Stable Rust only.
+
+| Profile | Settings |
+| ------- | -------- |
+| `dev` | `debug = "line-tables-only"` (panic file:line without full DWARF; `opt-level = 0` and incremental stay) |
+| `release` | `opt-level = 3`, `lto = "fat"`, `codegen-units = 1` (workspace-wide) |
+
+Same-host binaries also get `-C target-cpu=native` from
+[`.cargo/config.toml`](./.cargo/config.toml) (non-`wasm32` only). GRQ
+hosts build with `cargo build --release` on the machine that runs the
+artefact. An exported `RUSTFLAGS` **replaces** that config list — do not
+set both unless you re-include `target-cpu=native`. There is no
+`RELEASING.md` / `AGENTS.md` in this repo; this section is the build
+contract.
+
 ## CLI
 
 ```bash
