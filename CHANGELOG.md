@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `train` no longer prints a per-epoch progress line to stderr. Epoch detail
+  remains in `journal.jsonl`; the CLI still prints the one-line
+  `train: baseline_mse=… best_mse=…` summary. Quiets Deno FFI / parallel
+  memetic hosts that previously drowned in `epoch 1:` spam.
+
 ### Added
 
 - A `cdylib` C ABI for an in-process `trainDir`, so NEAT-AI can `dlopen` the
