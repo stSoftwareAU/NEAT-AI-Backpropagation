@@ -337,22 +337,13 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         };
         journal.push_str(&serde_json::to_string(&rec).map_err(|e| e.to_string())?);
         journal.push('\n');
-        eprintln!(
-            "epoch {epoch}: before_mse={:.12} after_mse={:.12} accepted={accepted} backtracks={backtracks} step={step_scale:.8} hidden_b={} out_b={} hidden_w={} out_w={}",
-            report.mse,
-            after_mse,
-            deltas.hidden_biases,
-            deltas.output_biases,
-            deltas.hidden_weights,
-            deltas.output_weights
-        );
+        // Per-epoch progress stays in journal.jsonl only — do not eprintln here.
+        // Memetic / Deno FFI callers run many trainDir jobs in one process; epoch
+        // spam on stderr drowns the host (NEAT-AI parallel tests / evolve).
         // With deterministic accumulation (full sparse ratio, no random
         // samples) a rejected epoch would recompute the identical learning —
         // further epochs cannot make progress, so stop early (#38).
         if !accepted && req.config.sparse_ratio >= 1.0 && req.config.disable_random_samples {
-            eprintln!(
-                "epoch {epoch}: rejected after {backtracks} backtracks and accumulation is deterministic; stopping early (#38)"
-            );
             break;
         }
     }

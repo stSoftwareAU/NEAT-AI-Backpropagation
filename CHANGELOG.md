@@ -147,6 +147,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `train` no longer prints a per-epoch progress line to stderr. Epoch detail
+  remains in `journal.jsonl`; the CLI still prints the one-line
+  `train: baseline_mse=… best_mse=…` summary. Quiets Deno FFI / parallel
+  memetic hosts that previously drowned in `epoch 1:` spam.
 - `TrainRequest.creature` is now a `TrainCreature` — `Path(&Path)` for the CLI
   or `Json(&str)` for the C ABI — so an in-process caller does not have to write
   the creature to a temporary file first. `TrainResult` gained `best_json`, the
