@@ -1,13 +1,13 @@
 //! Authoritative `rust_scorer` integration (optional train-time gate).
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// Parsed fields from a scorer result object.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ScoreResult {
     /// Authoritative fitness score (larger-is-better).

@@ -6,7 +6,7 @@ use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, ru
 use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
 use neat_ai_backpropagation::train::{
-    DEFAULT_STEP_SCALE, TrainRequest, default_output_dir, run_train,
+    DEFAULT_STEP_SCALE, TrainCreature, TrainRequest, default_output_dir, run_train,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -352,7 +352,7 @@ fn run() -> Result<(), String> {
                 normalise_gradients,
             );
             let result = run_train(TrainRequest {
-                creature: &creature,
+                creature: TrainCreature::Path(&creature),
                 training_data: &training_data,
                 config: &cfg,
                 epochs,

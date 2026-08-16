@@ -9,6 +9,7 @@
 pub mod backprop;
 pub mod compare;
 pub mod creature_io;
+pub mod ffi;
 pub mod gradient_check;
 pub mod mse;
 pub mod propagate_layout;
@@ -31,6 +32,12 @@ pub use compare::{
 pub use creature_io::{
     FORWARD_ONLY_REQUIRED, load_forward_only_creature, parse_forward_only_creature,
 };
+pub use ffi::{
+    AbiLearningRateStrategy, NEAT_BACKPROP_ABI_VERSION, NEAT_BACKPROP_ERR_INVALID_ARGUMENT,
+    NEAT_BACKPROP_ERR_PANIC, NEAT_BACKPROP_ERR_TRAIN_FAILED, NEAT_BACKPROP_OK, NeatBackpropBuffer,
+    TrainAbiRequest, TrainAbiResponse, neat_backprop_abi_version, neat_backprop_buffer_free,
+    neat_backprop_train, neat_backprop_version, train_from_json,
+};
 pub use gradient_check::{
     ClassStats, GeneClass, GeneProbeRow, GradientCheckRequest, GradientCheckSummary,
     run_gradient_check,
@@ -48,6 +55,6 @@ pub use scorer::{ScoreResult, score_creature};
 pub use sweep::{SweepRequest, SweepRow, SweepSummary, run_sweep};
 pub use trace::{NeuronTraceState, SynapseTraceState, build_creature_trace, write_creature_trace};
 pub use train::{
-    BEST_TRACE_FILE, DEFAULT_STEP_SCALE, FAILED_TRACE_DIR, TrainJournalHeader, TrainRequest,
-    TrainResult, run_train,
+    BEST_TRACE_FILE, DEFAULT_STEP_SCALE, FAILED_TRACE_DIR, TrainCreature, TrainJournalHeader,
+    TrainRequest, TrainResult, run_train,
 };

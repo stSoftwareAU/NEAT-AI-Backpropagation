@@ -100,11 +100,44 @@ pub struct TrainEpochRecord {
     pub output_weights: usize,
 }
 
+/// Source of the UUID-only creature JSON a train run starts from.
+///
+/// The CLI hands over a path; the C ABI (issue #84) hands over the JSON text it
+/// received from the caller, so an in-process `trainDir` never round-trips the
+/// creature through a temporary file.
+#[derive(Debug, Clone, Copy)]
+pub enum TrainCreature<'a> {
+    /// Read the creature JSON from this path.
+    Path(&'a Path),
+    /// Use this creature JSON text as-is.
+    Json(&'a str),
+}
+
+impl<'a> TrainCreature<'a> {
+    /// Resolve to the creature JSON text, naming the unreadable path on failure.
+    fn read(self) -> Result<String, String> {
+        match self {
+            Self::Path(path) => {
+                fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
+            }
+            Self::Json(text) => Ok(text.to_string()),
+        }
+    }
+}
+
+impl<'a> From<&'a Path> for TrainCreature<'a> {
+    fn from(path: &'a Path) -> Self {
+        Self::Path(path)
+    }
+}
+
 /// Outcome of [`run_train`].
 #[derive(Debug, Clone)]
 pub struct TrainResult {
     /// Best creature after the run.
     pub creature: CreatureExport,
+    /// Exact JSON written to `best.json` (tagged when a scorer ran).
+    pub best_json: String,
     /// Baseline MSE (incumbent, before any apply).
     pub baseline_mse: f64,
     /// Best post-apply (or baseline if nothing accepted) MSE.
@@ -119,8 +152,8 @@ pub struct TrainResult {
 
 /// Arguments for [`run_train`].
 pub struct TrainRequest<'a> {
-    /// Creature JSON path.
-    pub creature: &'a Path,
+    /// Creature JSON source — a path, or the JSON text itself.
+    pub creature: TrainCreature<'a>,
     /// Training-data directory.
     pub training_data: &'a Path,
     /// Backprop config.
@@ -164,7 +197,7 @@ pub struct TrainRequest<'a> {
 pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     // `train` also mines the raw text for tags, so it parses the text it read
     // rather than re-reading via `load_forward_only_creature`.
-    let text = fs::read_to_string(req.creature).map_err(|e| e.to_string())?;
+    let text = req.creature.read()?;
     let mut incumbent = parse_forward_only_creature(&text)?;
     let mut meta = CreatureMeta::from_creature_json(&text);
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
@@ -361,6 +394,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
 
     Ok(TrainResult {
         creature: incumbent,
+        best_json,
         baseline_mse,
         best_mse,
         accepted_epochs,
@@ -411,7 +445,7 @@ mod tests {
         .unwrap();
         let out = dir.path().join("out");
         run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
             epochs: 1,
@@ -464,7 +498,7 @@ mod tests {
         .unwrap();
         let out = dir.path().join("out");
         run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
             epochs: 1,
@@ -521,7 +555,7 @@ mod tests {
         let out = dir.path().join("out");
         let cfg = BackpropConfig::default();
         let result = run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &cfg,
             epochs: 1,
@@ -569,7 +603,7 @@ mod tests {
         .unwrap();
         let out = dir.path().join("out");
         let result = run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
             epochs: 5,
@@ -630,7 +664,7 @@ mod tests {
         };
         let out_no_ls = dir.path().join("out-no-ls");
         let baseline = run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &cfg,
             epochs: 1,
@@ -647,7 +681,7 @@ mod tests {
         .unwrap();
         let out_ls = dir.path().join("out-ls");
         let with_ls = run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &cfg,
             epochs: 1,
@@ -735,7 +769,7 @@ mod tests {
             ..BackpropConfig::default()
         };
         run_train(TrainRequest {
-            creature,
+            creature: TrainCreature::Path(creature),
             training_data: data,
             config: &cfg,
             epochs: 1,
@@ -827,7 +861,7 @@ mod tests {
         };
         let out = dir.path().join("out");
         run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &cfg,
             epochs: 3,
@@ -880,7 +914,7 @@ mod tests {
         .unwrap();
         let out = dir.path().join("out");
         run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
             epochs: 2,
@@ -921,7 +955,7 @@ mod tests {
         )
         .unwrap();
         let err = run_train(TrainRequest {
-            creature: &creature_path,
+            creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
             epochs: 1,
