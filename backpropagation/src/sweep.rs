@@ -3,10 +3,10 @@
 use crate::backprop::{
     ApplyOptions, BackpropConfig, apply_learnings_with, calculate_learning_rate, count_apply_deltas,
 };
-use crate::creature_io::load_forward_only_creature;
+use crate::creature_io::{ObservationWidth, load_forward_only_creature};
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
-use neat_core::{compile_creature, creature_to_json_pretty};
+use neat_core::compile_creature;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
@@ -86,6 +86,7 @@ pub fn run_sweep(req: SweepRequest<'_>) -> Result<SweepSummary, String> {
         return Err("sweep cannot set both outputs-only and hidden-only".into());
     }
     let incumbent = load_forward_only_creature(req.creature)?;
+    let width = ObservationWidth::of(&incumbent)?;
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
     let lr = calculate_learning_rate(req.config, 0, None);
     let (baseline_train_mse, baseline_eval_mse) = if req.skip_mse {
@@ -149,7 +150,7 @@ pub fn run_sweep(req: SweepRequest<'_>) -> Result<SweepSummary, String> {
         let name = format!("st{step_scale:.8}.json");
         fs::write(
             candidates_dir.join(&name),
-            creature_to_json_pretty(&candidate).map_err(|e| e.to_string())?,
+            width.checked_json_pretty(&candidate)?,
         )
         .map_err(|e| e.to_string())?;
         eprintln!(

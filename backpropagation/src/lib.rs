@@ -30,7 +30,8 @@ pub use compare::{
     diff_compare_dumps,
 };
 pub use creature_io::{
-    FORWARD_ONLY_REQUIRED, load_forward_only_creature, parse_forward_only_creature,
+    FORWARD_ONLY_REQUIRED, ObservationWidth, check_observation_width, load_forward_only_creature,
+    parse_forward_only_creature,
 };
 pub use ffi::{
     AbiLearningRateStrategy, NEAT_BACKPROP_ABI_VERSION, NEAT_BACKPROP_ERR_INVALID_ARGUMENT,

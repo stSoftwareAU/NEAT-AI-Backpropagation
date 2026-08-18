@@ -4,14 +4,14 @@ use crate::backprop::{
     ApplyOptions, BackpropConfig, apply_learnings_with, calculate_learning_rate,
     count_apply_deltas, effective_step_scale,
 };
-use crate::creature_io::parse_forward_only_creature;
+use crate::creature_io::{ObservationWidth, parse_forward_only_creature};
 use crate::mse::compute_mse_selected;
 use crate::propagate_layout::accumulate_creature_learning_selected;
 use crate::sampling::{RecordSample, RecordSelection, plan_record_sample};
 use crate::scorer::{ScoreResult, score_creature};
 use crate::tags::{BackpropProgress, CreatureMeta, serialize_creature_with_meta};
 use crate::trace::{build_creature_trace, write_creature_trace};
-use neat_core::{CreatureExport, TrainingDataConfig, compile_creature, creature_to_json_pretty};
+use neat_core::{CreatureExport, TrainingDataConfig, compile_creature};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
@@ -198,7 +198,11 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     // `train` also mines the raw text for tags, so it parses the text it read
     // rather than re-reading via `load_forward_only_creature`.
     let text = req.creature.read()?;
+    // `parse_forward_only_creature` already rejects `input < 1` / `output < 1`
+    // (issue #92); `width` pins the source width so every creature this run
+    // writes — candidate, scorer copy, `best.json` — is checked against it.
     let mut incumbent = parse_forward_only_creature(&text)?;
+    let width = ObservationWidth::of(&incumbent)?;
     let mut meta = CreatureMeta::from_creature_json(&text);
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
     let initial_lr = calculate_learning_rate(req.config, 0, None);
@@ -297,7 +301,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         };
         fs::write(
             req.output_dir.join("candidate.json"),
-            creature_to_json_pretty(&candidate).map_err(|e| e.to_string())?,
+            width.checked_json_pretty(&candidate)?,
         )
         .map_err(|e| e.to_string())?;
         // NEAT-AI's traceStore keys off "did this iteration make the network
@@ -353,7 +357,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     // --scorer is omitted — callers that need the gate must pass a scorer.
     let mut baseline_score = None;
     let mut best_score = None;
-    let compact_best = creature_to_json_pretty(&incumbent).map_err(|e| e.to_string())?;
+    let compact_best = width.checked_json_pretty(&incumbent)?;
     if let Some(scorer) = req.scorer {
         let score_dir = req.output_dir.join("scorer-work");
         baseline_score = Some(score_creature(
@@ -379,7 +383,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         }
     }
 
-    let best_json = serialize_creature_with_meta(&incumbent, &meta)?;
+    // Refuses (and writes nothing) if the width drifted or is < 1 (#92).
+    let best_json = serialize_creature_with_meta(&incumbent, &meta, width)?;
     fs::write(req.output_dir.join("best.json"), &best_json).map_err(|e| e.to_string())?;
     fs::write(&journal_path, journal).map_err(|e| e.to_string())?;
 

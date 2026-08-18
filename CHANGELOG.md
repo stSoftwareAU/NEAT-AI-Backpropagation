@@ -186,6 +186,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Every creature load (`train`, `sweep`, `compare`, `gradient-check`, and the
+  C ABI `trainDir`) now rejects `input < 1` / `output < 1` with the NEAT-AI
+  wording (`Must have at least one input neurons was: 0`) before any epoch
+  runs, and no `best.json` / `journal.jsonl` / `candidate.json` is written.
+  The top-level `input` / `output` integers are the observation width and
+  cannot be re-derived — `neurons` lists only non-input neurons — so a zeroed
+  count used to train silently on a mis-shaped corpus. `train` also pins the
+  source width (`creature_io::ObservationWidth`) and refuses to write
+  `best.json`, the per-epoch `candidate.json`, the scorer copy, `sweep`
+  candidates, or a `CreatureTrace` whose struct or serialised bytes do not
+  carry exactly that width. `tags::serialize_creature_with_meta` takes the
+  source width as a third argument. Local guard at the binary boundary; it
+  stays once `neat-core` validates the same rule (NEAT-AI-core#550)
+  (issue #92).
 - `compare` now refuses a recurrent / re-entrant creature instead of running the
   unsupported accumulate path and writing a parity dump. The read → parse →
   forward-only-guard preamble had been copy-pasted across `gradient-check`,

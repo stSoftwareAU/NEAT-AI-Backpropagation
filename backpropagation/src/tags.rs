@@ -5,7 +5,8 @@
 //! pedigree tags while stamping `score` / `error` / `backpropagation` for GRQ
 //! (`worker/Backprop/run.sh` reads those tags; see GRQ #3991 / #3952).
 
-use neat_core::{CreatureExport, creature_to_json};
+use crate::creature_io::ObservationWidth;
+use neat_core::CreatureExport;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -170,8 +171,12 @@ fn trim_trailing_zeros_and_dot(s: &str) -> String {
 fn creature_value_with_meta(
     creature: &CreatureExport,
     meta: &CreatureMeta,
+    source_width: ObservationWidth,
 ) -> Result<Value, String> {
-    let body = creature_to_json(creature).map_err(|e| e.to_string())?;
+    // Issue #92: never write a widthless creature. `checked_json` asserts the
+    // struct and the serialised bytes both carry the source `input` /
+    // `output` (each ≥ 1) before tags are re-attached.
+    let body = source_width.checked_json(creature)?;
     let mut value: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
     if let Some(uuid) = &meta.uuid {
         value["uuid"] = json!(uuid);
@@ -183,15 +188,24 @@ fn creature_value_with_meta(
 }
 
 /// Pretty-print a creature with `uuid` / `tags` re-attached for check-in.
+///
+/// `source_width` is the observation width of the creature the run started
+/// from ([`ObservationWidth::of`]); the call fails — and nothing should be
+/// written — when `creature` does not carry exactly that width, or when the
+/// serialised text would not (issue #92).
 pub fn serialize_creature_with_meta(
     creature: &CreatureExport,
     meta: &CreatureMeta,
+    source_width: ObservationWidth,
 ) -> Result<String, String> {
-    let value = creature_value_with_meta(creature, meta)?;
+    let value = creature_value_with_meta(creature, meta, source_width)?;
     let mut out = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
     if !out.ends_with('\n') {
         out.push('\n');
     }
+    // Belt and braces: the exact bytes handed to `best.json` still carry the
+    // width after `uuid` / `tags` were re-attached.
+    source_width.assert_written(&out)?;
     Ok(out)
 }
 
@@ -233,7 +247,8 @@ mod tests {
             error: 0.65,
             opening_score: 0.34,
         });
-        let text = serialize_creature_with_meta(&creature, &meta).unwrap();
+        let width = ObservationWidth::of(&creature).unwrap();
+        let text = serialize_creature_with_meta(&creature, &meta, width).unwrap();
         let value: Value = serde_json::from_str(&text).unwrap();
         let tags = value["tags"].as_array().unwrap();
         let score = tags.iter().find(|t| t["name"] == "score").unwrap();
@@ -250,6 +265,56 @@ mod tests {
         assert!(msg.contains("improved by"));
         let lamarck = tags.iter().find(|t| t["name"] == "lamarck").unwrap();
         assert_eq!(lamarck["value"], "🦒 leave me alone");
+    }
+
+    /// Issue #92: the check-in serialiser refuses a creature whose width no
+    /// longer matches the source, and one whose width is < 1.
+    #[test]
+    fn serialize_rejects_a_mismatched_observation_width() {
+        let creature = parse_creature_json(TINY_TAGGED).unwrap();
+        let meta = CreatureMeta::from_creature_json(TINY_TAGGED);
+        let wider = ObservationWidth {
+            input: 2,
+            output: 1,
+        };
+        let err = serialize_creature_with_meta(&creature, &meta, wider)
+            .expect_err("input 1 vs source 2 must be refused");
+        assert!(err.contains("observation width changed"), "{err}");
+        assert!(err.contains("source input=2 output=1"), "{err}");
+
+        let mut drifted = creature.clone();
+        drifted.output = 3;
+        let width = ObservationWidth::of(&creature).unwrap();
+        let err = serialize_creature_with_meta(&drifted, &meta, width)
+            .expect_err("output 3 vs source 1 must be refused");
+        assert!(err.contains("written input=1 output=3"), "{err}");
+    }
+
+    #[test]
+    fn serialize_rejects_a_widthless_creature() {
+        let mut creature = parse_creature_json(TINY_TAGGED).unwrap();
+        let meta = CreatureMeta::from_creature_json(TINY_TAGGED);
+        creature.input = 0;
+        let zero = ObservationWidth {
+            input: 0,
+            output: 1,
+        };
+        let err = serialize_creature_with_meta(&creature, &meta, zero)
+            .expect_err("input 0 must never be written");
+        assert_eq!(err, "Must have at least one input neurons was: 0");
+    }
+
+    /// Issue #92: a valid source round-trips `input` / `output` into the
+    /// check-in text as the same integers.
+    #[test]
+    fn serialize_preserves_the_source_observation_width() {
+        let creature = parse_creature_json(TINY_TAGGED).unwrap();
+        let meta = CreatureMeta::from_creature_json(TINY_TAGGED);
+        let width = ObservationWidth::of(&creature).unwrap();
+        let text = serialize_creature_with_meta(&creature, &meta, width).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["input"], 1);
+        assert_eq!(value["output"], 1);
     }
 
     #[test]
