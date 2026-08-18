@@ -84,6 +84,9 @@ pub fn build_creature_trace(
     creature: &CreatureExport,
     report: &AccumulateReport,
 ) -> Result<Value, String> {
+    // A trace is a creature export on disk — never write one without an
+    // observation width (issue #92).
+    crate::creature_io::check_observation_width(creature.input, creature.output)?;
     if report.neuron_traces.len() != creature.neurons.len() {
         return Err(format!(
             "trace has {} neuron rows for a creature of {} neurons",
