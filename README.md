@@ -232,6 +232,36 @@ drives the accumulate engine — `compare`, `gradient-check`, `sweep`, and
 `train` — through the shared
 `creature_io::load_forward_only_creature` loader (issue #54).
 
+### Output validation gate (issue #94)
+
+No trained creature leaves this crate uncertified. `train` validates the
+creature it finishes with, and `sweep` validates each candidate it
+writes, through `neat_core::creature_validate` — the shared definition of
+a valid creature (NEAT-AI#3800). Nothing is re-implemented here.
+
+Backpropagation moves values rather than topology, so the failure it is
+most likely to produce is numeric: a diverged run whose biases go `NaN`
+or infinite. Such a creature serialises its biases as `null` and only
+breaks later, in whatever tries to load it. The gate stops it at the
+point it was produced, naming the run, neat-core's `reason` and message,
+and the offending neuron or synapse index.
+
+```mermaid
+flowchart TD
+    A[epochs finish] --> B[validate::TrainedTopology::assert_valid]
+    B -- Ok --> C[scorer → best.json → TrainResult]
+    B -- ValidationFailure --> D[run fails loudly<br/>nothing written]
+```
+
+`validate::TrainedTopology` pins the source creature's neuron and synapse
+counts and passes them as `ValidateOptions::neurons` / `connections`, so
+the check also proves training preserved the topology;
+`forward_only: true` holds the output to the same feed-forward contract
+the loader demanded of the input. The gate runs **once per completed
+run** — not per epoch, and not on load: an externally-supplied creature
+is not this crate's bug to report, and the per-epoch `candidate.json`
+dumps are working state rather than a returned creature.
+
 ## C ABI — in-process `trainDir` (issue #84)
 
 NEAT-AI reached this crate by **spawning** the CLI, which costs a process

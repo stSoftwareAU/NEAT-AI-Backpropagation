@@ -11,6 +11,7 @@ use crate::sampling::{RecordSample, RecordSelection, plan_record_sample};
 use crate::scorer::{ScoreResult, score_creature};
 use crate::tags::{BackpropProgress, CreatureMeta, serialize_creature_with_meta};
 use crate::trace::{build_creature_trace, write_creature_trace};
+use crate::validate::TrainedTopology;
 use neat_core::{CreatureExport, TrainingDataConfig, compile_creature};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -203,6 +204,9 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     // writes — candidate, scorer copy, `best.json` — is checked against it.
     let mut incumbent = parse_forward_only_creature(&text)?;
     let width = ObservationWidth::of(&incumbent)?;
+    // Issue #94: pinned here, checked once at the end of the run — training
+    // moves biases and weights, never genes.
+    let topology = TrainedTopology::of(&incumbent);
     let mut meta = CreatureMeta::from_creature_json(&text);
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
     let initial_lr = calculate_learning_rate(req.config, 0, None);
@@ -351,6 +355,21 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             break;
         }
     }
+
+    // Issue #94 — the output gate. Once per completed run, never per epoch:
+    // the intermediate `candidate.json` dumps above are working state, while
+    // this is the creature the run hands back. Everything downstream (the
+    // scorer copy, `best.json`, `TrainResult`) is on the far side of it, so a
+    // run that diverged into a `NaN` bias fails here rather than shipping a
+    // broken creature.
+    topology.assert_valid(
+        &incumbent,
+        &format!(
+            "train run in {} after {} epochs ({accepted_epochs} accepted)",
+            req.output_dir.display(),
+            req.epochs
+        ),
+    )?;
 
     // Score before writing best.json so GRQ can read `score` / `backpropagation`
     // tags without a second rescore pass (GRQ #3991). Untagged best.json when
@@ -718,11 +737,17 @@ mod tests {
             ));
         }
         neurons.push(r#"{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}"#.to_string());
+        // Synapses must be emitted sorted by (from, to) neuron index — the
+        // `SORT_FAILURE` rule `neat_core::creature_validate` enforces. Index
+        // order here is input-0, a0..aN, b0..bN, o1, so every `input-0` edge
+        // comes first, then each `a` layer's edges, then the `b` layer's.
         let mut synapses = Vec::new();
         for i in 0..layer_a {
             synapses.push(format!(
                 r#"{{"fromUUID":"input-0","toUUID":"a{i}","weight":0.1}}"#
             ));
+        }
+        for i in 0..layer_a {
             for j in 0..layer_b {
                 synapses.push(format!(
                     r#"{{"fromUUID":"a{i}","toUUID":"b{j}","weight":0.05}}"#

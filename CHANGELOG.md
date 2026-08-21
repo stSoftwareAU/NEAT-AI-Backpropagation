@@ -6,16 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
-
-- `observation_width` no longer builds its widthless fixture through
-  `parse_creature_json`: neat-core now rejects `input < 1` inside the loader
-  itself (NEAT-AI-core#550), so the parse panicked before the write-guard
-  assertions ran. The test asserts that loader rejection explicitly and
-  exercises the local guard against a zero-width struct; the handled neat-core
-  baseline moves to 0.9.10 (issue #96).
-
 ### Added
+
+- Every trained creature is validated by `neat_core::creature_validate`
+  before it is scored, written or returned (`validate::TrainedTopology`).
+  `train` gates the creature it finishes with, once per completed run;
+  `sweep` gates each candidate as it is produced. The pinned source neuron /
+  synapse counts and `forwardOnly` are passed as `ValidateOptions`, so the
+  gate also proves training preserved the topology. A diverged run that
+  produced a non-finite bias now fails loudly, naming neat-core's reason,
+  message and the offending index, instead of writing a creature whose
+  biases serialise as `null` (issue #94).
 
 - The auto version bump now fires on **every** build-affecting path, not just
   `backpropagation/src/`. `scripts/build-affecting-paths.sh` is the single
@@ -204,6 +205,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `observation_width` no longer builds its widthless fixture through
+  `parse_creature_json`: neat-core now rejects `input < 1` inside the loader
+  itself (NEAT-AI-core#550), so the parse panicked before the write-guard
+  assertions ran. The test asserts that loader rejection explicitly and
+  exercises the local guard against a zero-width struct; the handled neat-core
+  baseline moves to 0.9.10 (issue #96).
 - Every creature load (`train`, `sweep`, `compare`, `gradient-check`, and the
   C ABI `trainDir`) now rejects `input < 1` / `output < 1` with the NEAT-AI
   wording (`Must have at least one input neurons was: 0`) before any epoch
