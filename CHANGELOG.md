@@ -17,6 +17,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Every trained creature is validated by `neat_core::creature_validate`
+  before it is scored, written or returned (`validate::TrainedTopology`).
+  `train` gates the creature it finishes with, once per completed run;
+  `sweep` gates each candidate as it is produced. The pinned source neuron /
+  synapse counts and `forwardOnly` are passed as `ValidateOptions`, so the
+  gate also proves training preserved the topology. A diverged run that
+  produced a non-finite bias now fails loudly, naming neat-core's reason,
+  message and the offending index, instead of writing a creature whose
+  biases serialise as `null` (issue #94).
+
 - The auto version bump now fires on **every** build-affecting path, not just
   `backpropagation/src/`. `scripts/build-affecting-paths.sh` is the single
   source of truth (sources, both manifests, `Cargo.lock`, `.cargo/config.toml`,

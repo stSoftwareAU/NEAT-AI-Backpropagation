@@ -19,6 +19,7 @@ pub mod sweep;
 pub mod tags;
 pub mod trace;
 pub mod train;
+pub mod validate;
 
 pub use backprop::{
     ApplyDeltaCounts, ApplyOptions, BackpropConfig, BiasSignal, FLOAT_ABS_TOL, FLOAT_REL_TOL,
@@ -59,3 +60,4 @@ pub use train::{
     BEST_TRACE_FILE, DEFAULT_STEP_SCALE, FAILED_TRACE_DIR, TrainCreature, TrainJournalHeader,
     TrainRequest, TrainResult, run_train,
 };
+pub use validate::TrainedTopology;

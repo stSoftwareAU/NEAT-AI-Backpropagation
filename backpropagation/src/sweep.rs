@@ -6,6 +6,7 @@ use crate::backprop::{
 use crate::creature_io::{ObservationWidth, load_forward_only_creature};
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
+use crate::validate::TrainedTopology;
 use neat_core::compile_creature;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -87,6 +88,7 @@ pub fn run_sweep(req: SweepRequest<'_>) -> Result<SweepSummary, String> {
     }
     let incumbent = load_forward_only_creature(req.creature)?;
     let width = ObservationWidth::of(&incumbent)?;
+    let topology = TrainedTopology::of(&incumbent);
     fs::create_dir_all(req.output_dir).map_err(|e| e.to_string())?;
     let lr = calculate_learning_rate(req.config, 0, None);
     let (baseline_train_mse, baseline_eval_mse) = if req.skip_mse {
@@ -147,6 +149,9 @@ pub fn run_sweep(req: SweepRequest<'_>) -> Result<SweepSummary, String> {
             };
             (train, eval)
         };
+        // Issue #94: a sweep candidate is a trained creature that reaches
+        // disk, so it is gated the same way — once, as it is produced.
+        topology.assert_valid(&candidate, &format!("sweep candidate st={step_scale:.8}"))?;
         let name = format!("st{step_scale:.8}.json");
         fs::write(
             candidates_dir.join(&name),
