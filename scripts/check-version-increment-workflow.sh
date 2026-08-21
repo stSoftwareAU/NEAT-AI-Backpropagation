@@ -8,10 +8,14 @@
 #   4. Gate commit/push behind a change-detection output (idempotent).
 #   5. Refuse to push onto a fork's PR branch.
 #   6. Use strict bash (`set -euo pipefail`).
+#   7. Trigger on every build-affecting path (issue #95) — a path missing from
+#      the filter never starts the job, so remotes keep a stale library.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/build-affecting-paths.sh
+source "$SCRIPT_DIR/build-affecting-paths.sh"
 WORKFLOW="${1:-$REPO_ROOT/.github/workflows/version-increment.yml}"
 EXIT_CODE=0
 
@@ -76,6 +80,36 @@ if grep -qE 'set -euo pipefail' "$WORKFLOW"; then
   ok "strict bash (set -euo pipefail) present"
 else
   fail "no 'set -euo pipefail' in workflow run steps"
+fi
+
+# Entries of the `on.pull_request.paths:` list, unquoted, one per line.
+workflow_paths() {
+  awk '
+    /^[[:space:]]*paths:[[:space:]]*$/ { in_block = 1; next }
+    in_block && /^[[:space:]]*(#|$)/ { next }
+    in_block && /^[[:space:]]*-[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      gsub(/"/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      print line
+      next
+    }
+    in_block { in_block = 0 }
+  ' "$WORKFLOW"
+}
+
+DECLARED_PATHS="$(workflow_paths)"
+MISSING_PATHS=()
+for required in "${BUILD_AFFECTING_PATHS[@]}"; do
+  if ! printf '%s\n' "$DECLARED_PATHS" | grep -Fxq "$required"; then
+    MISSING_PATHS+=("$required")
+  fi
+done
+if [[ "${#MISSING_PATHS[@]}" -eq 0 ]]; then
+  ok "paths filter covers every build-affecting path"
+else
+  fail "paths filter omits build-affecting path(s): ${MISSING_PATHS[*]} — a PR touching them would never run the bump job"
 fi
 
 if grep -qE 'chore: auto-increment versions for changed projects' "$WORKFLOW"; then
