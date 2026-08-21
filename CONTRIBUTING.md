@@ -127,11 +127,28 @@ stale binaries on remote machines.
 
 CI also runs a **Version Increment** workflow
 ([`.github/workflows/version-increment.yml`](./.github/workflows/version-increment.yml))
-that auto-increments the patch on a pull request when `backpropagation/src/`
-has changed — but only if the PR branch is not already *ahead* of Develop
-(same approach as GRQ-taxation). Bumping locally when your change touches
-`backpropagation/src/` keeps the version correct and avoids an extra bot
-commit.
+that auto-increments the patch on a pull request when any **build-affecting
+path** has changed — but only if the PR branch is not already *ahead* of
+Develop (same approach as GRQ-taxation). Bumping locally keeps the version
+correct and avoids an extra bot commit.
+
+The build-affecting set is declared once, in
+[`scripts/build-affecting-paths.sh`](./scripts/build-affecting-paths.sh), and
+is shared by the bump script and the workflow validator:
+
+| Path | Why it changes the artefact |
+| --- | --- |
+| `backpropagation/src/**` | Crate sources. |
+| `backpropagation/Cargo.toml` | Dependencies, features, crate types. |
+| `Cargo.toml` | Workspace profiles (`opt-level`, LTO) and lints. |
+| `Cargo.lock` | Resolved dependency versions. |
+| `.cargo/config.toml` | `rustflags` such as `target-cpu=native`. |
+| `rust-toolchain.toml` | Compiler channel/version. |
+| `include/**` | The C ABI header consumers compile against. |
+
+`scripts/check-version-increment-workflow.sh` fails the PR if the workflow's
+`paths:` filter drops one of these — a path missing from the filter never
+starts the job, so remotes would keep a stale library.
 
 **Never ship a crate version behind `origin/Develop`.** A merge conflict that
 silently takes Develop's older `version` used to look like “already bumped”

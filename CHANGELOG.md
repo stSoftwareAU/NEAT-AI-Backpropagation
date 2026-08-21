@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The auto version bump now fires on **every** build-affecting path, not just
+  `backpropagation/src/`. `scripts/build-affecting-paths.sh` is the single
+  source of truth (sources, both manifests, `Cargo.lock`, `.cargo/config.toml`,
+  `rust-toolchain.toml`, `include/`); the bump script diffs it and
+  `scripts/check-version-increment-workflow.sh` fails the PR when the
+  workflow's `paths:` filter drops one. Unattended machines rebuild only when
+  the crate version moves, so a dependency, profile or toolchain change that
+  skipped the bump left them running a stale library (issue #95).
+
 - Root `README.md` opens with a full-width banner hot-linking the hub social
   preview `neat-ai-backpropagation.png` from NEAT-AI `Develop`, so crate and
   GitHub README branding stay in sync with the single source of artwork

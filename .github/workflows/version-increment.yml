@@ -5,10 +5,10 @@
 # only then. Every path that alters the artefact (sources, both manifests, the
 # lockfile, cargo/toolchain config, the FFI header) is therefore in the filter
 # below and in scripts/build-affecting-paths.sh (issue #95). This job bumps the
-# patch on such PRs if the branch has not already bumped *ahead* of Develop. A head version strictly behind Develop fails the
-# bump script (exit 2) rather than looking like a deliberate bump — silent
-# downgrades break trainDir / FFI consumers (issue #87). Re-running after a
-# valid bump is a no-op (idempotent).
+# patch on such PRs if the branch has not already bumped *ahead* of Develop.
+# A head version strictly behind Develop fails the bump script (exit 2) rather
+# than looking like a deliberate bump — silent downgrades break trainDir / FFI
+# consumers (issue #87). Re-running after a valid bump is a no-op (idempotent).
 #
 # Push auth matches auto-format.yml (App token → ACTIONS_PUSH → GITHUB_TOKEN).
 name: Version Increment
@@ -65,7 +65,7 @@ jobs:
           set -euo pipefail
           git fetch origin Develop:Develop || git fetch origin Develop || true
 
-      - name: Bump backpropagation patch version when src changed
+      - name: Bump backpropagation patch version when a build-affecting path changed
         id: bump
         run: |
           set -euo pipefail
