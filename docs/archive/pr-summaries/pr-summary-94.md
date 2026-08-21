@@ -39,23 +39,28 @@ patch-level change, so `scripts/check-neat-core-version.sh` does not gate.
 
 Closes #94.
 
-## Blocked on the dependency — read before merging
+## Dependency blocker — resolved
 
-`creature_validate` on **neat-core `Develop` returns an unconditional
-failure**: only the neuron half of the rules is ported
-(`neat-core/src/creature_validate.rs:550-561`, Issue
-stSoftwareAU/NEAT-AI-core#560), and the synapse / forward-only / memetic half
-is stSoftwareAU/NEAT-AI-core#561 — open, in review as PR
-stSoftwareAU/NEAT-AI-core#565. Against that build **no** creature can be
-certified, so this crate's tests (including the ten pre-existing training tests)
-fail with core's own "rule bodies are not ported yet" failure.
+`creature_validate` on neat-core `Develop` used to return an unconditional
+failure: only the neuron half of the rules was ported (Issue
+stSoftwareAU/NEAT-AI-core#560), and against that build **no** creature could be
+certified, so this crate's tests failed with core's own "rule bodies are not
+ported yet" message.
 
-**Do not merge this PR until stSoftwareAU/NEAT-AI-core#565 lands on core
-`Develop`**; this repo consumes `neat-core` by path against head, so CI here
-goes green the moment it does — no version pin, no bump. This PR is deliberately
-*not* weakened to work around the gap: swallowing core's failure, or
-downgrading it to a warning so a run continues, is exactly the silent failure
+The synapse / forward-only / memetic half — stSoftwareAU/NEAT-AI-core#561, PR
+stSoftwareAU/NEAT-AI-core#565 — **landed on core `Develop` (commit
+`acc6532`)**. This repo consumes `neat-core` by path against head, so the gate
+now certifies real creatures with no version pin and no bump. The gate was
+deliberately never weakened to work around the gap: swallowing core's failure,
+or downgrading it to a warning so a run continues, is exactly the silent failure
 the issue exists to stop.
+
+With the ported rules live, one genuine defect surfaced in this crate's own test
+data: `train::tests::dense_creature_json` emitted its synapses interleaved
+(`input-0 -> a0`, `a0 -> b*`, `input-0 -> a1`, …), which violates core's rule 25
+— synapses sorted by `(from, to)` neuron index, `Topology` / `SORT_FAILURE`. The
+fixture now emits every `input-0` edge first, then each `a` layer's edges, then
+the `b` layer's, matching the index order the file itself declares.
 
 ## Evidence
 
@@ -84,8 +89,8 @@ run returns a creature whose biases are `-inf` and writes it to `best.json` as:
 
 With the gate in place the same run fails loudly and writes no `best.json`.
 
-**Test run** (against a `neat-core` build whose `creature_validate` entry point
-is complete — see *Blocked on the dependency* above): `cargo test --workspace
+**Test run** (against core `Develop` at `acc6532` — see *Dependency blocker*
+above): `cargo test --workspace
 --all-features -- --test-threads=2` → **144 passed, 0 failed** across every
 target, of which 8 are new (5 unit, 3 integration). `cargo fmt
 --check`, `cargo clippy --workspace --all-targets --all-features -D warnings`,

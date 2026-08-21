@@ -737,11 +737,17 @@ mod tests {
             ));
         }
         neurons.push(r#"{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}"#.to_string());
+        // Synapses must be emitted sorted by (from, to) neuron index — the
+        // `SORT_FAILURE` rule `neat_core::creature_validate` enforces. Index
+        // order here is input-0, a0..aN, b0..bN, o1, so every `input-0` edge
+        // comes first, then each `a` layer's edges, then the `b` layer's.
         let mut synapses = Vec::new();
         for i in 0..layer_a {
             synapses.push(format!(
                 r#"{{"fromUUID":"input-0","toUUID":"a{i}","weight":0.1}}"#
             ));
+        }
+        for i in 0..layer_a {
             for j in 0..layer_b {
                 synapses.push(format!(
                     r#"{{"fromUUID":"a{i}","toUUID":"b{j}","weight":0.05}}"#
