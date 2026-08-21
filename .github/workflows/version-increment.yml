@@ -1,12 +1,14 @@
-# Auto-increment backpropagation/Cargo.toml patch when backpropagation/src/ changes
-# on a PR (GRQ-taxation version-increment / runlib.sh contract).
+# Auto-increment backpropagation/Cargo.toml patch when a build-affecting path
+# changes on a PR (GRQ-taxation version-increment / runlib.sh contract).
 #
-# Remotes rebuild neat_ai_backpropagation when the crate version changes. This
-# job bumps the patch on PRs that touch source if the branch has not already
-# bumped *ahead* of Develop. A head version strictly behind Develop fails the
-# bump script (exit 2) rather than looking like a deliberate bump — silent
-# downgrades break trainDir / FFI consumers (issue #87). Re-running after a
-# valid bump is a no-op (idempotent).
+# Remotes rebuild neat_ai_backpropagation when the crate version changes — and
+# only then. Every path that alters the artefact (sources, both manifests, the
+# lockfile, cargo/toolchain config, the FFI header) is therefore in the filter
+# below and in scripts/build-affecting-paths.sh (issue #95). This job bumps the
+# patch on such PRs if the branch has not already bumped *ahead* of Develop.
+# A head version strictly behind Develop fails the bump script (exit 2) rather
+# than looking like a deliberate bump — silent downgrades break trainDir / FFI
+# consumers (issue #87). Re-running after a valid bump is a no-op (idempotent).
 #
 # Push auth matches auto-format.yml (App token → ACTIONS_PUSH → GITHUB_TOKEN).
 name: Version Increment
@@ -17,9 +19,18 @@ on:
     branches:
       - Develop
     paths:
+      # Build-affecting paths — keep in step with
+      # scripts/build-affecting-paths.sh (check-version-increment-workflow.sh
+      # fails the PR when one is missing).
       - "backpropagation/src/**"
       - "backpropagation/Cargo.toml"
+      - "Cargo.toml"
       - "Cargo.lock"
+      - ".cargo/config.toml"
+      - "rust-toolchain.toml"
+      - "include/**"
+      # The bump machinery itself.
+      - "scripts/build-affecting-paths.sh"
       - "scripts/bump-backpropagation-version.sh"
       - "scripts/check-crate-version-no-downgrade.sh"
       - ".github/workflows/version-increment.yml"
@@ -54,7 +65,7 @@ jobs:
           set -euo pipefail
           git fetch origin Develop:Develop || git fetch origin Develop || true
 
-      - name: Bump backpropagation patch version when src changed
+      - name: Bump backpropagation patch version when a build-affecting path changed
         id: bump
         run: |
           set -euo pipefail

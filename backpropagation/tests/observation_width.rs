@@ -297,8 +297,18 @@ fn write_guard_rejects_a_mismatched_or_widthless_creature() {
     let err = width.checked_json(&zeroed).unwrap_err();
     assert!(err.contains("observation width changed"), "{err}");
 
-    // A zero source width is never a valid width to write against.
-    let zero_source = parse_creature_json(INPUT_ZERO).unwrap();
+    // A zero source width is never a valid width to write against. neat-core
+    // now enforces the same rule inside `parse_creature_json` (NEAT-AI-core
+    // #550), so the widthless fixture no longer parses — assert that rejection
+    // at the loader boundary, then exercise the local write guard against a
+    // zero-width struct built by zeroing a parsed valid source.
+    assert_eq!(
+        parse_creature_json(INPUT_ZERO).unwrap_err().to_string(),
+        INPUT_ERR,
+        "the shared loader must refuse a widthless creature"
+    );
+    let mut zero_source = source.clone();
+    zero_source.input = 0;
     assert_eq!(ObservationWidth::of(&zero_source).unwrap_err(), INPUT_ERR);
     let zero = ObservationWidth {
         input: 0,

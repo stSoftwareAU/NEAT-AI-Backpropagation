@@ -6,7 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `observation_width` no longer builds its widthless fixture through
+  `parse_creature_json`: neat-core now rejects `input < 1` inside the loader
+  itself (NEAT-AI-core#550), so the parse panicked before the write-guard
+  assertions ran. The test asserts that loader rejection explicitly and
+  exercises the local guard against a zero-width struct; the handled neat-core
+  baseline moves to 0.9.10 (issue #96).
+
 ### Added
+
+- The auto version bump now fires on **every** build-affecting path, not just
+  `backpropagation/src/`. `scripts/build-affecting-paths.sh` is the single
+  source of truth (sources, both manifests, `Cargo.lock`, `.cargo/config.toml`,
+  `rust-toolchain.toml`, `include/`); the bump script diffs it and
+  `scripts/check-version-increment-workflow.sh` fails the PR when the
+  workflow's `paths:` filter drops one. Unattended machines rebuild only when
+  the crate version moves, so a dependency, profile or toolchain change that
+  skipped the bump left them running a stale library (issue #95).
 
 - Root `README.md` opens with a full-width banner hot-linking the hub social
   preview `neat-ai-backpropagation.png` from NEAT-AI `Develop`, so crate and

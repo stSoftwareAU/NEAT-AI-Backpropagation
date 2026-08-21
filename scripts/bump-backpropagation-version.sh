@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# Bump backpropagation/Cargo.toml patch version when backpropagation/src/ changed vs a base ref.
+# Bump backpropagation/Cargo.toml patch version when a build-affecting path
+# changed vs a base ref (scripts/build-affecting-paths.sh — sources, both
+# manifests, the lockfile, cargo/toolchain config and the FFI header).
+#
+# Remotes rebuild on a version change alone, so a dependency, profile or
+# toolchain change that skipped the bump left them on a stale library even
+# though the artefact differed (issue #95).
 #
 # Mirrors GRQ-taxation's version-increment job / runlib.sh contract: remotes
 # rebuild when Cargo.toml version changes. Idempotent — skips when the PR
@@ -16,9 +22,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/build-affecting-paths.sh
+source "$SCRIPT_DIR/build-affecting-paths.sh"
+
 MANIFEST=""
 LOCKFILE=""
-SRC_PATH="backpropagation/src"
 BASE_REF="origin/Develop"
 CHECK_ONLY=0
 COMMIT_SUBJECT="chore: auto-increment versions for changed projects"
@@ -118,10 +126,21 @@ if [[ -n "$BASE_VERSION" && "$CURRENT_VERSION" != "$BASE_VERSION" ]]; then
   exit 1
 fi
 
-if git diff --quiet "${BASE_REF}...HEAD" -- "$SRC_PATH"; then
-  echo "OK   no changes under $SRC_PATH vs $BASE_REF — skip"
+PATHSPECS=()
+while IFS= read -r pathspec; do
+  PATHSPECS+=("$pathspec")
+done < <(build_affecting_pathspecs)
+
+CHANGED_PATHS="$(git diff --name-only "${BASE_REF}...HEAD" -- "${PATHSPECS[@]}")"
+if [[ -z "$CHANGED_PATHS" ]]; then
+  echo "OK   no build-affecting changes vs $BASE_REF — skip"
   exit 1
 fi
+
+echo "OK   build-affecting changes vs $BASE_REF:"
+while IFS= read -r changed; do
+  echo "       $changed"
+done <<<"$CHANGED_PATHS"
 
 IFS='.' read -r major minor patch <<<"$CURRENT_VERSION"
 major=${major:-0}
@@ -134,7 +153,7 @@ fi
 NEW_VERSION="$major.$minor.$((patch + 1))"
 
 if [[ "$CHECK_ONLY" -eq 1 ]]; then
-  echo "WOULD bump $CURRENT_VERSION -> $NEW_VERSION (src changes vs $BASE_REF)"
+  echo "WOULD bump $CURRENT_VERSION -> $NEW_VERSION"
   exit 0
 fi
 

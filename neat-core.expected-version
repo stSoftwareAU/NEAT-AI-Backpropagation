@@ -6,4 +6,4 @@
 # higher major — forcing a deliberate upgrade. Clear the gate by updating
 # `backpropagation` for the breaking change and bumping this version to match
 # neat-core.
-0.9.0
+0.9.10

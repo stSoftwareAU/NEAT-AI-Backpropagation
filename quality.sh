@@ -44,7 +44,11 @@ echo "Validating auto-format PR workflow..."
 ./scripts/check-auto-format-workflow.sh
 
 echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
+./scripts/test-check-version-increment-workflow.sh
 ./scripts/check-version-increment-workflow.sh
+
+echo "Validating every build-affecting change bumps the crate version (issue #95)..."
+./scripts/test-bump-backpropagation-version.sh
 
 echo "Validating crate version never downgrades vs Develop (issue #87)..."
 ./scripts/test-check-crate-version-no-downgrade.sh
