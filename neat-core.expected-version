@@ -6,4 +6,12 @@
 # higher major — forcing a deliberate upgrade. Clear the gate by updating
 # `backpropagation` for the breaking change and bumping this version to match
 # neat-core.
-0.9.10
+#
+# 0.9.10 -> 0.10.0: acknowledge neat-core #569 (GRQ#4257), which retyped the
+# public `MemeticExport::weights` field from
+# `BTreeMap<String, Vec<MemeticWeightExport>>` to the new `MemeticWeights` enum
+# so both valid wire forms parse. `backpropagation` never names `MemeticExport`
+# or any memetic weight type — it hands creature JSON straight to neat-core —
+# so no code change is required. Verified by a clean `cargo build --release`
+# and the full test suite passing against sibling neat-core 0.10.0.
+0.10.0
