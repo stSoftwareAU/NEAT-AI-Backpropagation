@@ -28,7 +28,7 @@ parent/
 (`../../NEAT-AI-core/neat-core`). Breaking SemVer bumps are gated by
 [`neat-core.expected-version`](./neat-core.expected-version).
 
-Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.95.0`).
+Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.98.0`).
 
 ### Build profiles
 
