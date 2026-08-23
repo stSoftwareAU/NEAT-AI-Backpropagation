@@ -205,6 +205,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `best.json` — and the identical bytes returned over the C ABI as
+  `bestCreatureJson` — no longer re-attach the **source** creature's
+  `uuid`. That uuid is a content-derived v5 hash over the creature's
+  neurons, synapses and `input`, and training moves every bias and weight,
+  so the inherited value described content that no longer existed. NEAT-AI's
+  `makeUUID` short-circuits on a present uuid and `Fitness` deduplicates its
+  evaluation queue by uuid, so a trained creature wearing its parent's
+  identity could be handed a score it never earned without ever being
+  evaluated. `CreatureMeta` now keeps only `tags` — which are excluded from
+  the uuid hash — and per-neuron `uuid` (an *input* to the hash, not the
+  hash) is still preserved verbatim (issue #101).
 - `observation_width` no longer builds its widthless fixture through
   `parse_creature_json`: neat-core now rejects `input < 1` inside the loader
   itself (NEAT-AI-core#550), so the parse panicked before the write-guard

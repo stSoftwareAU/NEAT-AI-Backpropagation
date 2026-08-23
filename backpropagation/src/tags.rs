@@ -1,14 +1,21 @@
 //! Creature JSON tags (`{ name, value }[]`) for GRQ check-in compatibility.
 //!
-//! `neat_core::CreatureExport` does not round-trip `tags` / `uuid`, so this
-//! crate keeps them in [`CreatureMeta`] and re-attaches on write — preserving
-//! pedigree tags while stamping `score` / `error` / `backpropagation` for GRQ
+//! `neat_core::CreatureExport` does not round-trip `tags`, so this crate keeps
+//! them in [`CreatureMeta`] and re-attaches on write — preserving pedigree tags
+//! while stamping `score` / `error` / `backpropagation` for GRQ
 //! (`worker/Backprop/run.sh` reads those tags; see GRQ #3991 / #3952).
+//!
+//! The creature-level `uuid` is deliberately *not* kept (issue #101). It is a
+//! content-derived v5 hash over the creature's neurons, synapses and `input`,
+//! and training moves every bias and weight — so re-attaching the source uuid
+//! publishes a hash that no longer describes the content. Tags are excluded
+//! from that hash, which is why they are safe to carry across. Emitting no
+//! uuid lets the consumer derive it from the content it actually received.
 
 use crate::creature_io::ObservationWidth;
 use neat_core::CreatureExport;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// One creature tag (NEAT-AI / `@stsoftware/tags` shape).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,24 +27,20 @@ pub struct CreatureTag {
 }
 
 /// Top-level fields stripped by `parse_creature_json` that we must keep.
+///
+/// The source `uuid` is not among them (issue #101) — see the module docs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CreatureMeta {
-    /// Optional creature UUID from the source JSON.
-    pub uuid: Option<String>,
     /// Ordered tags (upserts replace by name, preserving order of first insert).
     pub tags: Vec<CreatureTag>,
 }
 
 impl CreatureMeta {
-    /// Parse `uuid` + `tags` from raw creature JSON (missing → empty).
+    /// Parse `tags` from raw creature JSON (missing → empty).
     pub fn from_creature_json(text: &str) -> Self {
         let Ok(value) = serde_json::from_str::<Value>(text) else {
             return Self::default();
         };
-        let uuid = value
-            .get("uuid")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
         let tags = value
             .get("tags")
             .and_then(|v| v.as_array())
@@ -54,7 +57,7 @@ impl CreatureMeta {
                     .collect()
             })
             .unwrap_or_default();
-        Self { uuid, tags }
+        Self { tags }
     }
 
     /// Insert or replace a tag by name.
@@ -178,16 +181,19 @@ fn creature_value_with_meta(
     // `output` (each ≥ 1) before tags are re-attached.
     let body = source_width.checked_json(creature)?;
     let mut value: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    if let Some(uuid) = &meta.uuid {
-        value["uuid"] = json!(uuid);
-    }
+    // No creature-level `uuid` is re-attached (issue #101): it is a content
+    // hash and training has moved the content it hashes over. Tags are
+    // excluded from that hash, so they are safe to carry.
     if !meta.tags.is_empty() {
         value["tags"] = serde_json::to_value(&meta.tags).map_err(|e| e.to_string())?;
     }
     Ok(value)
 }
 
-/// Pretty-print a creature with `uuid` / `tags` re-attached for check-in.
+/// Pretty-print a creature with `tags` re-attached for check-in.
+///
+/// No creature-level `uuid` is emitted (issue #101) — the consumer derives it
+/// from the content it receives.
 ///
 /// `source_width` is the observation width of the creature the run started
 /// from ([`ObservationWidth::of`]); the call fails — and nothing should be
@@ -204,7 +210,7 @@ pub fn serialize_creature_with_meta(
         out.push('\n');
     }
     // Belt and braces: the exact bytes handed to `best.json` still carry the
-    // width after `uuid` / `tags` were re-attached.
+    // width after `tags` were re-attached.
     source_width.assert_written(&out)?;
     Ok(out)
 }
@@ -228,12 +234,30 @@ mod tests {
       ]
     }"#;
 
+    /// Issue #101: the uuid half of this assertion encoded the defect — the
+    /// creature-level uuid is content-derived, so this crate never keeps it.
     #[test]
-    fn extract_preserves_uuid_and_tags() {
+    fn extract_preserves_tags() {
         let meta = CreatureMeta::from_creature_json(TINY_TAGGED);
-        assert_eq!(meta.uuid.as_deref(), Some("creature-1"));
         assert_eq!(meta.tags[0].name, "name");
         assert_eq!(meta.tags[0].value, "Tiny");
+    }
+
+    /// Issue #101: the check-in text never carries a creature-level `uuid`,
+    /// even when the source did — the consumer derives it from the content it
+    /// actually received.
+    #[test]
+    fn serialize_never_emits_a_creature_level_uuid() {
+        let creature = parse_creature_json(TINY_TAGGED).unwrap();
+        let meta = CreatureMeta::from_creature_json(TINY_TAGGED);
+        let width = ObservationWidth::of(&creature).unwrap();
+        let text = serialize_creature_with_meta(&creature, &meta, width).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert!(value.get("uuid").is_none(), "unexpected uuid in {text}");
+        // Per-neuron uuid is a different concept — a stable identity label
+        // that is an *input* to the creature hash — and must survive.
+        assert_eq!(value["neurons"][0]["uuid"], "o1");
+        assert_eq!(value["tags"][0]["name"], "name");
     }
 
     #[test]
