@@ -262,6 +262,38 @@ run** — not per epoch, and not on load: an externally-supplied creature
 is not this crate's bug to report, and the per-epoch `candidate.json`
 dumps are working state rather than a returned creature.
 
+### Creature identity — no inherited `uuid` (issue #101)
+
+A creature-level `uuid` is a **content hash**: NEAT-AI derives it as a v5
+UUID over the creature's neurons (`uuid`, `type`, `bias`, `squash`,
+`frozen`), its synapses (`fromUUID`, `toUUID`, `weight`, `type`,
+`frozen`) and `input`. Backpropagation's whole job is to move biases and
+weights, so a trained creature never has its source creature's identity.
+
+`best.json` — and the identical bytes returned as `bestCreatureJson` —
+therefore carry **no top-level `uuid`**. The consumer derives it from the
+content it actually received, which is what `neat_core`'s exporter
+already does everywhere else in this crate. Emitting the source uuid
+would be worse than useless: NEAT-AI's `makeUUID` short-circuits on a
+uuid that is already present and never recomputes it, and `Fitness`
+deduplicates its evaluation queue by uuid — so a trained creature wearing
+its parent's identity can be handed a score it never earned.
+
+Two things are deliberately **not** dropped:
+
+- **`tags`** are excluded from the uuid hash, so pedigree tags
+  (`name`, `lamarck`, `intelligentDesign`, …) survive the round trip
+  alongside the `score` / `error` / `backpropagation` stamps.
+- **Per-neuron `uuid`** is a stable identity label and an *input* to the
+  creature hash, not the hash itself — it is preserved verbatim.
+
+```mermaid
+flowchart LR
+    A["source creature<br/>uuid: abc…<br/>tags: name, lamarck"] --> B[train moves<br/>biases + weights]
+    B --> C["best.json / bestCreatureJson<br/>no uuid<br/>tags: name, lamarck, score, error"]
+    C --> D[consumer re-derives<br/>uuid from content]
+```
+
 ## C ABI — in-process `trainDir` (issue #84)
 
 NEAT-AI reached this crate by **spawning** the CLI, which costs a process
