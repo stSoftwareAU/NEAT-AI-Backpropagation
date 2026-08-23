@@ -62,12 +62,18 @@ fn call_train(request: &str) -> (i32, String) {
     // SAFETY: `bytes` outlives the call and `out` is a live, writable buffer
     // that owns nothing yet.
     let status = unsafe { neat_backprop_train(bytes.as_ptr(), bytes.len(), &raw mut out) };
-    assert!(!out.data.is_null(), "every call must populate the out buffer");
+    assert!(
+        !out.data.is_null(),
+        "every call must populate the out buffer"
+    );
     // SAFETY: the library reported `out.len` readable bytes at `out.data`.
     let payload = unsafe { std::slice::from_raw_parts(out.data, out.len) }.to_vec();
     // SAFETY: `out` was produced by this library and has not been freed.
     unsafe { neat_backprop_buffer_free(&raw mut out) };
-    (status, String::from_utf8(payload).expect("payload is UTF-8"))
+    (
+        status,
+        String::from_utf8(payload).expect("payload is UTF-8"),
+    )
 }
 
 /// Train `TAGGED_CHAIN` on the learnable corpus for enough epochs to accept.
@@ -157,7 +163,10 @@ fn dropping_the_creature_uuid_keeps_tags_and_per_neuron_uuids() {
             .iter()
             .find(|t| t["name"] == expected["name"])
             .unwrap_or_else(|| panic!("pedigree tag {name} was dropped"));
-        assert_eq!(found["value"], expected["value"], "tag {name} was rewritten");
+        assert_eq!(
+            found["value"], expected["value"],
+            "tag {name} was rewritten"
+        );
     }
 
     let neuron_uuids = |value: &Value| -> Vec<String> {
