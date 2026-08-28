@@ -5,12 +5,29 @@
 //! while stamping `score` / `error` / `backpropagation` for GRQ
 //! (`worker/Backprop/run.sh` reads those tags; see GRQ #3991 / #3952).
 //!
+//! That applies to **per-neuron** tags too (GRQ #4491). `NeuronExport` models
+//! no `tags` field either, so every neuron's discovery / intelligent-design
+//! provenance was dropped on write: all seven `*-backprop.json` samples in
+//! GRQ-sampler carry 0 tagged neurons where the champions they descend from
+//! carry ~2,500. GRQ's #4216 check-in guard refuses a candidate that lost the
+//! source's per-neuron tags, so once that guard was wired into the Backprop
+//! worker (GRQ #4318) no Backprop run could publish at all — the failure
+//! surfaced as a rebase problem (GRQ #4491) because a rebase faithfully
+//! carries forward the empty tag set it was handed.
+//!
+//! Training moves biases and weights and never genes (issue #94), so every
+//! source neuron uuid survives; the sidecar is still reconciled against the
+//! neurons actually written, so a tag can never name a neuron that is not
+//! there.
+//!
 //! The creature-level `uuid` is deliberately *not* kept (issue #101). It is a
 //! content-derived v5 hash over the creature's neurons, synapses and `input`,
 //! and training moves every bias and weight — so re-attaching the source uuid
 //! publishes a hash that no longer describes the content. Tags are excluded
 //! from that hash, which is why they are safe to carry across. Emitting no
 //! uuid lets the consumer derive it from the content it actually received.
+
+use std::collections::BTreeMap;
 
 use crate::creature_io::ObservationWidth;
 use neat_core::CreatureExport;
@@ -33,31 +50,50 @@ pub struct CreatureTag {
 pub struct CreatureMeta {
     /// Ordered tags (upserts replace by name, preserving order of first insert).
     pub tags: Vec<CreatureTag>,
+    /// Per-neuron tags keyed by the neuron's `uuid` (GRQ #4491). Only neurons
+    /// that carried at least one tag appear here.
+    pub neuron_tags: BTreeMap<String, Vec<CreatureTag>>,
+}
+
+fn parse_tag_array(value: Option<&Value>) -> Vec<CreatureTag> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    let name = t.get("name")?.as_str()?.to_string();
+                    let value = match t.get("value")? {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    Some(CreatureTag { name, value })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl CreatureMeta {
-    /// Parse `tags` from raw creature JSON (missing → empty).
+    /// Parse creature-level and per-neuron `tags` from raw creature JSON
+    /// (missing → empty).
     pub fn from_creature_json(text: &str) -> Self {
         let Ok(value) = serde_json::from_str::<Value>(text) else {
             return Self::default();
         };
-        let tags = value
-            .get("tags")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| {
-                        let name = t.get("name")?.as_str()?.to_string();
-                        let value = match t.get("value")? {
-                            Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        Some(CreatureTag { name, value })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Self { tags }
+        let tags = parse_tag_array(value.get("tags"));
+        let mut neuron_tags = BTreeMap::new();
+        if let Some(neurons) = value.get("neurons").and_then(|v| v.as_array()) {
+            for neuron in neurons {
+                let Some(uuid) = neuron.get("uuid").and_then(|u| u.as_str()) else {
+                    continue;
+                };
+                let tags = parse_tag_array(neuron.get("tags"));
+                if !tags.is_empty() {
+                    neuron_tags.insert(uuid.to_string(), tags);
+                }
+            }
+        }
+        Self { tags, neuron_tags }
     }
 
     /// Insert or replace a tag by name.
@@ -187,6 +223,24 @@ fn creature_value_with_meta(
     if !meta.tags.is_empty() {
         value["tags"] = serde_json::to_value(&meta.tags).map_err(|e| e.to_string())?;
     }
+    // Per-neuron provenance (GRQ #4491). Keyed by the neuron uuid the source
+    // carried, which survives training, and reconciled against the neurons
+    // actually written — a sidecar entry naming a neuron that is not in the
+    // output is dropped rather than inventing one.
+    if !meta.neuron_tags.is_empty()
+        && let Some(neurons) = value.get_mut("neurons").and_then(|n| n.as_array_mut())
+    {
+        for neuron in neurons.iter_mut() {
+            let Some(uuid) = neuron.get("uuid").and_then(|u| u.as_str()) else {
+                continue;
+            };
+            let Some(tags) = meta.neuron_tags.get(uuid) else {
+                continue;
+            };
+            let tags = serde_json::to_value(tags).map_err(|e| e.to_string())?;
+            neuron["tags"] = tags;
+        }
+    }
     Ok(value)
 }
 
@@ -225,7 +279,8 @@ mod tests {
       "input": 1,
       "output": 1,
       "forwardOnly": true,
-      "neurons": [{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}],
+      "neurons": [{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY",
+                   "tags":[{"name":"discovery","value":"🔬 scan 42"}]}],
       "synapses": [{"fromUUID":"input-0","toUUID":"o1","weight":1.0}],
       "tags": [
         {"name":"name","value":"Tiny"},
@@ -258,6 +313,61 @@ mod tests {
         // that is an *input* to the creature hash — and must survive.
         assert_eq!(value["neurons"][0]["uuid"], "o1");
         assert_eq!(value["tags"][0]["name"], "name");
+    }
+
+    /// GRQ #4491: per-neuron provenance is parsed into the sidecar and
+    /// re-attached by uuid on write.
+    #[test]
+    fn per_neuron_tags_round_trip_by_uuid() {
+        let creature = parse_creature_json(TINY_TAGGED).unwrap();
+        let meta = CreatureMeta::from_creature_json(TINY_TAGGED);
+        assert_eq!(meta.neuron_tags.len(), 1, "{:?}", meta.neuron_tags);
+        assert_eq!(meta.neuron_tags["o1"][0].name, "discovery");
+
+        let width = ObservationWidth::of(&creature).unwrap();
+        let text = serialize_creature_with_meta(&creature, &meta, width).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["neurons"][0]["tags"][0]["name"], "discovery");
+        assert_eq!(value["neurons"][0]["tags"][0]["value"], "🔬 scan 42");
+    }
+
+    /// A sidecar entry naming a neuron the written creature does not have is
+    /// dropped — the writer never invents a neuron to hang provenance on.
+    #[test]
+    fn a_tag_for_an_absent_neuron_is_not_written() {
+        let creature = parse_creature_json(TINY_TAGGED).unwrap();
+        let mut meta = CreatureMeta::from_creature_json(TINY_TAGGED);
+        meta.neuron_tags.insert(
+            "ghost".to_string(),
+            vec![CreatureTag {
+                name: "discovery".to_string(),
+                value: "👻".to_string(),
+            }],
+        );
+        let width = ObservationWidth::of(&creature).unwrap();
+        let text = serialize_creature_with_meta(&creature, &meta, width).unwrap();
+        assert!(!text.contains("👻"), "{text}");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["neurons"].as_array().unwrap().len(), 1);
+    }
+
+    /// A creature whose neurons carry no tags gains none.
+    #[test]
+    fn an_untagged_neuron_stays_untagged() {
+        let untagged = r#"{
+          "input": 1,
+          "output": 1,
+          "forwardOnly": true,
+          "neurons": [{"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}],
+          "synapses": [{"fromUUID":"input-0","toUUID":"o1","weight":1.0}]
+        }"#;
+        let creature = parse_creature_json(untagged).unwrap();
+        let meta = CreatureMeta::from_creature_json(untagged);
+        assert!(meta.neuron_tags.is_empty());
+        let width = ObservationWidth::of(&creature).unwrap();
+        let text = serialize_creature_with_meta(&creature, &meta, width).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert!(value["neurons"][0].get("tags").is_none(), "{text}");
     }
 
     #[test]

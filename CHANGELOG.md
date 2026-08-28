@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Per-neuron `tags` survive training. `NeuronExport` models no `tags` field, so
+  every neuron's discovery / intelligent-design provenance was dropped on write:
+  all seven `*-backprop.json` samples in GRQ-sampler carry 0 tagged neurons
+  where the champions they descend from carry ~2,500. GRQ's check-in guard
+  (GRQ #4216) refuses a candidate that lost the source's per-neuron tags, so
+  once that guard reached the Backprop worker (GRQ #4318) no trained creature
+  could be published at all — the failure was reported as a rebase defect
+  (GRQ #4491) because a rebase faithfully carries forward the empty tag set it
+  is handed. `CreatureMeta` now keeps a per-uuid sidecar alongside the
+  creature-level tags and re-attaches it on write, reconciled against the
+  neurons actually written.
+
 ### Added
 
 - Every trained creature is validated by `neat_core::creature_validate`

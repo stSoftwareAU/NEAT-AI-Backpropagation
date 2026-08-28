@@ -27,8 +27,10 @@ const TAGGED_CHAIN: &str = r#"{
   "uuid":"3f1c2b6a-0000-5000-8000-000000000001",
   "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
   "neurons":[
-    {"type":"hidden","uuid":"h1","bias":0.0,"squash":"IDENTITY"},
-    {"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"}
+    {"type":"hidden","uuid":"h1","bias":0.0,"squash":"IDENTITY",
+     "tags":[{"name":"discovery","value":"🔬 scan 42"}]},
+    {"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY",
+     "tags":[{"name":"intelligentDesign","value":"💍 grafted"}]}
   ],
   "synapses":[
     {"fromUUID":"input-0","toUUID":"h1","weight":1.0},
@@ -201,4 +203,49 @@ fn dropping_the_creature_uuid_keeps_tags_and_per_neuron_uuids() {
         synapse_ends(&trained),
         "synapse endpoints must be preserved verbatim"
     );
+}
+
+/// GRQ #4491: per-neuron provenance survives training on both write surfaces.
+///
+/// `NeuronExport` models no `tags` field, so every neuron's discovery /
+/// intelligent-design tag used to be dropped on write. GRQ's #4216 check-in
+/// guard refuses a candidate that lost the source's per-neuron tags, so once
+/// that guard reached the Backprop worker no trained creature could be
+/// published at all.
+#[test]
+fn per_neuron_provenance_tags_survive_training_on_both_surfaces() {
+    let (dir, data) = corpus();
+    let out_dir = dir.path().join("out");
+    let response = train_tagged_chain(&data, &out_dir);
+
+    let source: Value = serde_json::from_str(TAGGED_CHAIN).unwrap();
+    let on_disk_text = fs::read_to_string(out_dir.join("best.json")).unwrap();
+
+    let neuron_tags = |value: &Value| -> Vec<(String, Value)> {
+        value["neurons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| {
+                (
+                    n["uuid"].as_str().unwrap().to_string(),
+                    n.get("tags").cloned().unwrap_or(Value::Null),
+                )
+            })
+            .collect()
+    };
+
+    let expected = neuron_tags(&source);
+    assert!(
+        expected.iter().all(|(_, tags)| tags.is_array()),
+        "the fixture must actually carry per-neuron tags: {expected:?}"
+    );
+    for surface in [&response.best_creature_json, &on_disk_text] {
+        let trained: Value = serde_json::from_str(surface).unwrap();
+        assert_eq!(
+            neuron_tags(&trained),
+            expected,
+            "per-neuron tags must be preserved verbatim: {surface}"
+        );
+    }
 }
