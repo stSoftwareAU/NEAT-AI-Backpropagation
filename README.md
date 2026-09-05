@@ -242,7 +242,10 @@ than costing a duplicate scorer run.
   `strategy`, the focus neuron, the UUIDs of every selected neuron, the
   from/to pair of every selected synapse, how many genes actually moved,
   and the candidate's relative path. A block whose genes all held still
-  writes no candidate and is counted in `unmovedBlocks`.
+  writes no candidate and is counted in `unmovedBlocks`. The listing is
+  literal, so on the GRQ creature the `global` row alone names all 22k
+  synapses — drop `global` from `--strategies` when only the small blocks
+  matter.
 
 ```mermaid
 flowchart TD
