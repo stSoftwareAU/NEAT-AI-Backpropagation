@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Blockwise candidate generation: `blocks` accumulates the corpus **once**
+  and applies that one learning signal to a small region at a time instead
+  of moving every gene together. Five block strategies sit beside the
+  whole-creature `global` apply — `neuron` (a neuron's bias plus every
+  incident synapse), `neighbourhood` (a neuron plus its neighbours out to
+  `--radius` hops), `output-head`, `subgraph` (a seeded random connected
+  walk) and `top-genes` (the loudest genes by proposal magnitude) — with
+  focus neurons ranked by how much learning wants to move them. Every
+  candidate is written as a standalone creature, gated by
+  `neat_core::creature_validate`, and scored independently when `--scorer`
+  is supplied; `blocks.json` records the strategy, focus, selected neuron
+  UUIDs, each selected synapse's export index and endpoints, the block's
+  `geneCount`, moved-gene counts, MSE and scorer deltas, and `scoreWin`
+  against `--min-score-improvement`. Nothing is dropped silently: empty and
+  duplicate blocks are reported as `droppedEmptyBlocks` /
+  `droppedDuplicateBlocks`, a block whose genes all held still is counted in
+  `unmovedBlocks` instead of writing a candidate identical to the incumbent,
+  and `--radius 0` is refused because it would turn every neighbourhood block
+  into a duplicate of its `neuron` block.
+  `scripts/run-blockwise-benchmark.sh` runs `global` and the blockwise
+  strategies over the same creature, corpus and step scale and prints
+  candidates, scorer wins, elapsed seconds and wins/hour for each. On its
+  generated corpus, one accumulation pass yielded 1 candidate / 1 scorer win
+  for `global` against 14 candidates / 14 wins for the blockwise strategies
+  (best `scoreDelta` `+4.29e-4` global vs `+3.87e-4` blockwise) — more
+  independently judged candidates for the same corpus cost, on a creature too
+  small for the whole-creature apply to overshoot. Point it at the production
+  creature with `CREATURE=` / `DATA_DIR=` to measure the comparison there
+  (issue #105).
+
 - Scored step-scale ladder: `train --acceptance scorer --step-scale-ladder`
   applies the epoch's single accumulation at every rung of a configurable grid
   (default `0.0001,0.00025,0.0005,0.001,0.0025,0.005,0.01`), scores the whole

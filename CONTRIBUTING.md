@@ -33,7 +33,8 @@ The `neat-core` path dependency in
 - **codespell** — `pip install --user codespell`
 - **python3** — used by `scripts/check-branch-protection.sh`,
   `scripts/check-renovate-config.sh`,
-  `scripts/run-scorer-guided-experiment.sh` and
+  `scripts/run-scorer-guided-experiment.sh`,
+  `scripts/run-blockwise-benchmark.sh` and
   `scripts/run-step-scale-ladder-experiment.sh`
 
 ## Local gate
