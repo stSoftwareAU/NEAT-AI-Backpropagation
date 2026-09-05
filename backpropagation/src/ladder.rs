@@ -15,14 +15,14 @@
 
 use crate::acceptance::{AcceptReason, ScorerAcceptance};
 use crate::backprop::{
-    ApplyDeltaCounts, ApplyOptions, BackpropConfig, LearningSignal, apply_learnings_with,
-    count_apply_deltas,
+    ApplyDeltaCounts, ApplyOptions, BackpropConfig, LearningSignal, count_apply_deltas,
 };
 use crate::creature_io::ObservationWidth;
 use crate::mse::compute_mse_selected;
 use crate::sampling::RecordSelection;
 use crate::scorer::{ScoreResult, score_creatures};
 use crate::train::TrainCandidateRecord;
+use crate::trust_region::{TrustRegion, UpdateStats, apply_within_trust_region};
 use neat_core::{CreatureExport, compile_creature};
 use std::path::Path;
 
@@ -108,6 +108,8 @@ pub(crate) struct LadderEpochRequest<'a> {
     pub learning_rate: f64,
     /// Apply options; each rung overrides `step_scale`.
     pub apply: ApplyOptions,
+    /// Whole-creature update budget every rung is applied within (#109).
+    pub trust_region: TrustRegion,
     /// The step-scale grid, already validated.
     pub ladder: &'a [f64],
     /// Source observation width every candidate is checked against.
@@ -141,8 +143,17 @@ pub(crate) struct LadderEpochOutcome {
     pub score: Option<ScoreResult>,
     /// Verdict for [`Self::candidate`].
     pub reason: AcceptReason,
-    /// Step scale [`Self::candidate`] was applied at.
+    /// Rung [`Self::candidate`] was requested at.
     pub step_scale: f64,
+    /// Step scale that rung actually applied once the trust region had
+    /// rescaled its proposal (#109).
+    pub realised_step_scale: f64,
+    /// Aggregate norms of the update [`Self::candidate`] carries (#109).
+    pub update: UpdateStats,
+    /// Factor the trust region multiplied that rung's proposal by (#109).
+    pub update_scale: f64,
+    /// Genes the changed-gene budget held back on that rung (#109).
+    pub trimmed_genes: usize,
     /// Rungs the epoch evaluated.
     pub rungs: u32,
     /// One journal line per rung, in ladder order.
@@ -153,8 +164,16 @@ pub(crate) struct LadderEpochOutcome {
 struct Rung {
     /// Position in the ladder — the journalled `attempt`.
     index: usize,
-    /// Step scale this rung applied.
+    /// Step scale this rung requested.
     step_scale: f64,
+    /// Step scale it applied after the trust region rescaled it (#109).
+    realised_step_scale: f64,
+    /// Aggregate norms of the update this rung wrote (#109).
+    update: UpdateStats,
+    /// Factor the trust region multiplied this rung's proposal by (#109).
+    update_scale: f64,
+    /// Genes the changed-gene budget held back on this rung (#109).
+    trimmed_genes: usize,
     /// Candidate serialisation handed to the scorer.
     json: String,
     /// Slice MSE of the candidate.
@@ -175,7 +194,7 @@ struct Rung {
 pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpochOutcome, String> {
     validate_step_scale_ladder(req.ladder)?;
     let apply_at = |step_scale: f64| {
-        apply_learnings_with(
+        apply_within_trust_region(
             req.incumbent,
             req.learning,
             req.config,
@@ -184,12 +203,14 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
                 step_scale,
                 ..req.apply
             },
+            req.trust_region,
         )
     };
 
     let mut rungs = Vec::with_capacity(req.ladder.len());
     for (index, &step_scale) in req.ladder.iter().enumerate() {
-        let candidate = apply_at(step_scale);
+        let applied = apply_at(step_scale)?;
+        let candidate = applied.candidate;
         let mut net = compile_creature(&candidate).map_err(|e| e.to_string())?;
         let (mse, _) =
             compute_mse_selected(&candidate, &mut net, req.training_data, req.selection)?;
@@ -203,6 +224,10 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
         rungs.push(Rung {
             index,
             step_scale,
+            realised_step_scale: applied.realised_step_scale,
+            update: applied.realised,
+            update_scale: applied.scale,
+            trimmed_genes: applied.trimmed_genes,
             json: req.width.checked_json_pretty(&candidate)?,
             mse,
             score: None,
@@ -213,20 +238,32 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
     // One scorer invocation for the whole ladder: `rust_scorer` scores a
     // directory of creatures, so the marginal cost of a rung is a file rather
     // than a process launch and another corpus pass.
-    let batch: Vec<(String, &str)> = rungs
-        .iter()
-        .filter(|rung| !rung.screened_out)
-        .map(|rung| (format!("rung-{}", rung.index), rung.json.as_str()))
-        .collect();
+    //
+    // Rungs that produced the *same creature* are scored once and share the
+    // result. A trust region clips every rung above its budget to the same
+    // update (#109), so a budgeted grid can hold several byte-identical
+    // candidates — scoring each of them would spend the run's scarcest
+    // resource to learn the same number.
+    let mut batch: Vec<(String, &str)> = Vec::new();
+    let mut score_of: Vec<Option<usize>> = vec![None; rungs.len()];
+    for rung in rungs.iter().filter(|rung| !rung.screened_out) {
+        let existing = batch
+            .iter()
+            .position(|(_, json)| *json == rung.json.as_str());
+        score_of[rung.index] = Some(existing.unwrap_or_else(|| {
+            batch.push((format!("rung-{}", rung.index), rung.json.as_str()));
+            batch.len() - 1
+        }));
+    }
     if !batch.is_empty() {
         let request: Vec<(&str, &str)> = batch
             .iter()
             .map(|(stem, json)| (stem.as_str(), *json))
             .collect();
         let scored = score_creatures(req.scorer, &request, req.training_data, req.score_dir)?;
-        // Checked, not assumed: `zip` truncates silently, and a short result set
-        // would leave a rung unscored — which `rung_reason` would then journal
-        // as an MSE pre-screen rejection that never happened.
+        // Checked, not assumed: a short result set would leave a rung unscored
+        // — which `rung_reason` would then journal as an MSE pre-screen
+        // rejection that never happened.
         if scored.len() != request.len() {
             return Err(format!(
                 "scorer returned {} score(s) for {} ladder candidate(s)",
@@ -234,12 +271,10 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
                 request.len()
             ));
         }
-        for (rung, score) in rungs
-            .iter_mut()
-            .filter(|rung| !rung.screened_out)
-            .zip(scored)
-        {
-            rung.score = Some(score);
+        for rung in rungs.iter_mut() {
+            if let Some(slot) = score_of[rung.index] {
+                rung.score = Some(scored[slot].clone());
+            }
         }
     }
 
@@ -273,6 +308,10 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
                 epoch: req.epoch,
                 attempt: rung.index as u32,
                 step_scale: rung.step_scale,
+                realised_step_scale: rung.realised_step_scale,
+                update: rung.update,
+                update_scale: rung.update_scale,
+                trimmed_genes: rung.trimmed_genes,
                 learning_rate: req.learning_rate,
                 incumbent_mse: req.incumbent_mse,
                 candidate_mse: rung.mse,
@@ -288,11 +327,11 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
 
     let rung = &rungs[reported];
     let reason = journal[reported].accept_reason;
-    // Rebuilt rather than retained: `apply_learnings_with` is a pure function
-    // of the incumbent, the learning and the step scale, so re-applying the
-    // winning rung reproduces the exact candidate that was scored without
-    // holding every rung's creature in memory at once.
-    let candidate = apply_at(rung.step_scale);
+    // Rebuilt rather than retained: `apply_within_trust_region` is a pure
+    // function of the incumbent, the learning, the step scale and the budget,
+    // so re-applying the winning rung reproduces the exact candidate that was
+    // scored without holding every rung's creature in memory at once.
+    let candidate = apply_at(rung.step_scale)?.candidate;
     Ok(LadderEpochOutcome {
         deltas: count_apply_deltas(req.incumbent, &candidate, req.config.plank_constant),
         candidate,
@@ -300,6 +339,10 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
         score: rung.score.clone(),
         reason,
         step_scale: rung.step_scale,
+        realised_step_scale: rung.realised_step_scale,
+        update: rung.update,
+        update_scale: rung.update_scale,
+        trimmed_genes: rung.trimmed_genes,
         rungs: rungs.len() as u32,
         journal,
     })

@@ -15,6 +15,7 @@ use neat_ai_backpropagation::train::{
     AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, TrainCreature, TrainRequest,
     default_output_dir, resolve_acceptance, run_train,
 };
+use neat_ai_backpropagation::trust_region::TrustRegion;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -151,6 +152,28 @@ fn train_backprop_config(
     }
 }
 
+/// Build the `train` trust-region budget from its CLI arguments (#109).
+///
+/// All-`None` is the fixed-step parity mode; the library validates each budget
+/// before the corpus is read.
+fn train_trust_region(
+    l2: Option<f64>,
+    rms: Option<f64>,
+    relative_rms: Option<f64>,
+    bias_l2: Option<f64>,
+    weight_l2: Option<f64>,
+    max_changed_genes: Option<usize>,
+) -> TrustRegion {
+    TrustRegion {
+        l2,
+        rms,
+        relative_rms,
+        bias_l2,
+        weight_l2,
+        max_changed_genes,
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Accumulate learning on a creature and write a parity dump.
@@ -224,6 +247,30 @@ enum Commands {
         /// Multiply (proposed − current) by this factor before writing.
         #[arg(long, default_value_t = DEFAULT_STEP_SCALE)]
         step_scale: f64,
+        /// Trust region (#109): maximum L2 norm of the whole-creature update.
+        ///
+        /// The proposal is measured at --step-scale and the *whole* update is
+        /// rescaled when it exceeds the budget, so the aggregate move stays a
+        /// stable size as the creature grows. Omit every --trust-region-* flag
+        /// for the fixed-step parity mode.
+        #[arg(long)]
+        trust_region_l2: Option<f64>,
+        /// Trust region: maximum RMS per-gene delta of the update.
+        #[arg(long)]
+        trust_region_rms: Option<f64>,
+        /// Trust region: maximum RMS *relative* parameter change (Δ / value).
+        #[arg(long)]
+        trust_region_relative_rms: Option<f64>,
+        /// Trust region: maximum L2 norm of the bias genes alone.
+        #[arg(long)]
+        trust_region_bias_l2: Option<f64>,
+        /// Trust region: maximum L2 norm of the weight genes alone.
+        #[arg(long)]
+        trust_region_weight_l2: Option<f64>,
+        /// Trust region: maximum genes one update may move. The largest moves
+        /// are kept; the rest are held at their incumbent value.
+        #[arg(long)]
+        trust_region_max_genes: Option<usize>,
         /// Comma-separated step scales to score as a ladder (#106).
         ///
         /// Requires `--acceptance scorer`. The epoch's one accumulation is
@@ -505,6 +552,12 @@ fn run() -> Result<(), String> {
             maximum_bias_adjustment_scale,
             maximum_weight_adjustment_scale,
             step_scale,
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
             step_scale_ladder,
             outputs_only,
             hidden_only,
@@ -531,6 +584,14 @@ fn run() -> Result<(), String> {
                 Some(raw) => parse_step_scale_ladder(raw)?,
                 None => Vec::new(),
             };
+            let trust_region = train_trust_region(
+                trust_region_l2,
+                trust_region_rms,
+                trust_region_relative_rms,
+                trust_region_bias_l2,
+                trust_region_weight_l2,
+                trust_region_max_genes,
+            );
             let result = run_train(TrainRequest {
                 creature: TrainCreature::Path(&creature),
                 training_data: &training_data,
@@ -546,6 +607,7 @@ fn run() -> Result<(), String> {
                     outputs_only,
                     hidden_only,
                 },
+                trust_region,
                 acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen)?,
                 accept_always,
                 max_backtracks,
@@ -1151,6 +1213,85 @@ mod tests {
             parse_step_scale_ladder(&step_scale_ladder.expect("explicit grid")).unwrap(),
             vec![0.002, 0.02]
         );
+    }
+
+    /// Every budget is off unless it is asked for — an existing `train`
+    /// invocation keeps the fixed-step apply (#109).
+    #[test]
+    fn the_trust_region_budgets_are_off_by_default() {
+        let Commands::Train {
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
+            ..
+        } = parse_train(&[])
+        else {
+            panic!("expected train");
+        };
+        let region = train_trust_region(
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
+        );
+        assert_eq!(region, TrustRegion::default());
+        assert!(!region.is_active(), "the parity mode is the default");
+    }
+
+    #[test]
+    fn the_trust_region_flags_build_the_library_budget() {
+        let Commands::Train {
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
+            ..
+        } = parse_train(&[
+            "--trust-region-l2",
+            "0.5",
+            "--trust-region-rms",
+            "0.01",
+            "--trust-region-relative-rms",
+            "0.02",
+            "--trust-region-bias-l2",
+            "0.1",
+            "--trust-region-weight-l2",
+            "0.4",
+            "--trust-region-max-genes",
+            "512",
+        ])
+        else {
+            panic!("expected train");
+        };
+        let region = train_trust_region(
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
+        );
+        // Every flag must land on its own budget — a swapped pair would show
+        // up here as a mismatched field, not as two green tests.
+        assert_eq!(
+            region,
+            TrustRegion {
+                l2: Some(0.5),
+                rms: Some(0.01),
+                relative_rms: Some(0.02),
+                bias_l2: Some(0.1),
+                weight_l2: Some(0.4),
+                max_changed_genes: Some(512),
+            }
+        );
+        region.validate().expect("a positive budget is usable");
     }
 
     #[test]

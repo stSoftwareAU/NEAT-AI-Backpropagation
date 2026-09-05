@@ -76,6 +76,17 @@ const char *neat_backprop_version(void);
  *     "maximumBiasAdjustmentScale": 1.0,
  *     "maximumWeightAdjustmentScale": 1.0,
  *     "stepScale": 0.01,
+ *     // Whole-creature update budget (#109). Every field is optional and off
+ *     // by default, which is the historical fixed-step apply. A configured
+ *     // budget rescales the epoch's whole proposal to fit it.
+ *     "trustRegion": {
+ *       "l2": null,              // max L2 norm of the update
+ *       "rms": null,             // max RMS per-gene delta
+ *       "relativeRms": null,     // max RMS relative change (delta / value)
+ *       "biasL2": null,          // max L2 norm of the bias genes
+ *       "weightL2": null,        // max L2 norm of the weight genes
+ *       "maxChangedGenes": null  // max genes one update may move
+ *     },
  *     "stepScaleLadder": [],  // scorer-guided step-scale grid; [] = line search
  *     "outputsOnly": false,
  *     "hiddenOnly": false,

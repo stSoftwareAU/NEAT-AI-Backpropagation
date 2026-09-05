@@ -25,6 +25,7 @@ pub mod tags;
 pub mod targets;
 pub mod trace;
 pub mod train;
+pub mod trust_region;
 pub mod validate;
 
 pub use backprop::{
@@ -87,5 +88,9 @@ pub use train::{
     AcceptReason, AcceptanceMode, BEST_TRACE_FILE, DEFAULT_MIN_SCORE_IMPROVEMENT,
     DEFAULT_STEP_SCALE, FAILED_TRACE_DIR, ScorerAcceptance, TrainCandidateRecord, TrainCreature,
     TrainEpochRecord, TrainJournalHeader, TrainRequest, TrainResult, resolve_acceptance, run_train,
+};
+pub use trust_region::{
+    TrustRegion, TrustRegionApply, UpdateNorms, UpdateStats, apply_within_trust_region,
+    measure_update,
 };
 pub use validate::TrainedTopology;

@@ -20,6 +20,7 @@ use neat_ai_backpropagation::train::{
     TrainCandidateRecord, TrainCreature, TrainEpochRecord, TrainJournalHeader, TrainRequest,
     TrainResult, resolve_acceptance, run_train,
 };
+use neat_ai_backpropagation::trust_region::TrustRegion;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -162,6 +163,7 @@ fn train_with_backtracks(
         accept_always: false,
         max_backtracks,
         step_scale_ladder: &[],
+        trust_region: TrustRegion::default(),
         trace_store: None,
     })
 }
@@ -513,6 +515,7 @@ fn accept_always_is_refused_under_scorer_guided_acceptance() {
         accept_always: true,
         max_backtracks: 0,
         step_scale_ladder: &[],
+        trust_region: TrustRegion::default(),
         trace_store: None,
     })
     .expect_err("must refuse");
@@ -584,6 +587,7 @@ fn a_failing_scorer_fails_the_run() {
         accept_always: false,
         max_backtracks: 0,
         step_scale_ladder: &[],
+        trust_region: TrustRegion::default(),
         trace_store: None,
     })
     .expect_err("a dead scorer must not be reconciled as a rejection");

@@ -434,3 +434,55 @@ fn candidate_metadata_names_exactly_the_genes_that_moved() {
     assert!(head.synapses.iter().all(|s| s.to_uuid == "o1"));
     assert_eq!(head.hidden_biases, 0);
 }
+
+/// Every block candidate records the size of the update it actually wrote, so
+/// a blockwise run can correlate the realised move with `scoreDelta` (#109).
+#[test]
+fn every_block_records_its_realised_update_norm() {
+    let fixture = Fixture::new(&["0.5"]);
+    let out_name = "out-norms";
+    let summary = blocks(
+        &fixture,
+        out_name,
+        &BlockPlan {
+            strategies: vec![BlockStrategy::Global, BlockStrategy::Neuron],
+            blocks_per_strategy: 2,
+            ..BlockPlan::default()
+        },
+        false,
+        true,
+    );
+    let text = fs::read_to_string(fixture.root.join(out_name).join("blocks.json"))
+        .expect("blocks.json written");
+    let reloaded: BlocksSummary = serde_json::from_str(&text).expect("blocks.json parses");
+    assert_eq!(reloaded.candidates.len(), summary.candidates.len());
+
+    let mut measured = 0usize;
+    for candidate in &reloaded.candidates {
+        let moved = candidate.hidden_biases
+            + candidate.output_biases
+            + candidate.hidden_weights
+            + candidate.output_weights;
+        assert_eq!(
+            candidate.update.total.changed, moved,
+            "{}: the norms and the movement counts must agree",
+            candidate.label
+        );
+        assert_eq!(
+            candidate.update.biases.changed + candidate.update.weights.changed,
+            moved,
+            "{}: bias / weight must partition the update",
+            candidate.label
+        );
+        if moved > 0 {
+            assert!(
+                candidate.update.total.l2 > 0.0,
+                "{}: a block that moved genes has a non-zero update",
+                candidate.label
+            );
+            assert!(candidate.update.total.l1 >= candidate.update.total.l2);
+            measured += 1;
+        }
+    }
+    assert!(measured > 0, "at least one block moved a gene");
+}

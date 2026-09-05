@@ -16,6 +16,7 @@ use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
 use neat_ai_backpropagation::train::{
     AcceptanceMode, TrainCreature, TrainRequest, TrainResult, run_train,
 };
+use neat_ai_backpropagation::trust_region::TrustRegion;
 use neat_core::parse_creature_json;
 use serde_json::{Value, json};
 use std::fs;
@@ -98,6 +99,7 @@ fn train(creature_path: &Path, data: &Path, out: &Path) -> Result<TrainResult, S
         accept_always: false,
         max_backtracks: 0,
         step_scale_ladder: &[],
+        trust_region: TrustRegion::default(),
         trace_store: None,
     })
 }

@@ -22,6 +22,7 @@ use crate::targets::{
     ArmSample, SelectionComparison, TargetSelection, TargetStrategy, compare_arms,
 };
 use crate::train::{AcceptanceMode, resolve_acceptance};
+use crate::trust_region::{UpdateStats, measure_update};
 use crate::validate::TrainedTopology;
 use neat_core::{CreatureExport, compile_creature};
 use rand::SeedableRng;
@@ -76,6 +77,10 @@ pub struct BlockCandidateRecord {
     pub hidden_weights: usize,
     /// Output-target synapses that actually moved.
     pub output_weights: usize,
+    /// Aggregate norms of the update this block actually wrote — the realised
+    /// move whose size is correlated with `scoreDelta` (#109).
+    #[serde(default)]
+    pub update: UpdateStats,
     /// Train-slice MSE of the candidate (absent under `--skip-mse`, or when no
     /// gene moved).
     #[serde(default)]
@@ -342,6 +347,7 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
             apply,
         );
         let deltas = count_apply_deltas(&incumbent, &candidate, req.config.plank_constant);
+        let update = measure_update(&incumbent, &candidate, req.config.plank_constant)?;
         let (neurons, synapses) = describe(&incumbent, block);
         let mut record = BlockCandidateRecord {
             strategy: block.strategy,
@@ -355,6 +361,7 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
             output_biases: deltas.output_biases,
             hidden_weights: deltas.hidden_weights,
             output_weights: deltas.output_weights,
+            update,
             train_mse: None,
             mse_delta: None,
             score: None,

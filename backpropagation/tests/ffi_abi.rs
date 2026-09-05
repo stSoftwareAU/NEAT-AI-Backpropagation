@@ -215,6 +215,51 @@ fn apply_filters_are_forwarded() {
     assert!((response.best_mse - response.baseline_mse).abs() < 1e-12);
 }
 
+/// The whole-creature update budget is reachable over the ABI, not only from
+/// the CLI (#109) — a tight budget must bind the in-process trainer too.
+#[test]
+fn the_trust_region_budget_is_forwarded() {
+    let (dir, data) = corpus();
+    let out_dir = dir.path().join("out");
+    let mut req = request(CHAIN, &data, &out_dir);
+    req["learningRate"] = json!(0.5);
+    req["trustRegion"] = json!({ "l2": 1e-5 });
+    let (status, payload) = call_train(&req.to_string());
+    assert_eq!(status, NEAT_BACKPROP_OK, "train failed: {payload}");
+
+    let journal = fs::read_to_string(out_dir.join("journal.jsonl")).unwrap();
+    let header: Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+    assert_eq!(header["trustRegion"]["l2"], json!(1e-5));
+    let epoch: Value = serde_json::from_str(
+        journal
+            .lines()
+            .find(|line| line.contains("\"kind\":\"epoch\""))
+            .expect("epoch line"),
+    )
+    .unwrap();
+    let realised = epoch["update"]["total"]["l2"].as_f64().expect("update L2");
+    assert!(
+        realised <= 1e-5 * 1.000_001,
+        "budget not enforced: {realised}"
+    );
+    assert!(
+        epoch["realisedStepScale"].as_f64().unwrap() < epoch["stepScale"].as_f64().unwrap(),
+        "a bound update must journal a smaller realised step"
+    );
+}
+
+/// An unusable budget must fail the call, not train with it ignored.
+#[test]
+fn an_unusable_trust_region_budget_fails_the_call() {
+    let (dir, data) = corpus();
+    let out_dir = dir.path().join("out");
+    let mut req = request(CHAIN, &data, &out_dir);
+    req["trustRegion"] = json!({ "l2": 0.0 });
+    let (status, payload) = call_train(&req.to_string());
+    assert_eq!(status, NEAT_BACKPROP_ERR_TRAIN_FAILED, "{payload}");
+    assert!(payload.contains("trust-region"), "unexpected: {payload}");
+}
+
 #[test]
 fn malformed_request_json_reports_an_invalid_argument() {
     let (status, payload) = call_train("{ not json");

@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Trust-region update budget for the whole-creature apply: `--step-scale` is a
+  *per-gene* factor, so the aggregate move grows with the number and magnitude
+  of the genes that move — the `0.01` default was justified against a
+  ~16.6k-parameter GRQ network that has since grown to thousands of neurons
+  and tens of thousands of synapses. `train` now measures the update it is
+  about to apply (changed genes, L1 / L2 / RMS, relative L2 and relative RMS,
+  reported for the whole update and split by bias / weight and hidden /
+  output) and rescales the whole proposal to fit a configured budget:
+  `--trust-region-l2`, `--trust-region-rms`, `--trust-region-relative-rms`,
+  `--trust-region-bias-l2`, `--trust-region-weight-l2` and
+  `--trust-region-max-genes` (an L0 budget that keeps the largest moves and
+  holds the rest). The tightest budget decides the rescale, and the trust
+  region only ever shrinks the step — never amplifies it. Every budget is off
+  by default, which is the historical fixed-step apply byte for byte. The run
+  header records the configured `trustRegion`; every epoch and candidate line
+  records the requested `stepScale`, the `realisedStepScale` actually applied,
+  the `updateScale` the budget imposed, the `trimmedGenes` it held back and the
+  realised `update` norms, so a scorer-guided rung's move size sits
+  beside the `scoreDelta` it produced, and `blocks.json` records the same
+  norms per block candidate. An unusable budget (zero, negative, non-finite,
+  or `maxChangedGenes: 0`) is refused before the corpus is read, and no budget
+  is allowed to "bound" a non-finite update norm, an unmeasurable
+  `relativeRms` fails rather than being read as satisfied, and a budget that
+  underflows the step to zero is refused instead of inverting into a full step.
+  Because a budget clips every step above it to the same update, the realised
+  step is snapped down to 12 significant digits: a ladder's clipped rungs are
+  scored once instead of once per rung, and the backtracking line search halves
+  the step it realised rather than re-applying an identical candidate.
+  `scripts/run-trust-region-experiment.sh` sweeps several budgets against an
+  unbudgeted control arm and prints accepted epochs, scorer gain, realised
+  update norm and wins/hour per arm. The budget is reachable over the C ABI as
+  `trustRegion` (issue #109).
+
 - Evidence-driven sparse target selection: `blocks` no longer spreads its
   scarce scorer runs over focus neurons picked without regard to the learning
   signal. `--target-selection evidence` (the new default) ranks candidate

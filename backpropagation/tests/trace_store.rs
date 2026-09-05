@@ -13,6 +13,7 @@
 //!   every gene and per-gene `trace` state.
 
 use neat_ai_backpropagation::trace::{NeuronTraceState, SynapseTraceState};
+use neat_ai_backpropagation::trust_region::TrustRegion;
 use neat_ai_backpropagation::{
     AcceptanceMode, ApplyOptions, BackpropConfig, TrainCreature, TrainRequest, run_train,
 };
@@ -82,6 +83,7 @@ fn train(
         accept_always: false,
         max_backtracks: 0,
         step_scale_ladder: &[],
+        trust_region: TrustRegion::default(),
         trace_store: trace_store.map(PathBuf::as_path),
     })
     .unwrap();
