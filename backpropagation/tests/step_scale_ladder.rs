@@ -22,6 +22,7 @@ use neat_ai_backpropagation::train::{
     AcceptReason, AcceptanceMode, ScorerAcceptance, TrainCandidateRecord, TrainCreature,
     TrainEpochRecord, TrainJournalHeader, TrainRequest, TrainResult, run_train,
 };
+use neat_ai_backpropagation::trust_region::TrustRegion;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -200,6 +201,7 @@ fn train(
         // so the halving budget must not add attempts of its own.
         max_backtracks: 6,
         step_scale_ladder: ladder,
+        trust_region: TrustRegion::default(),
         trace_store: None,
     })
 }

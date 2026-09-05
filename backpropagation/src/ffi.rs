@@ -28,6 +28,7 @@ use crate::train::{
     BEST_TRACE_FILE, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, FAILED_TRACE_DIR,
     TrainCreature, TrainRequest, resolve_acceptance, run_train,
 };
+use crate::trust_region::TrustRegion;
 use serde::{Deserialize, Serialize};
 use std::ffi::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -221,6 +222,12 @@ pub struct TrainAbiRequest {
     /// Multiply `(proposed − current)` by this factor before writing.
     #[serde(default = "default_step_scale")]
     pub step_scale: f64,
+    /// Whole-creature update budget the apply is rescaled to fit (#109).
+    ///
+    /// Every budget is off by default, which is the fixed-step parity mode —
+    /// the candidate is exactly what `stepScale` alone produces.
+    #[serde(default)]
+    pub trust_region: TrustRegion,
     /// Step scales to score as a ladder under `acceptance: "scorer"` (#106).
     ///
     /// Empty (the default) keeps the backtracking line search; a non-empty
@@ -275,6 +282,7 @@ impl Default for TrainAbiRequest {
             maximum_bias_adjustment_scale: default_adjustment_scale(),
             maximum_weight_adjustment_scale: default_adjustment_scale(),
             step_scale: default_step_scale(),
+            trust_region: TrustRegion::default(),
             step_scale_ladder: Vec::new(),
             outputs_only: false,
             hidden_only: false,
@@ -366,6 +374,7 @@ pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
             outputs_only: request.outputs_only,
             hidden_only: request.hidden_only,
         },
+        trust_region: request.trust_region,
         acceptance,
         accept_always: request.accept_always,
         max_backtracks: request.max_backtracks,

@@ -8,8 +8,8 @@ pub use crate::acceptance::{
     resolve_acceptance,
 };
 use crate::backprop::{
-    ApplyOptions, BackpropConfig, apply_learnings_with, calculate_learning_rate,
-    count_apply_deltas, effective_step_scale,
+    ApplyDeltaCounts, ApplyOptions, BackpropConfig, calculate_learning_rate, count_apply_deltas,
+    effective_step_scale,
 };
 use crate::creature_io::{ObservationWidth, parse_forward_only_creature};
 use crate::ladder::{LadderEpochRequest, run_ladder_epoch, validate_step_scale_ladder};
@@ -19,6 +19,7 @@ use crate::sampling::{RecordSample, RecordSelection, plan_record_sample};
 use crate::scorer::{ScoreResult, score_creature};
 use crate::tags::{BackpropProgress, CreatureMeta, serialize_creature_with_meta};
 use crate::trace::{build_creature_trace, write_creature_trace};
+use crate::trust_region::{TrustRegion, UpdateStats, apply_within_trust_region};
 use crate::validate::TrainedTopology;
 use neat_core::{CreatureExport, TrainingDataConfig, compile_creature};
 use rand::SeedableRng;
@@ -58,8 +59,15 @@ pub struct TrainCandidateRecord {
     /// 0-based attempt within the epoch: the halving index under the
     /// backtracking line search, or the rung index under the ladder (#106).
     pub attempt: u32,
-    /// Step scale this attempt applied.
+    /// Step scale this attempt *requested* — the halved step, or the rung.
     pub step_scale: f64,
+    /// Step scale actually applied after the trust region rescaled the
+    /// proposal (#109). Equal to [`Self::step_scale`] when no budget bound it.
+    #[serde(default)]
+    pub realised_step_scale: f64,
+    /// Aggregate norms of the update this attempt actually wrote (#109).
+    #[serde(default)]
+    pub update: UpdateStats,
     /// Learning rate this attempt applied.
     pub learning_rate: f64,
     /// Incumbent MSE the candidate was measured against.
@@ -112,6 +120,10 @@ pub struct TrainJournalHeader {
     pub learning_rate: f64,
     /// Apply step scale.
     pub step_scale: f64,
+    /// Whole-creature update budget the epochs applied within, when one was
+    /// configured (#109). Absent = the historical fixed-step apply.
+    #[serde(default)]
+    pub trust_region: Option<TrustRegion>,
     /// Step-scale ladder the epochs scored, when one was configured (#106).
     #[serde(default)]
     pub step_scale_ladder: Option<Vec<f64>>,
@@ -170,10 +182,18 @@ pub struct TrainEpochRecord {
     /// used the backtracking line search (#106).
     #[serde(default)]
     pub ladder_rungs: Option<u32>,
-    /// Step scale of the final (kept or last-tried) candidate (#38), or of the
-    /// winning ladder rung (#106).
+    /// Requested step scale of the final (kept or last-tried) candidate (#38),
+    /// or of the winning ladder rung (#106).
     #[serde(default)]
     pub step_scale: f64,
+    /// Step scale actually applied after the trust region rescaled the
+    /// proposal (#109). Equal to [`Self::step_scale`] when no budget bound it.
+    #[serde(default)]
+    pub realised_step_scale: f64,
+    /// Aggregate norms of the update this epoch's candidate actually wrote —
+    /// changed genes, L1/L2/RMS and relative delta, split by gene class (#109).
+    #[serde(default)]
+    pub update: UpdateStats,
     /// Hidden / constant biases that moved.
     pub hidden_biases: usize,
     /// Output biases that moved.
@@ -264,6 +284,14 @@ pub struct TrainRequest<'a> {
     pub scorer: Option<&'a Path>,
     /// Apply options (step scale / output-only).
     pub apply: ApplyOptions,
+    /// Whole-creature update budget (#109).
+    ///
+    /// [`TrustRegion::default`] — every budget off — is the fixed-step parity
+    /// mode: the candidate is exactly what [`Self::apply`]'s step scale
+    /// produces. A configured budget rescales each epoch's proposal before the
+    /// candidate is created, so the aggregate move stays the same size as the
+    /// creature grows.
+    pub trust_region: TrustRegion,
     /// What decides accept / rollback (#104). Defaults to slice MSE.
     pub acceptance: AcceptanceMode,
     /// When true, keep the applied creature even if slice MSE rose (for
@@ -333,11 +361,37 @@ fn resolve_scorer_acceptance<'a>(
     Ok(Some((scorer, settings.validate()?)))
 }
 
+/// What one epoch's search settled on, whichever search ran it.
+///
+/// The backtracking line search and the step-scale ladder (#106) reach the
+/// same place — one candidate, its movement counts, its judged outcome and the
+/// update it actually wrote — so both hand back this shape and the journalling
+/// below has one path.
+struct EpochOutcome {
+    /// The candidate the epoch reports.
+    candidate: CreatureExport,
+    /// Gene movement counts for that candidate.
+    deltas: ApplyDeltaCounts,
+    /// Slice MSE of that candidate.
+    after_mse: f64,
+    /// Scorer result, absent when the candidate was never scored.
+    score: Option<ScoreResult>,
+    /// Verdict for that candidate.
+    reason: AcceptReason,
+    /// Step scale actually applied after the trust region (#109).
+    realised_step_scale: f64,
+    /// Aggregate norms of the update the candidate carries (#109).
+    update: UpdateStats,
+}
+
 /// Run the experimental trainer and write `journal.jsonl` + `best.json`.
 pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     // Refuse an unusable acceptance configuration before any work — and before
     // the scorer is spawned — so a bad request fails loudly and cheaply (#104).
     let scorer_acceptance = resolve_scorer_acceptance(&req)?;
+    // Same reason as the acceptance gate: an unusable update budget is refused
+    // before the corpus is read, not on the first epoch's apply (#109).
+    req.trust_region.validate()?;
     // `train` also mines the raw text for tags, so it parses the text it read
     // rather than re-reading via `load_forward_only_creature`.
     let text = req.creature.read()?;
@@ -407,6 +461,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         disable_random_samples: req.disable_random_samples,
         learning_rate: initial_lr,
         step_scale: req.apply.step_scale,
+        trust_region: req.trust_region.is_active().then_some(req.trust_region),
         step_scale_ladder: (!req.step_scale_ladder.is_empty())
             .then(|| req.step_scale_ladder.to_vec()),
         outputs_only: req.apply.outputs_only,
@@ -458,6 +513,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                     config: req.config,
                     learning_rate: lr,
                     apply: req.apply,
+                    trust_region: req.trust_region,
                     ladder: req.step_scale_ladder,
                     width,
                     training_data: req.training_data,
@@ -477,9 +533,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         let mut step_scale = effective_step_scale(req.apply.step_scale);
         let mut backtracks = 0u32;
         let mut ladder_rungs = None;
-        let (candidate, deltas, after_mse, candidate_score, reason) = if let Some(outcome) =
-            ladder_epoch
-        {
+        let outcome = if let Some(outcome) = ladder_epoch {
             // Every rung is journalled — score and MSE for every step — so a
             // dry epoch is an auditable grid rather than a single line.
             for line in &outcome.journal {
@@ -488,16 +542,22 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             }
             step_scale = outcome.step_scale;
             ladder_rungs = Some(outcome.rungs);
-            (
-                outcome.candidate,
-                outcome.deltas,
-                outcome.after_mse,
-                outcome.score,
-                outcome.reason,
-            )
+            EpochOutcome {
+                candidate: outcome.candidate,
+                deltas: outcome.deltas,
+                after_mse: outcome.after_mse,
+                score: outcome.score,
+                reason: outcome.reason,
+                realised_step_scale: outcome.realised_step_scale,
+                update: outcome.update,
+            }
         } else {
             loop {
-                let candidate = apply_learnings_with(
+                // The trust region bounds the *whole-creature* move (#109): the
+                // proposal is measured at the requested step and rescaled when
+                // its aggregate norms exceed the configured budget. An
+                // unconfigured region leaves the fixed-step apply untouched.
+                let applied = apply_within_trust_region(
                     &incumbent,
                     &report.learning,
                     req.config,
@@ -506,7 +566,9 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                         step_scale,
                         ..req.apply
                     },
-                );
+                    req.trust_region,
+                )?;
+                let candidate = applied.candidate;
                 let deltas = count_apply_deltas(&incumbent, &candidate, req.config.plank_constant);
                 let mut cand_net = compile_creature(&candidate).map_err(|e| e.to_string())?;
                 let (after_mse, _) =
@@ -560,6 +622,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                         epoch,
                         attempt: backtracks,
                         step_scale,
+                        realised_step_scale: applied.realised_step_scale,
+                        update: applied.realised,
                         learning_rate: lr,
                         incumbent_mse: best_mse,
                         candidate_mse: after_mse,
@@ -574,12 +638,29 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                     journal.push('\n');
                 }
                 if reason.accepted() || backtracks >= req.max_backtracks {
-                    break (candidate, deltas, after_mse, candidate_score, reason);
+                    break EpochOutcome {
+                        candidate,
+                        deltas,
+                        after_mse,
+                        score: candidate_score,
+                        reason,
+                        realised_step_scale: applied.realised_step_scale,
+                        update: applied.realised,
+                    };
                 }
                 backtracks += 1;
                 step_scale /= 2.0;
             }
         };
+        let EpochOutcome {
+            candidate,
+            deltas,
+            after_mse,
+            score: candidate_score,
+            reason,
+            realised_step_scale,
+            update,
+        } = outcome;
         let accepted = reason.accepted();
         fs::write(
             req.output_dir.join("candidate.json"),
@@ -637,6 +718,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             backtracks,
             ladder_rungs,
             step_scale,
+            realised_step_scale,
+            update,
             hidden_biases: deltas.hidden_biases,
             output_biases: deltas.output_biases,
             hidden_weights: deltas.hidden_weights,
@@ -779,6 +862,7 @@ mod tests {
             accept_always: false,
             max_backtracks: 0,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })
@@ -835,6 +919,7 @@ mod tests {
             accept_always: true,
             max_backtracks: 0,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
         })
         .unwrap();
@@ -893,6 +978,7 @@ mod tests {
             accept_always: false,
             max_backtracks: 0,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })
@@ -943,6 +1029,7 @@ mod tests {
             accept_always: false,
             max_backtracks: 2,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1006,6 +1093,7 @@ mod tests {
             accept_always: false,
             max_backtracks: 0,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1025,6 +1113,7 @@ mod tests {
             accept_always: false,
             max_backtracks: 8,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1126,6 +1215,7 @@ mod tests {
             accept_always: true,
             max_backtracks: 0,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1217,6 +1307,7 @@ mod tests {
             accept_always: true,
             max_backtracks: 0,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1270,6 +1361,7 @@ mod tests {
             accept_always: true,
             max_backtracks: 0,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1313,6 +1405,7 @@ mod tests {
             accept_always: false,
             max_backtracks: 0,
             step_scale_ladder: &[],
+            trust_region: TrustRegion::default(),
             trace_store: None,
             disable_random_samples: false,
         })

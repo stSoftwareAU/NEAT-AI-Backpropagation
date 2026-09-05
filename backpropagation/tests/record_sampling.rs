@@ -11,6 +11,7 @@
 //! * accumulate and the eval MSE inside one epoch see the identical records.
 
 use neat_ai_backpropagation::sampling::{RecordSelection, plan_record_sample};
+use neat_ai_backpropagation::trust_region::TrustRegion;
 use neat_ai_backpropagation::{
     AcceptanceMode, ApplyOptions, BackpropConfig, TrainCreature, TrainRequest,
     accumulate_creature_learning_selected, compute_mse_selected, nearly_equal, run_train,
@@ -88,6 +89,7 @@ fn train_baseline_mse(
         accept_always: false,
         max_backtracks: 0,
         step_scale_ladder: &[],
+        trust_region: TrustRegion::default(),
         trace_store: None,
         disable_random_samples,
     })

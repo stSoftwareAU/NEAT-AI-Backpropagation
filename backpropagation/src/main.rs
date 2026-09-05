@@ -15,6 +15,7 @@ use neat_ai_backpropagation::train::{
     AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, TrainCreature, TrainRequest,
     default_output_dir, resolve_acceptance, run_train,
 };
+use neat_ai_backpropagation::trust_region::TrustRegion;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -224,6 +225,30 @@ enum Commands {
         /// Multiply (proposed − current) by this factor before writing.
         #[arg(long, default_value_t = DEFAULT_STEP_SCALE)]
         step_scale: f64,
+        /// Trust region (#109): maximum L2 norm of the whole-creature update.
+        ///
+        /// The proposal is measured at --step-scale and the *whole* update is
+        /// rescaled when it exceeds the budget, so the aggregate move stays a
+        /// stable size as the creature grows. Omit every --trust-region-* flag
+        /// for the fixed-step parity mode.
+        #[arg(long)]
+        trust_region_l2: Option<f64>,
+        /// Trust region: maximum RMS per-gene delta of the update.
+        #[arg(long)]
+        trust_region_rms: Option<f64>,
+        /// Trust region: maximum RMS *relative* parameter change (Δ / value).
+        #[arg(long)]
+        trust_region_relative_rms: Option<f64>,
+        /// Trust region: maximum L2 norm of the bias genes alone.
+        #[arg(long)]
+        trust_region_bias_l2: Option<f64>,
+        /// Trust region: maximum L2 norm of the weight genes alone.
+        #[arg(long)]
+        trust_region_weight_l2: Option<f64>,
+        /// Trust region: maximum genes one update may move. The largest moves
+        /// are kept; the rest are held at their incumbent value.
+        #[arg(long)]
+        trust_region_max_genes: Option<usize>,
         /// Comma-separated step scales to score as a ladder (#106).
         ///
         /// Requires `--acceptance scorer`. The epoch's one accumulation is
@@ -505,6 +530,12 @@ fn run() -> Result<(), String> {
             maximum_bias_adjustment_scale,
             maximum_weight_adjustment_scale,
             step_scale,
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
             step_scale_ladder,
             outputs_only,
             hidden_only,
@@ -531,6 +562,16 @@ fn run() -> Result<(), String> {
                 Some(raw) => parse_step_scale_ladder(raw)?,
                 None => Vec::new(),
             };
+            // All-`None` = the fixed-step parity mode; the library validates
+            // each budget before the corpus is read (#109).
+            let trust_region = TrustRegion {
+                l2: trust_region_l2,
+                rms: trust_region_rms,
+                relative_rms: trust_region_relative_rms,
+                bias_l2: trust_region_bias_l2,
+                weight_l2: trust_region_weight_l2,
+                max_changed_genes: trust_region_max_genes,
+            };
             let result = run_train(TrainRequest {
                 creature: TrainCreature::Path(&creature),
                 training_data: &training_data,
@@ -546,6 +587,7 @@ fn run() -> Result<(), String> {
                     outputs_only,
                     hidden_only,
                 },
+                trust_region,
                 acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen)?,
                 accept_always,
                 max_backtracks,
