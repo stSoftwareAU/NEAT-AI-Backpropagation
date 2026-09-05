@@ -12,7 +12,7 @@
 
 use neat_ai_backpropagation::sampling::{RecordSelection, plan_record_sample};
 use neat_ai_backpropagation::{
-    ApplyOptions, BackpropConfig, TrainCreature, TrainRequest,
+    AcceptanceMode, ApplyOptions, BackpropConfig, TrainCreature, TrainRequest,
     accumulate_creature_learning_selected, compute_mse_selected, nearly_equal, run_train,
 };
 use neat_core::{TrainingDataConfig, compile_creature, parse_creature_json};
@@ -84,6 +84,7 @@ fn train_baseline_mse(
         output_dir: out,
         scorer: None,
         apply: ApplyOptions::default(),
+        acceptance: AcceptanceMode::Mse,
         accept_always: false,
         max_backtracks: 0,
         trace_store: None,

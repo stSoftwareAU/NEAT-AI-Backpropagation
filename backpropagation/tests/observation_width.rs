@@ -13,7 +13,9 @@ use neat_ai_backpropagation::creature_io::{ObservationWidth, load_forward_only_c
 use neat_ai_backpropagation::ffi::{NEAT_BACKPROP_ERR_TRAIN_FAILED, train_from_json};
 use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
-use neat_ai_backpropagation::train::{TrainCreature, TrainRequest, TrainResult, run_train};
+use neat_ai_backpropagation::train::{
+    AcceptanceMode, TrainCreature, TrainRequest, TrainResult, run_train,
+};
 use neat_core::parse_creature_json;
 use serde_json::{Value, json};
 use std::fs;
@@ -92,6 +94,7 @@ fn train(creature_path: &Path, data: &Path, out: &Path) -> Result<TrainResult, S
         output_dir: out,
         scorer: None,
         apply: ApplyOptions::default(),
+        acceptance: AcceptanceMode::Mse,
         accept_always: false,
         max_backtracks: 0,
         trace_store: None,

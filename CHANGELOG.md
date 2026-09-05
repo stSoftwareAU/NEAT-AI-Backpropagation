@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Scorer-guided acceptance: `train --acceptance scorer` puts `NEAT-AI-scorer`
+  in the accept/rollback loop instead of training-slice MSE. The baseline is
+  scored before epoch 1, every attempted candidate (each backtracking step
+  included) is scored and journalled as a `"kind":"candidate"` line carrying
+  the MSE delta beside the scorer delta, and a candidate is kept only when
+  fitness rises by `--min-score-improvement` (default `1e-6`, the production
+  win margin). `--mse-pre-screen` optionally drops a candidate whose slice MSE
+  did not fall before paying for a scorer run — it is a gate in front of the
+  scorer, so a scorer win MSE disagreed with is lost. `--accept-always`, a
+  missing `--scorer`, and a scorer knob on an `--acceptance mse` run are all
+  refused rather than silently degrading to MSE. The run header carries the
+  run's own `baselineScore` (a candidate line's is the incumbent, which moves
+  with every accept), every epoch line now carries an `acceptReason`, and
+  `acceptance` / `minScoreImprovement` / `msePreScreen` cross the C ABI. MSE
+  remains the default, so existing runs are unchanged. `scripts/run-scorer-guided-experiment.sh`
+  runs one corpus through both modes: on its generated corpus the MSE loop
+  accepted a candidate that cut slice MSE `14.839 → 3.490` while real
+  `rust_scorer` fitness fell `0.7032 → −0.3324`, which scorer-guided
+  acceptance rejected (issue #104).
+
 - Every trained creature is validated by `neat_core::creature_validate`
   before it is scored, written or returned (`validate::TrainedTopology`).
   `train` gates the creature it finishes with, once per completed run;
@@ -165,6 +185,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--hidden-only`, `--accept-always`, and `sweep --skip-mse`.
 
 ### Changed
+
+- `TrainEpochRecord` requires the new `acceptReason` field, so a `journal.jsonl`
+  line written before 0.1.26 no longer deserialises into it. An epoch's verdict
+  cannot be inferred after the fact, and inventing a default would report a
+  guess as a record — the read fails loudly instead (issue #104).
 
 - Workspace build profiles follow VibeCoding#4159 / issue #88: `dev` uses
   `debug = "line-tables-only"` for faster rebuilds; `release` is
