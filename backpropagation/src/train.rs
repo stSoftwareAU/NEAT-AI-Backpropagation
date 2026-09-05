@@ -68,6 +68,12 @@ pub struct TrainCandidateRecord {
     /// Aggregate norms of the update this attempt actually wrote (#109).
     #[serde(default)]
     pub update: UpdateStats,
+    /// Factor the trust region multiplied the proposal by (`1.0` = untouched).
+    #[serde(default)]
+    pub update_scale: f64,
+    /// Genes the changed-gene budget held at their incumbent value (#109).
+    #[serde(default)]
+    pub trimmed_genes: usize,
     /// Learning rate this attempt applied.
     pub learning_rate: f64,
     /// Incumbent MSE the candidate was measured against.
@@ -194,6 +200,12 @@ pub struct TrainEpochRecord {
     /// changed genes, L1/L2/RMS and relative delta, split by gene class (#109).
     #[serde(default)]
     pub update: UpdateStats,
+    /// Factor the trust region multiplied the proposal by (`1.0` = untouched).
+    #[serde(default)]
+    pub update_scale: f64,
+    /// Genes the changed-gene budget held at their incumbent value (#109).
+    #[serde(default)]
+    pub trimmed_genes: usize,
     /// Hidden / constant biases that moved.
     pub hidden_biases: usize,
     /// Output biases that moved.
@@ -361,6 +373,26 @@ fn resolve_scorer_acceptance<'a>(
     Ok(Some((scorer, settings.validate()?)))
 }
 
+/// Step scale the next backtracking attempt should request (#38, #109).
+///
+/// Historically this was simply "halve the request". Under a trust region that
+/// is not enough: a budget clips every step above it to the *same* update, so
+/// halving the request alone would re-apply an identical candidate — and, under
+/// scorer-guided acceptance, pay for another scorer run — until the request
+/// finally fell below the budget. Halving the step the region actually
+/// realised skips that plateau and keeps every attempt strictly smaller than
+/// the last.
+///
+/// A realised step that is zero or non-finite cannot seed the next attempt, so
+/// the request is halved instead.
+fn next_backtrack_step(requested: f64, realised: f64) -> f64 {
+    if realised.is_finite() && realised > 0.0 {
+        realised.min(requested) / 2.0
+    } else {
+        requested / 2.0
+    }
+}
+
 /// What one epoch's search settled on, whichever search ran it.
 ///
 /// The backtracking line search and the step-scale ladder (#106) reach the
@@ -382,6 +414,10 @@ struct EpochOutcome {
     realised_step_scale: f64,
     /// Aggregate norms of the update the candidate carries (#109).
     update: UpdateStats,
+    /// Factor the trust region multiplied the proposal by (#109).
+    update_scale: f64,
+    /// Genes the changed-gene budget held back (#109).
+    trimmed_genes: usize,
 }
 
 /// Run the experimental trainer and write `journal.jsonl` + `best.json`.
@@ -550,6 +586,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                 reason: outcome.reason,
                 realised_step_scale: outcome.realised_step_scale,
                 update: outcome.update,
+                update_scale: outcome.update_scale,
+                trimmed_genes: outcome.trimmed_genes,
             }
         } else {
             loop {
@@ -624,6 +662,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                         step_scale,
                         realised_step_scale: applied.realised_step_scale,
                         update: applied.realised,
+                        update_scale: applied.scale,
+                        trimmed_genes: applied.trimmed_genes,
                         learning_rate: lr,
                         incumbent_mse: best_mse,
                         candidate_mse: after_mse,
@@ -646,10 +686,12 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                         reason,
                         realised_step_scale: applied.realised_step_scale,
                         update: applied.realised,
+                        update_scale: applied.scale,
+                        trimmed_genes: applied.trimmed_genes,
                     };
                 }
                 backtracks += 1;
-                step_scale /= 2.0;
+                step_scale = next_backtrack_step(step_scale, applied.realised_step_scale);
             }
         };
         let EpochOutcome {
@@ -660,6 +702,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             reason,
             realised_step_scale,
             update,
+            update_scale,
+            trimmed_genes,
         } = outcome;
         let accepted = reason.accepted();
         fs::write(
@@ -720,6 +764,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             step_scale,
             realised_step_scale,
             update,
+            update_scale,
+            trimmed_genes,
             hidden_biases: deltas.hidden_biases,
             output_biases: deltas.output_biases,
             hidden_weights: deltas.hidden_weights,
@@ -1370,6 +1416,30 @@ mod tests {
         for line in journal.lines().filter(|l| l.contains("\"kind\":\"epoch\"")) {
             let rec: TrainEpochRecord = serde_json::from_str(line).unwrap();
             assert!((rec.learning_rate - 0.01).abs() < 1e-12);
+        }
+    }
+
+    /// The line search must always make progress: under a trust region the
+    /// requested step alone can be halved several times while the *applied*
+    /// step stays pinned at the budget (#109).
+    #[test]
+    fn a_backtrack_halves_the_step_that_was_actually_applied() {
+        // No budget: the realised step is the requested one, so this is the
+        // historical halving, unchanged.
+        assert!((next_backtrack_step(0.01, 0.01) - 0.005).abs() < 1e-18);
+        // Budget-clipped: halve the clip, not the request, so the next attempt
+        // is strictly smaller than the update just rejected.
+        assert!((next_backtrack_step(0.01, 0.001) - 0.0005).abs() < 1e-18);
+        // A realised step above the request (impossible today, but the region
+        // must never be able to grow the search) cannot widen the next step.
+        assert!((next_backtrack_step(0.01, 0.5) - 0.005).abs() < 1e-18);
+        // Nothing usable to halve — fall back to halving the request rather
+        // than seeding the next attempt with a zero the applier reads as 1.0.
+        for unusable in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(
+                (next_backtrack_step(0.01, unusable) - 0.005).abs() < 1e-18,
+                "{unusable}"
+            );
         }
     }
 

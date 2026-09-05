@@ -35,8 +35,9 @@ The `neat-core` path dependency in
   `scripts/check-renovate-config.sh`,
   `scripts/run-scorer-guided-experiment.sh`,
   `scripts/run-blockwise-benchmark.sh`,
-  `scripts/run-target-selection-benchmark.sh` and
-  `scripts/run-step-scale-ladder-experiment.sh`
+  `scripts/run-target-selection-benchmark.sh`,
+  `scripts/run-step-scale-ladder-experiment.sh` and
+  `scripts/run-trust-region-experiment.sh`
 
 ## Local gate
 

@@ -152,6 +152,28 @@ fn train_backprop_config(
     }
 }
 
+/// Build the `train` trust-region budget from its CLI arguments (#109).
+///
+/// All-`None` is the fixed-step parity mode; the library validates each budget
+/// before the corpus is read.
+fn train_trust_region(
+    l2: Option<f64>,
+    rms: Option<f64>,
+    relative_rms: Option<f64>,
+    bias_l2: Option<f64>,
+    weight_l2: Option<f64>,
+    max_changed_genes: Option<usize>,
+) -> TrustRegion {
+    TrustRegion {
+        l2,
+        rms,
+        relative_rms,
+        bias_l2,
+        weight_l2,
+        max_changed_genes,
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Accumulate learning on a creature and write a parity dump.
@@ -562,16 +584,14 @@ fn run() -> Result<(), String> {
                 Some(raw) => parse_step_scale_ladder(raw)?,
                 None => Vec::new(),
             };
-            // All-`None` = the fixed-step parity mode; the library validates
-            // each budget before the corpus is read (#109).
-            let trust_region = TrustRegion {
-                l2: trust_region_l2,
-                rms: trust_region_rms,
-                relative_rms: trust_region_relative_rms,
-                bias_l2: trust_region_bias_l2,
-                weight_l2: trust_region_weight_l2,
-                max_changed_genes: trust_region_max_genes,
-            };
+            let trust_region = train_trust_region(
+                trust_region_l2,
+                trust_region_rms,
+                trust_region_relative_rms,
+                trust_region_bias_l2,
+                trust_region_weight_l2,
+                trust_region_max_genes,
+            );
             let result = run_train(TrainRequest {
                 creature: TrainCreature::Path(&creature),
                 training_data: &training_data,
@@ -1211,14 +1231,14 @@ mod tests {
         else {
             panic!("expected train");
         };
-        let region = TrustRegion {
-            l2: trust_region_l2,
-            rms: trust_region_rms,
-            relative_rms: trust_region_relative_rms,
-            bias_l2: trust_region_bias_l2,
-            weight_l2: trust_region_weight_l2,
-            max_changed_genes: trust_region_max_genes,
-        };
+        let region = train_trust_region(
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
+        );
         assert_eq!(region, TrustRegion::default());
         assert!(!region.is_active(), "the parity mode is the default");
     }
@@ -1250,14 +1270,16 @@ mod tests {
         else {
             panic!("expected train");
         };
-        let region = TrustRegion {
-            l2: trust_region_l2,
-            rms: trust_region_rms,
-            relative_rms: trust_region_relative_rms,
-            bias_l2: trust_region_bias_l2,
-            weight_l2: trust_region_weight_l2,
-            max_changed_genes: trust_region_max_genes,
-        };
+        let region = train_trust_region(
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
+        );
+        // Every flag must land on its own budget — a swapped pair would show
+        // up here as a mismatched field, not as two green tests.
         assert_eq!(
             region,
             TrustRegion {

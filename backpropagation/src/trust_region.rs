@@ -266,14 +266,29 @@ impl TrustRegion {
     /// update through as if it had been budgeted.
     pub fn scale_for(&self, stats: &UpdateStats) -> Result<f64, String> {
         let mut scale = 1.0f64;
+        // An update that moved nothing has nothing to bound — and no norm to
+        // divide by. Every budget is trivially satisfied.
+        if stats.total.changed == 0 {
+            return Ok(scale);
+        }
+        // The relative RMS is `None` when no changed gene has an incumbent
+        // value large enough to be relative to. That is *unmeasurable*, not
+        // *within budget*: reading it as zero would report a budget as met
+        // without ever evaluating it.
+        let relative_rms = match (self.relative_rms, stats.total.relative_rms) {
+            (Some(_), None) => {
+                return Err(
+                    "trust-region relativeRms budget cannot be measured — no gene this update \
+                     moved has an incumbent value above the plank constant"
+                        .into(),
+                );
+            }
+            (_, measured) => measured.unwrap_or_default(),
+        };
         for (name, budget, measured) in [
             ("l2", self.l2, stats.total.l2),
             ("rms", self.rms, stats.total.rms),
-            (
-                "relativeRms",
-                self.relative_rms,
-                stats.total.relative_rms.unwrap_or(0.0),
-            ),
+            ("relativeRms", self.relative_rms, relative_rms),
             ("biasL2", self.bias_l2, stats.biases.l2),
             ("weightL2", self.weight_l2, stats.weights.l2),
         ] {
@@ -341,31 +356,87 @@ pub fn apply_within_trust_region(
         )
     };
 
-    let proposal = apply_at(requested);
+    // The gene budget is applied *first*, so the norms the rescale is computed
+    // from are the norms of the update that will actually be written. Trimming
+    // afterwards would drop the smallest moves and push RMS back above the
+    // budget the rescale had just satisfied.
+    let apply_and_trim = |step_scale: f64| {
+        let mut candidate = apply_at(step_scale);
+        let trimmed = match region.max_changed_genes {
+            Some(max) => trim_to_gene_budget(incumbent, &mut candidate, config.plank_constant, max),
+            None => 0,
+        };
+        (candidate, trimmed)
+    };
+
+    let (proposal, proposed_trimmed) = apply_and_trim(requested);
     let proposed = measure_update(incumbent, &proposal, config.plank_constant)?;
     let scale = region.scale_for(&proposed)?;
+    if scale >= 1.0 {
+        return Ok(TrustRegionApply {
+            candidate: proposal,
+            requested_step_scale: requested,
+            realised_step_scale: requested,
+            scale: 1.0,
+            realised: proposed,
+            proposed,
+            trimmed_genes: proposed_trimmed,
+        });
+    }
+    let realised_step_scale = canonical_step(requested * scale);
+    // `effective_step_scale` reads a zero step as "no step given" and applies
+    // the full 1.0, so a budget that underflowed the step to zero would apply
+    // the *largest* possible update. Refuse it instead of inverting it.
+    if realised_step_scale <= 0.0 || !realised_step_scale.is_finite() {
+        return Err(format!(
+            "trust-region budget is too small to apply at step scale {requested}: the rescale \
+             underflowed to {realised_step_scale}"
+        ));
+    }
     // Each delta is `step × (proposed − current)`, so rescaling the update is
     // re-applying the same learning at a smaller step — the applier stays the
-    // single place a gene value is written.
-    let mut candidate = if scale < 1.0 {
-        apply_at(requested * scale)
-    } else {
-        proposal
-    };
-    let trimmed_genes = match region.max_changed_genes {
-        Some(max) => trim_to_gene_budget(incumbent, &mut candidate, config.plank_constant, max),
-        None => 0,
-    };
+    // single place a gene value is written. The trim keeps the same genes: it
+    // ranks by |Δ|, and rescaling multiplies every delta by the same factor.
+    let (candidate, trimmed_genes) = apply_and_trim(realised_step_scale);
     let realised = measure_update(incumbent, &candidate, config.plank_constant)?;
     Ok(TrustRegionApply {
         candidate,
         requested_step_scale: requested,
-        realised_step_scale: requested * scale,
+        realised_step_scale,
         scale,
         proposed,
         realised,
         trimmed_genes,
     })
+}
+
+/// Significant decimal digits a rescaled step is snapped to.
+const CANONICAL_STEP_DIGITS: f64 = 12.0;
+
+/// Round a rescaled step *down* to [`CANONICAL_STEP_DIGITS`] significant digits.
+///
+/// Two step scales clipped by the same budget are equal in exact arithmetic —
+/// `requested × budget ÷ (requested × K)` cancels — but differ in the last bits
+/// in floating point, which turns one clipped update into several
+/// nearly-identical candidates a scorer then pays to score separately. Snapping
+/// makes the clip reproducible: rungs that the budget clips to the same update
+/// really do produce the same creature, and the journalled `realisedStepScale`
+/// is a stable number across runs.
+///
+/// Rounding *down* is what makes this safe — the snapped step can only shrink
+/// the update, never push it back over the budget. A value whose exponent
+/// cannot be scaled without overflowing is returned unchanged rather than
+/// mangled into a `NaN`.
+fn canonical_step(value: f64) -> f64 {
+    if !value.is_finite() || value <= 0.0 {
+        return value;
+    }
+    let factor = 10f64.powf(CANONICAL_STEP_DIGITS - 1.0 - value.log10().floor());
+    let scaled = value * factor;
+    if !factor.is_finite() || !scaled.is_finite() {
+        return value;
+    }
+    scaled.floor() / factor
 }
 
 /// One moved gene, for the changed-gene budget.
@@ -615,6 +686,209 @@ mod tests {
         let unchanged = untouched.clone();
         assert_eq!(trim_to_gene_budget(&before, &mut untouched, 1e-7, 8), 0);
         assert_eq!(untouched.neurons[0].bias, unchanged.neurons[0].bias);
+    }
+
+    /// A hand-built learning signal that moves every gene of [`CHAIN`].
+    fn learning() -> LearningSignal {
+        let mut signal = LearningSignal::new(2, 2);
+        for (index, target) in [(0usize, 4.0f64), (1, -3.0)] {
+            signal.biases[index] = crate::backprop::BiasSignal {
+                count: 1.0,
+                total_adjusted_bias: target,
+                no_change: false,
+            };
+        }
+        for (index, target) in [(0usize, 6.0f64), (1, -5.0)] {
+            signal.weights[index] = crate::backprop::WeightSignal {
+                count: 1.0,
+                total_positive_activation: 1.0,
+                count_positive: 1.0,
+                total_positive_adjusted_value: target,
+                ..crate::backprop::WeightSignal::default()
+            };
+        }
+        signal
+    }
+
+    /// Apply `region` to [`CHAIN`] at a 1% step and a full learning rate.
+    fn apply(region: TrustRegion) -> Result<TrustRegionApply, String> {
+        let incumbent = parse_creature_json(CHAIN).unwrap();
+        apply_within_trust_region(
+            &incumbent,
+            &learning(),
+            &BackpropConfig::default(),
+            1.0,
+            ApplyOptions {
+                step_scale: 0.01,
+                ..ApplyOptions::default()
+            },
+            region,
+        )
+    }
+
+    #[test]
+    fn an_unbudgeted_apply_is_the_plain_apply() {
+        let incumbent = parse_creature_json(CHAIN).unwrap();
+        let applied = apply(TrustRegion::default()).expect("parity apply");
+        let plain = apply_learnings_with(
+            &incumbent,
+            &learning(),
+            &BackpropConfig::default(),
+            1.0,
+            ApplyOptions {
+                step_scale: 0.01,
+                ..ApplyOptions::default()
+            },
+        );
+        assert_eq!(applied.scale, 1.0);
+        assert_eq!(applied.realised_step_scale, applied.requested_step_scale);
+        assert_eq!(applied.trimmed_genes, 0);
+        assert_eq!(applied.proposed, applied.realised);
+        assert!(applied.realised.total.changed > 0, "the genes moved");
+        for (a, b) in applied.candidate.neurons.iter().zip(plain.neurons.iter()) {
+            assert_eq!(a.bias, b.bias, "parity mode must not touch a bias");
+        }
+        for (a, b) in applied.candidate.synapses.iter().zip(plain.synapses.iter()) {
+            assert_eq!(a.weight, b.weight, "parity mode must not touch a weight");
+        }
+    }
+
+    #[test]
+    fn a_budget_shrinks_the_step_and_the_realised_norms() {
+        let free = apply(TrustRegion::default()).expect("free apply");
+        let budget = free.realised.total.l2 / 4.0;
+        let bound = apply(TrustRegion {
+            l2: Some(budget),
+            ..TrustRegion::default()
+        })
+        .expect("bound apply");
+        assert!(bound.scale < 1.0);
+        assert!(bound.realised.total.l2 <= budget * 1.000_001);
+        // The pre-rescale proposal is reported beside the realised update, so
+        // an operator can see how much the budget cut.
+        assert!(bound.proposed.total.l2 > bound.realised.total.l2);
+        assert!(
+            (bound.realised_step_scale - bound.requested_step_scale * bound.scale).abs() < 1e-18
+        );
+    }
+
+    /// The trim keeps the *largest* moves, which raises RMS — so it has to
+    /// happen before the rescale, or a joint budget is quietly broken.
+    #[test]
+    fn a_gene_budget_and_a_norm_budget_hold_together() {
+        let free = apply(TrustRegion::default()).expect("free apply");
+        assert!(free.realised.total.changed > 2, "there are genes to trim");
+        let rms_budget = free.realised.total.rms / 3.0;
+        let bound = apply(TrustRegion {
+            rms: Some(rms_budget),
+            max_changed_genes: Some(2),
+            ..TrustRegion::default()
+        })
+        .expect("joint budget");
+        assert!(
+            bound.realised.total.changed <= 2,
+            "the gene budget must bind: {}",
+            bound.realised.total.changed
+        );
+        assert!(
+            bound.realised.total.rms <= rms_budget * 1.000_001,
+            "the RMS budget must survive the trim: {} vs {rms_budget}",
+            bound.realised.total.rms
+        );
+        assert!(bound.trimmed_genes > 0, "genes were held back");
+    }
+
+    /// An unmeasurable relative budget is refused, never reported as met.
+    #[test]
+    fn a_relative_budget_with_nothing_to_be_relative_to_is_refused() {
+        let mut incumbent = parse_creature_json(CHAIN).unwrap();
+        for neuron in &mut incumbent.neurons {
+            neuron.bias = 0.0;
+        }
+        for synapse in &mut incumbent.synapses {
+            synapse.weight = 0.0;
+        }
+        let err = apply_within_trust_region(
+            &incumbent,
+            &learning(),
+            &BackpropConfig::default(),
+            1.0,
+            ApplyOptions {
+                step_scale: 0.01,
+                ..ApplyOptions::default()
+            },
+            TrustRegion {
+                relative_rms: Some(0.01),
+                ..TrustRegion::default()
+            },
+        )
+        .expect_err("an unmeasurable budget must fail loudly");
+        assert!(err.contains("relativeRms"), "{err}");
+    }
+
+    /// Two requested steps the same budget clips must land on the *same*
+    /// candidate, not on two creatures differing in the last bits — a ladder
+    /// would otherwise pay a scorer run for each of them (#109).
+    #[test]
+    fn the_same_budget_clips_two_steps_to_the_same_candidate() {
+        let incumbent = parse_creature_json(CHAIN).unwrap();
+        let free = apply(TrustRegion::default()).expect("free apply");
+        let region = TrustRegion {
+            l2: Some(free.realised.total.l2 / 8.0),
+            ..TrustRegion::default()
+        };
+        let at = |step_scale: f64| {
+            apply_within_trust_region(
+                &incumbent,
+                &learning(),
+                &BackpropConfig::default(),
+                1.0,
+                ApplyOptions {
+                    step_scale,
+                    ..ApplyOptions::default()
+                },
+                region,
+            )
+            .expect("clipped apply")
+        };
+        let low = at(0.01);
+        let high = at(0.05);
+        assert_eq!(
+            low.realised_step_scale, high.realised_step_scale,
+            "the same budget must clip to the same step"
+        );
+        for (a, b) in low
+            .candidate
+            .synapses
+            .iter()
+            .zip(high.candidate.synapses.iter())
+        {
+            assert_eq!(a.weight, b.weight, "clipped candidates must be identical");
+        }
+        // Snapping only ever rounds down, so the budget still holds.
+        assert!(low.realised.total.l2 <= region.l2.unwrap());
+    }
+
+    #[test]
+    fn a_canonical_step_rounds_down_and_is_stable() {
+        assert_eq!(canonical_step(0.0123456789012345), 0.0123456789012);
+        assert_eq!(canonical_step(1.0), 1.0);
+        // Unusable or unscalable values pass through rather than becoming NaN.
+        assert_eq!(canonical_step(0.0), 0.0);
+        assert!(canonical_step(f64::NAN).is_nan());
+        assert_eq!(canonical_step(5e-324), 5e-324);
+    }
+
+    /// A budget so small the rescaled step underflows must fail, not invert
+    /// into the full step `effective_step_scale` reads a zero as.
+    #[test]
+    fn a_budget_that_underflows_the_step_is_refused() {
+        let err = apply(TrustRegion {
+            l2: Some(5e-324),
+            ..TrustRegion::default()
+        })
+        .expect_err("an underflowing budget must fail loudly");
+        assert!(err.contains("underflowed"), "{err}");
     }
 
     /// Ties must not depend on iteration order — the same proposal has to trim

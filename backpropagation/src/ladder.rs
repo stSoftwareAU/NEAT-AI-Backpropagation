@@ -150,6 +150,10 @@ pub(crate) struct LadderEpochOutcome {
     pub realised_step_scale: f64,
     /// Aggregate norms of the update [`Self::candidate`] carries (#109).
     pub update: UpdateStats,
+    /// Factor the trust region multiplied that rung's proposal by (#109).
+    pub update_scale: f64,
+    /// Genes the changed-gene budget held back on that rung (#109).
+    pub trimmed_genes: usize,
     /// Rungs the epoch evaluated.
     pub rungs: u32,
     /// One journal line per rung, in ladder order.
@@ -166,6 +170,10 @@ struct Rung {
     realised_step_scale: f64,
     /// Aggregate norms of the update this rung wrote (#109).
     update: UpdateStats,
+    /// Factor the trust region multiplied this rung's proposal by (#109).
+    update_scale: f64,
+    /// Genes the changed-gene budget held back on this rung (#109).
+    trimmed_genes: usize,
     /// Candidate serialisation handed to the scorer.
     json: String,
     /// Slice MSE of the candidate.
@@ -218,6 +226,8 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
             step_scale,
             realised_step_scale: applied.realised_step_scale,
             update: applied.realised,
+            update_scale: applied.scale,
+            trimmed_genes: applied.trimmed_genes,
             json: req.width.checked_json_pretty(&candidate)?,
             mse,
             score: None,
@@ -228,20 +238,32 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
     // One scorer invocation for the whole ladder: `rust_scorer` scores a
     // directory of creatures, so the marginal cost of a rung is a file rather
     // than a process launch and another corpus pass.
-    let batch: Vec<(String, &str)> = rungs
-        .iter()
-        .filter(|rung| !rung.screened_out)
-        .map(|rung| (format!("rung-{}", rung.index), rung.json.as_str()))
-        .collect();
+    //
+    // Rungs that produced the *same creature* are scored once and share the
+    // result. A trust region clips every rung above its budget to the same
+    // update (#109), so a budgeted grid can hold several byte-identical
+    // candidates — scoring each of them would spend the run's scarcest
+    // resource to learn the same number.
+    let mut batch: Vec<(String, &str)> = Vec::new();
+    let mut score_of: Vec<Option<usize>> = vec![None; rungs.len()];
+    for rung in rungs.iter().filter(|rung| !rung.screened_out) {
+        let existing = batch
+            .iter()
+            .position(|(_, json)| *json == rung.json.as_str());
+        score_of[rung.index] = Some(existing.unwrap_or_else(|| {
+            batch.push((format!("rung-{}", rung.index), rung.json.as_str()));
+            batch.len() - 1
+        }));
+    }
     if !batch.is_empty() {
         let request: Vec<(&str, &str)> = batch
             .iter()
             .map(|(stem, json)| (stem.as_str(), *json))
             .collect();
         let scored = score_creatures(req.scorer, &request, req.training_data, req.score_dir)?;
-        // Checked, not assumed: `zip` truncates silently, and a short result set
-        // would leave a rung unscored — which `rung_reason` would then journal
-        // as an MSE pre-screen rejection that never happened.
+        // Checked, not assumed: a short result set would leave a rung unscored
+        // — which `rung_reason` would then journal as an MSE pre-screen
+        // rejection that never happened.
         if scored.len() != request.len() {
             return Err(format!(
                 "scorer returned {} score(s) for {} ladder candidate(s)",
@@ -249,12 +271,10 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
                 request.len()
             ));
         }
-        for (rung, score) in rungs
-            .iter_mut()
-            .filter(|rung| !rung.screened_out)
-            .zip(scored)
-        {
-            rung.score = Some(score);
+        for rung in rungs.iter_mut() {
+            if let Some(slot) = score_of[rung.index] {
+                rung.score = Some(scored[slot].clone());
+            }
         }
     }
 
@@ -290,6 +310,8 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
                 step_scale: rung.step_scale,
                 realised_step_scale: rung.realised_step_scale,
                 update: rung.update,
+                update_scale: rung.update_scale,
+                trimmed_genes: rung.trimmed_genes,
                 learning_rate: req.learning_rate,
                 incumbent_mse: req.incumbent_mse,
                 candidate_mse: rung.mse,
@@ -319,6 +341,8 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
         step_scale: rung.step_scale,
         realised_step_scale: rung.realised_step_scale,
         update: rung.update,
+        update_scale: rung.update_scale,
+        trimmed_genes: rung.trimmed_genes,
         rungs: rungs.len() as u32,
         journal,
     })

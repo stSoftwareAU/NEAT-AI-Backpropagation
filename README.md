@@ -302,10 +302,20 @@ cargo run -p neat_ai_backpropagation --release -- train \
   once.
 - **`--trust-region-max-genes` is an L0 budget**: the largest moves are kept
   and every other gene is held at its incumbent value, with ties broken by gene
-  order so the same proposal always trims to the same candidate.
+  order so the same proposal always trims to the same candidate. The trim runs
+  *before* the rescale, since keeping only the largest moves raises RMS — so a
+  gene budget and a norm budget hold together rather than one undoing the
+  other.
+- **A clipped step is the same step for every caller.** A budget clips every
+  step above it to the same update, so the realised step is snapped down to 12
+  significant digits: a step-scale ladder's clipped rungs produce one identical
+  candidate, scored once rather than once per rung, and the backtracking line
+  search halves the step it *realised* instead of re-applying the same
+  candidate until the request finally falls below the budget.
 - **Measured before apply, journalled after.** Every epoch line carries
-  `stepScale` (what was requested), `realisedStepScale` (what was applied) and
-  an `update` object — changed genes, `l1`, `l2`, `rms`, `maxAbs`,
+  `stepScale` (what was requested), `realisedStepScale` (what was applied),
+  `updateScale` (the factor the budget imposed), `trimmedGenes` and an
+  `update` object — changed genes, `l1`, `l2`, `rms`, `maxAbs`,
   `relativeL2`, `relativeRms` — reported for the whole update and split by
   `biases` / `weights` and `hidden` / `output`. Scorer-guided candidate lines
   carry the same fields per attempt or ladder rung, so a realised update norm

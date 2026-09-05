@@ -597,3 +597,62 @@ fn every_rung_journals_its_realised_update_norm() {
         "the budget must bind at least the top rung"
     );
 }
+
+/// A trust region clips every rung above its budget to the same update, so a
+/// budgeted grid holds byte-identical candidates. Scoring each of them would
+/// spend the run's scarcest resource to learn the same number (#109).
+#[test]
+fn budget_clipped_rungs_are_scored_once() {
+    let fixture = Fixture::new(2.0, &["0.5", "0.6", "0.7", "0.8"]);
+    let ladder = [0.002, 0.005, 0.01];
+
+    // Bound every rung well below the smallest rung's own update, so all three
+    // collapse onto the same candidate.
+    train(&fixture, "free", scorer_guided(), &ladder, 1).expect("train");
+    let smallest = fixture
+        .candidates(&fixture.root.join("free"))
+        .iter()
+        .map(|rec| rec.update.total.l2)
+        .fold(f64::MAX, f64::min);
+
+    let bounded = Fixture::new(2.0, &["0.5", "0.6", "0.7", "0.8"]);
+    train_within(
+        &bounded,
+        "bounded",
+        scorer_guided(),
+        &ladder,
+        1,
+        TrustRegion {
+            l2: Some(smallest / 2.0),
+            ..TrustRegion::default()
+        },
+    )
+    .expect("train");
+
+    // Baseline plus one shared rung — not baseline plus three.
+    assert_eq!(
+        bounded.creatures_scored(),
+        2,
+        "identical rungs must be scored once"
+    );
+    assert_eq!(bounded.scorer_calls(), 2, "baseline, then one batch");
+    let candidates = bounded.candidates(&bounded.root.join("bounded"));
+    assert_eq!(
+        candidates.len(),
+        ladder.len(),
+        "every rung is still journalled"
+    );
+    for rec in &candidates {
+        assert!(
+            rec.candidate_score.is_some(),
+            "a de-duplicated rung still carries its score"
+        );
+        assert!(rec.update.total.l2 <= smallest / 2.0 * 1.000_001);
+    }
+    // One winner, and it is the smallest requested step among the identical
+    // candidates — the ladder's own tie rule.
+    let winners: Vec<&TrainCandidateRecord> =
+        candidates.iter().filter(|rec| rec.accepted).collect();
+    assert_eq!(winners.len(), 1);
+    assert!((winners[0].step_scale - ladder[0]).abs() < 1e-15);
+}
