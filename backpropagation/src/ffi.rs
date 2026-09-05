@@ -25,8 +25,8 @@
 use crate::backprop::{ApplyOptions, BackpropConfig, LearningRateStrategy};
 use crate::scorer::ScoreResult;
 use crate::train::{
-    AcceptanceMode, BEST_TRACE_FILE, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE,
-    FAILED_TRACE_DIR, ScorerAcceptance, TrainCreature, TrainRequest, run_train,
+    BEST_TRACE_FILE, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, FAILED_TRACE_DIR,
+    TrainCreature, TrainRequest, resolve_acceptance, run_train,
 };
 use serde::{Deserialize, Serialize};
 use std::ffi::c_char;
@@ -328,6 +328,12 @@ pub fn train_from_json(request: &str) -> Result<String, String> {
 
 /// Run one `trainDir` epoch loop from a decoded request.
 pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
+    // Refuses a scorer knob on an MSE run rather than ignoring it (#104).
+    let acceptance = resolve_acceptance(
+        request.acceptance == AbiAcceptanceMode::Scorer,
+        request.min_score_improvement,
+        request.mse_pre_screen,
+    )?;
     let config = BackpropConfig {
         learning_rate: request.learning_rate,
         initial_learning_rate: request.learning_rate,
@@ -353,13 +359,7 @@ pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
             outputs_only: request.outputs_only,
             hidden_only: request.hidden_only,
         },
-        acceptance: match request.acceptance {
-            AbiAcceptanceMode::Mse => AcceptanceMode::Mse,
-            AbiAcceptanceMode::Scorer => AcceptanceMode::Scorer(ScorerAcceptance {
-                min_improvement: request.min_score_improvement,
-                mse_pre_screen: request.mse_pre_screen,
-            }),
-        },
+        acceptance,
         accept_always: request.accept_always,
         max_backtracks: request.max_backtracks,
         trace_store: request.trace_store.as_deref(),

@@ -55,9 +55,9 @@ pub struct ScorerAcceptance {
     /// When true, a candidate whose training-slice MSE did not fall is dropped
     /// before paying for a scorer run.
     ///
-    /// Off by default: MSE and the scorer routinely disagree on an evolved
-    /// creature, which is the whole reason this mode exists — the pre-screen is
-    /// a cost control for cheap corpora, not a second gate.
+    /// Off by default, and it **is** a second gate: a candidate MSE rejects is
+    /// never scored, so a scorer win MSE disagreed with is lost. Turn it on
+    /// only when the scorer run is too expensive to spend on every candidate.
     pub mse_pre_screen: bool,
 }
 
@@ -182,6 +182,14 @@ pub struct TrainJournalHeader {
     /// What decided accept / rollback this run (#104).
     #[serde(default)]
     pub acceptance: AcceptanceMode,
+    /// The run's own baseline scorer fitness, when it was established before
+    /// the loop (scorer-guided runs only, #104).
+    ///
+    /// Each candidate line's `baselineScore` is the *incumbent* it was judged
+    /// against, which moves with every accept — this is the fixed opening
+    /// number a total gain is measured from.
+    #[serde(default)]
+    pub baseline_score: Option<f64>,
 }
 
 /// One epoch line in the journal.
@@ -364,6 +372,38 @@ fn resolve_scorer_acceptance<'a>(
     Ok(Some((scorer, settings)))
 }
 
+/// Build an [`AcceptanceMode`] from a caller's flags, refusing scorer-guided
+/// settings a plain MSE run would silently ignore (#104).
+///
+/// The CLI and the C ABI both carry `min_improvement` / `mse_pre_screen`
+/// alongside the mode selector, so a caller that sets one and forgets to ask
+/// for the scorer gets a run that *looks* configured. Fail loudly instead.
+pub fn resolve_acceptance(
+    scorer_guided: bool,
+    min_improvement: f64,
+    mse_pre_screen: bool,
+) -> Result<AcceptanceMode, String> {
+    if scorer_guided {
+        return Ok(AcceptanceMode::Scorer(ScorerAcceptance {
+            min_improvement,
+            mse_pre_screen,
+        }));
+    }
+    if mse_pre_screen {
+        return Err(
+            "msePreScreen only applies to scorer-guided acceptance — set acceptance to \"scorer\""
+                .into(),
+        );
+    }
+    if min_improvement != DEFAULT_MIN_SCORE_IMPROVEMENT {
+        return Err(format!(
+            "minScoreImprovement ({min_improvement}) only applies to scorer-guided acceptance \
+             — set acceptance to \"scorer\""
+        ));
+    }
+    Ok(AcceptanceMode::Mse)
+}
+
 /// Run the experimental trainer and write `journal.jsonl` + `best.json`.
 pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     // Refuse an unusable acceptance configuration before any work — and before
@@ -407,25 +447,6 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     let (baseline_mse, _) =
         compute_mse_selected(&incumbent, &mut network, req.training_data, selection)?;
 
-    let journal_path = req.output_dir.join("journal.jsonl");
-    let header = TrainJournalHeader {
-        kind: "runHeader".into(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        seed: req.seed,
-        epochs: req.epochs,
-        max_records: req.max_records,
-        sampled_records: sample.as_ref().map(RecordSample::selected),
-        total_records: sample.as_ref().map(RecordSample::total_records),
-        disable_random_samples: req.disable_random_samples,
-        learning_rate: initial_lr,
-        step_scale: req.apply.step_scale,
-        outputs_only: req.apply.outputs_only,
-        acceptance: req.acceptance,
-    };
-    let mut journal = String::new();
-    journal.push_str(&serde_json::to_string(&header).map_err(|e| e.to_string())?);
-    journal.push('\n');
-
     let score_dir = req.output_dir.join("scorer-work");
     // Scorer-guided runs establish the baseline *before* the loop: epoch 1 has a
     // real incumbent fitness to beat, instead of a comparison made after every
@@ -444,6 +465,26 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         baseline_score = Some(scored.clone());
         incumbent_score = Some(scored);
     }
+
+    let journal_path = req.output_dir.join("journal.jsonl");
+    let header = TrainJournalHeader {
+        kind: "runHeader".into(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        seed: req.seed,
+        epochs: req.epochs,
+        max_records: req.max_records,
+        sampled_records: sample.as_ref().map(RecordSample::selected),
+        total_records: sample.as_ref().map(RecordSample::total_records),
+        disable_random_samples: req.disable_random_samples,
+        learning_rate: initial_lr,
+        step_scale: req.apply.step_scale,
+        outputs_only: req.apply.outputs_only,
+        acceptance: req.acceptance,
+        baseline_score: baseline_score.as_ref().map(|s| s.score),
+    };
+    let mut journal = String::new();
+    journal.push_str(&serde_json::to_string(&header).map_err(|e| e.to_string())?);
+    journal.push('\n');
 
     let mut best_mse = baseline_mse;
     let mut accepted_epochs = 0u64;
@@ -501,11 +542,16 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                     (None, AcceptReason::MsePreScreenRejected)
                 }
                 Some((scorer, settings)) => {
+                    // One reused directory, not one per attempt: a production
+                    // creature is megabytes and `--max-backtracks` defaults to
+                    // 6, so per-attempt copies would grow without bound. The
+                    // rejected candidate itself is already captured by
+                    // `candidate.json` and the trace store (#78).
                     let scored = score_creature(
                         scorer,
                         &width.checked_json_pretty(&candidate)?,
                         req.training_data,
-                        &score_dir.join(format!("epoch-{epoch}-attempt-{backtracks}")),
+                        &score_dir.join("candidate"),
                     )?;
                     let incumbent_fitness = incumbent_score
                         .as_ref()

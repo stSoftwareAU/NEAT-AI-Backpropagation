@@ -60,6 +60,6 @@ pub use trace::{NeuronTraceState, SynapseTraceState, build_creature_trace, write
 pub use train::{
     AcceptReason, AcceptanceMode, BEST_TRACE_FILE, DEFAULT_MIN_SCORE_IMPROVEMENT,
     DEFAULT_STEP_SCALE, FAILED_TRACE_DIR, ScorerAcceptance, TrainCandidateRecord, TrainCreature,
-    TrainEpochRecord, TrainJournalHeader, TrainRequest, TrainResult, run_train,
+    TrainEpochRecord, TrainJournalHeader, TrainRequest, TrainResult, resolve_acceptance, run_train,
 };
 pub use validate::TrainedTopology;

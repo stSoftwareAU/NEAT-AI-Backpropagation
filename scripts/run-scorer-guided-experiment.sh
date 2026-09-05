@@ -34,16 +34,18 @@ if [[ ! -x "$SCORER" ]]; then
   exit 2
 fi
 
-rm -rf "$OUT"
-mkdir -p "$OUT"
 CREATURE="${CREATURE:-$OUT/creature.json}"
 DATA_DIR="${DATA_DIR:-$OUT/data}"
+# Only this run's own outputs are cleared — never a caller-supplied CREATURE or
+# DATA_DIR, which may live inside an overridden $OUT.
+rm -rf "$OUT/mse" "$OUT/scorer"
+mkdir -p "$OUT"
 
 if [[ ! -e "$DATA_DIR" ]]; then
   mkdir -p "$DATA_DIR"
-  # 1000 records of `y = x + 0.1`, except the 20 leading records of each file,
-  # which follow `y = -2x + 1`. A leading-prefix slice therefore sees only the
-  # 2% of the corpus that contradicts the other 98%.
+  # 1000 records of `y = x + 0.1`, except the 5 leading records of each file
+  # (20 of 1000), which follow `y = -2x + 1`. A leading-prefix slice of 20
+  # therefore sees only the 2% of the corpus that contradicts the other 98%.
   python3 - "$DATA_DIR" <<'PY'
 import struct
 import sys
@@ -104,8 +106,11 @@ run_mode() {
     --acceptance "$mode" \
     --scorer "$SCORER" \
     --output-dir "$OUT/$mode"
-  echo "accept reasons:"
-  grep -o '"acceptReason":"[a-zA-Z]*"' "$OUT/$mode/journal.jsonl" | sort | uniq -c
+  # Epoch lines only: scorer mode also journals a line per attempted
+  # candidate, so counting every acceptReason would not compare like for like.
+  echo "epoch verdicts:"
+  grep '"kind":"epoch"' "$OUT/$mode/journal.jsonl" |
+    grep -o '"acceptReason":"[a-zA-Z]*"' | sort | uniq -c
 }
 
 run_mode mse

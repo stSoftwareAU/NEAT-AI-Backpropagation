@@ -17,7 +17,8 @@
 use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig};
 use neat_ai_backpropagation::train::{
     AcceptReason, AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, ScorerAcceptance,
-    TrainCandidateRecord, TrainCreature, TrainEpochRecord, TrainRequest, TrainResult, run_train,
+    TrainCandidateRecord, TrainCreature, TrainEpochRecord, TrainJournalHeader, TrainRequest,
+    TrainResult, resolve_acceptance, run_train,
 };
 use std::fs;
 use std::io::Write;
@@ -250,6 +251,42 @@ fn the_baseline_is_scored_before_the_first_candidate() {
     assert!(
         out.join("scorer-work").join("baseline").is_dir(),
         "baseline scorer work directory should exist"
+    );
+    // The run's own opening number is journalled under its own name — a
+    // candidate line's `baselineScore` is the incumbent, which moves on accept.
+    let header: TrainJournalHeader =
+        serde_json::from_str(&fixture.journal_lines(&out, "runHeader")[0]).expect("header line");
+    assert_eq!(header.baseline_score, Some(0.5));
+    assert_eq!(
+        header.acceptance,
+        AcceptanceMode::Scorer(ScorerAcceptance::default())
+    );
+}
+
+/// An MSE run handed scorer knobs is a misconfiguration: the flags would be
+/// ignored, so the run would look configured while judging on MSE.
+#[test]
+fn scorer_settings_on_an_mse_run_are_refused() {
+    assert_eq!(
+        resolve_acceptance(false, DEFAULT_MIN_SCORE_IMPROVEMENT, false).unwrap(),
+        AcceptanceMode::Mse
+    );
+    assert!(
+        resolve_acceptance(false, DEFAULT_MIN_SCORE_IMPROVEMENT, true)
+            .unwrap_err()
+            .contains("msePreScreen")
+    );
+    assert!(
+        resolve_acceptance(false, 0.5, false)
+            .unwrap_err()
+            .contains("minScoreImprovement")
+    );
+    assert_eq!(
+        resolve_acceptance(true, 0.5, true).unwrap(),
+        AcceptanceMode::Scorer(ScorerAcceptance {
+            min_improvement: 0.5,
+            mse_pre_screen: true,
+        })
     );
 }
 

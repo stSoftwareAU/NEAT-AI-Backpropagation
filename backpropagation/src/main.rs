@@ -6,8 +6,8 @@ use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, ru
 use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
 use neat_ai_backpropagation::train::{
-    AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, ScorerAcceptance,
-    TrainCreature, TrainRequest, default_output_dir, run_train,
+    AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, TrainCreature, TrainRequest,
+    default_output_dir, resolve_acceptance, run_train,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -59,15 +59,14 @@ enum AcceptanceModeArg {
 }
 
 impl AcceptanceModeArg {
-    /// Map the CLI value onto the library acceptance mode.
-    fn to_config(self, min_improvement: f64, mse_pre_screen: bool) -> AcceptanceMode {
-        match self {
-            Self::Mse => AcceptanceMode::Mse,
-            Self::Scorer => AcceptanceMode::Scorer(ScorerAcceptance {
-                min_improvement,
-                mse_pre_screen,
-            }),
-        }
+    /// Map the CLI value onto the library acceptance mode, refusing scorer
+    /// settings an MSE run would ignore.
+    fn to_config(
+        self,
+        min_improvement: f64,
+        mse_pre_screen: bool,
+    ) -> Result<AcceptanceMode, String> {
+        resolve_acceptance(self == Self::Scorer, min_improvement, mse_pre_screen)
     }
 }
 
@@ -405,7 +404,7 @@ fn run() -> Result<(), String> {
                     outputs_only,
                     hidden_only,
                 },
-                acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen),
+                acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen)?,
                 accept_always,
                 max_backtracks,
                 trace_store: trace_store.as_deref(),
@@ -547,6 +546,7 @@ fn parse_step_scales(raw: &str) -> Result<Vec<f64>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use neat_ai_backpropagation::train::ScorerAcceptance;
 
     /// Parse a bare `train` invocation and hand back its arguments.
     fn parse_train(extra: &[&str]) -> Commands {
@@ -683,8 +683,26 @@ mod tests {
         assert!((min_score_improvement - DEFAULT_MIN_SCORE_IMPROVEMENT).abs() < 1e-18);
         assert!(!mse_pre_screen);
         assert_eq!(
-            acceptance.to_config(min_score_improvement, mse_pre_screen),
+            acceptance
+                .to_config(min_score_improvement, mse_pre_screen)
+                .unwrap(),
             AcceptanceMode::Mse
+        );
+    }
+
+    /// A scorer knob on an MSE run is a misconfiguration, not a no-op — the
+    /// run would otherwise look configured and quietly judge on MSE (#104).
+    #[test]
+    fn scorer_settings_on_an_mse_run_are_refused() {
+        let err = AcceptanceModeArg::Mse
+            .to_config(DEFAULT_MIN_SCORE_IMPROVEMENT, true)
+            .unwrap_err();
+        assert!(err.contains("msePreScreen"), "unexpected error: {err}");
+
+        let err = AcceptanceModeArg::Mse.to_config(0.5, false).unwrap_err();
+        assert!(
+            err.contains("minScoreImprovement"),
+            "unexpected error: {err}"
         );
     }
 
@@ -707,7 +725,9 @@ mod tests {
         };
         assert_eq!(acceptance, AcceptanceModeArg::Scorer);
         assert_eq!(
-            acceptance.to_config(min_score_improvement, mse_pre_screen),
+            acceptance
+                .to_config(min_score_improvement, mse_pre_screen)
+                .unwrap(),
             AcceptanceMode::Scorer(ScorerAcceptance {
                 min_improvement: 0.005,
                 mse_pre_screen: true,

@@ -117,12 +117,21 @@ Under `--acceptance scorer`:
   scored and journalled as a `"kind":"candidate"` line carrying
   `incumbentMse`, `candidateMse`, `mseDelta`, `baselineScore`,
   `candidateScore`, `scoreDelta`, `stepScale` and `acceptReason`.
-- MSE is demoted to a journalled diagnostic (or, with
-  `--mse-pre-screen`, a cheap cost control that never overrides an
-  accept the scorer would have granted).
+- MSE is demoted to a journalled diagnostic. `--mse-pre-screen` turns it
+  back into a **gate in front of the scorer**: a candidate MSE rejects is
+  never scored, so a scorer win MSE disagreed with is lost. Use it only
+  when a scorer run is too expensive to spend on every candidate.
 - `--accept-always` is **refused**, since keeping every candidate would
-  silently disable the gate, and `--acceptance scorer` without
-  `--scorer` fails loudly rather than falling back to MSE.
+  silently disable the gate; `--acceptance scorer` without `--scorer`
+  fails loudly rather than falling back to MSE; and
+  `--min-score-improvement` / `--mse-pre-screen` on an
+  `--acceptance mse` run are refused rather than silently ignored.
+- The run header journals the run's own `baselineScore`. Each candidate
+  line's `baselineScore` is the **incumbent** it was judged against,
+  which moves with every accept.
+- The baseline is scored from the same normalised serialisation the
+  candidates use (MSE mode scores the source file bytes), so the in-loop
+  comparison is like for like.
 - The accepted candidate's score is reused as the run's `bestScore` —
   the winner is never re-scored just to learn the same number.
 
