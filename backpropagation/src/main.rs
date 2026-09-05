@@ -743,6 +743,34 @@ mod tests {
     }
 
     #[test]
+    fn gradient_check_ranking_defaults_are_conservative() {
+        let Commands::GradientCheck {
+            facet_min_scored,
+            rank_limit,
+            sample_biases,
+            sample_weights,
+            ..
+        } = Cli::parse_from([
+            "neat_ai_backpropagation",
+            "gradient-check",
+            "creature.json",
+            "data",
+        ])
+        .command
+        else {
+            panic!("expected gradient-check");
+        };
+        assert_eq!(
+            facet_min_scored, 5,
+            "a bucket needs real evidence before it is ranked"
+        );
+        assert_eq!(rank_limit, 5);
+        // The caps are what bound an unattended production run.
+        assert_eq!(sample_biases, 50);
+        assert_eq!(sample_weights, 50);
+    }
+
+    #[test]
     fn train_step_scale_defaults_within_sweep_grid() {
         let Commands::Train { step_scale, .. } = parse_train(&[]) else {
             panic!("expected train");

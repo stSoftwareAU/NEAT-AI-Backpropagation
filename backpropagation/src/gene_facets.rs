@@ -317,8 +317,10 @@ pub struct FacetRow<'a> {
     pub improved: bool,
     /// `|proposal| / |fd|`.
     pub magnitude_ratio: Option<f64>,
-    /// Relative error between the proposal-implied gradient and the finite
-    /// difference.
+    /// Absolute error between the proposal-implied gradient and the finite
+    /// difference, for a gene the FD scored.
+    pub grad_abs_error: Option<f64>,
+    /// The same error relative to the larger of the two gradients.
     pub grad_rel_error: Option<f64>,
 }
 
@@ -344,7 +346,9 @@ pub struct FacetStats {
     pub improved_pct: f64,
     /// Median `|proposal| / |fd|`.
     pub magnitude_ratio_p50: Option<f64>,
-    /// Median relative gradient error.
+    /// Median absolute gradient error over the scored genes.
+    pub grad_abs_error_p50: Option<f64>,
+    /// Median relative gradient error over the scored genes.
     pub grad_rel_error_p50: Option<f64>,
     /// 90th percentile of that relative gradient error.
     pub grad_rel_error_p90: Option<f64>,
@@ -426,7 +430,10 @@ fn bucket_stats(facet: &str, bucket: &str, members: &[usize], rows: &[FacetRow<'
     let sign_agree = scored_rows.iter().filter(|r| r.sign_agree).count();
     let improved = members.iter().filter(|&&i| rows[i].improved).count();
     let ratios = sorted_values(scored_rows.iter().filter_map(|r| r.magnitude_ratio));
-    let errors = sorted_values(members.iter().filter_map(|&i| rows[i].grad_rel_error));
+    // Errors come from the scored rows only — `grad_rel_error` is `None` for a
+    // gene the finite difference could not measure.
+    let abs_errors = sorted_values(scored_rows.iter().filter_map(|r| r.grad_abs_error));
+    let errors = sorted_values(scored_rows.iter().filter_map(|r| r.grad_rel_error));
     FacetStats {
         facet: facet.to_string(),
         bucket: bucket.to_string(),
@@ -437,6 +444,7 @@ fn bucket_stats(facet: &str, bucket: &str, members: &[usize], rows: &[FacetRow<'
         improved,
         improved_pct: percentage(improved, sampled),
         magnitude_ratio_p50: percentile(&ratios, 0.50),
+        grad_abs_error_p50: percentile(&abs_errors, 0.50),
         grad_rel_error_p50: percentile(&errors, 0.50),
         grad_rel_error_p90: percentile(&errors, 0.90),
     }
@@ -470,7 +478,8 @@ pub fn percentile(sorted: &[f64], p: f64) -> Option<f64> {
 /// Best and worst `(facet, bucket)` pairs by sign agreement.
 ///
 /// Only buckets with at least `min_scored` scored genes are ranked — a bucket
-/// of two genes says nothing — and a facet with a single bucket is skipped
+/// of two genes says nothing, and `0` is read as `1` because a bucket with no
+/// scored gene has nothing to rank — and a facet with a single bucket is skipped
 /// entirely because it offers no contrast. Ties break on relative error, then
 /// on facet and bucket name, so the ranking is stable across runs.
 ///
@@ -637,6 +646,26 @@ mod tests {
     }
 
     #[test]
+    fn a_dead_relu_sits_on_its_one_sided_floor() {
+        let mut dead = trace(8, 0.0);
+        dead.minimum_activation = 0.0;
+        dead.maximum_activation = 0.0;
+        assert_eq!(
+            activity_bucket(Some(&dead), SquashType::Relu),
+            activity::SATURATED,
+            "a ReLU pinned at its zero floor is saturated, not merely quiet"
+        );
+        // Well clear of the floor and moving: ordinary.
+        let mut alive = trace(8, 2.0);
+        alive.minimum_activation = 1.0;
+        alive.maximum_activation = 3.0;
+        assert_eq!(
+            activity_bucket(Some(&alive), SquashType::Relu),
+            activity::ACTIVE
+        );
+    }
+
+    #[test]
     fn one_record_is_not_reported_as_flat() {
         let mut single = trace(1, 0.5);
         single.minimum_activation = 0.5;
@@ -674,6 +703,7 @@ mod tests {
             sign_agree,
             improved,
             magnitude_ratio: Some(2.0),
+            grad_abs_error: Some(if sign_agree { 0.01 } else { 0.09 }),
             grad_rel_error: Some(if sign_agree { 0.1 } else { 0.9 }),
         }
     }
@@ -704,6 +734,7 @@ mod tests {
         assert!((ordinary.sign_agree_pct - 100.0).abs() < 1e-9);
         assert!((ordinary.improved_pct - 100.0).abs() < 1e-9);
         assert_eq!(ordinary.grad_rel_error_p50, Some(0.1));
+        assert_eq!(ordinary.grad_abs_error_p50, Some(0.01));
     }
 
     #[test]

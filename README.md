@@ -480,7 +480,11 @@ gradient: whether the move really lowered slice MSE (`improved`), and
 the first-order prediction `fdGrad · Δ` it is compared against
 (`predictedDeltaMse` vs `actualDeltaMse`). Run cost is
 `(2 + 3 × sampled genes)` passes over the slice — `+ε`, `−ε` and `+Δ`
-per gene — and the sample caps are what bounds it.
+per gene — and the sample caps are what bounds it. Only a gene whose
+finite difference cleared the floor carries a gradient error, so an
+unmeasurable gene never lands in a distribution: each bucket reports
+`gradAbsErrorP50`, `gradRelErrorP50` and `gradRelErrorP90` over its
+scored genes alone.
 
 ```mermaid
 flowchart LR
@@ -533,8 +537,10 @@ offers no contrast; ties break on relative gradient error then on name,
 so the ranking is stable. The two lists never overlap — `worstClasses`
 is the tail of the same ranking with everything already named in
 `bestClasses` removed, so a thin sample yields a short worst list rather
-than the same bucket reported as both. When nothing clears the floor
-both lists are empty and `summary.txt` says so.
+than the same bucket reported as both. When the whole ranking fits in
+`bestClasses` the worst list is empty and `summary.txt` says the
+buckets are already listed above; when nothing clears the floor at all
+both lists are empty and it says that instead.
 
 The run is reproducible from `seed` alone: the same seed over the same
 creature, corpus and caps writes byte-identical artefacts.

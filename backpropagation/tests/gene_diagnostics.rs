@@ -228,11 +228,44 @@ fn applied_proposals_are_measured_not_predicted() {
             gene.id
         );
     }
-    assert_eq!(
-        summary.improved,
-        summary.genes.iter().filter(|g| g.improved).count()
+    let improved = summary.genes.iter().filter(|g| g.improved).count();
+    assert_eq!(summary.improved, improved);
+    let expected_pct = 100.0 * improved as f64 / summary.genes.len() as f64;
+    assert!(
+        (summary.improved_pct - expected_pct).abs() < 1e-9,
+        "improvedPct must be improved / sampled"
     );
-    assert!(summary.improved_pct >= 0.0 && summary.improved_pct <= 100.0);
+}
+
+#[test]
+fn an_unmeasurable_proposal_scale_is_refused_rather_than_substituted() {
+    let (dir, creature, data) = fixture();
+    let config = BackpropConfig {
+        learning_rate: 0.0,
+        initial_learning_rate: 0.0,
+        ..BackpropConfig::default()
+    };
+    let err = run_gradient_check(GradientCheckRequest {
+        creature: &creature,
+        training_data: &data,
+        config: &config,
+        max_records: Some(8),
+        seed: 1,
+        sample_biases: 4,
+        sample_weights: 4,
+        fd_eps: 1e-4,
+        step_scale: 1.0,
+        outputs_only: false,
+        hidden_only: false,
+        facet_min_scored: 2,
+        rank_limit: 3,
+        output_dir: &dir.path().join("zero-lr"),
+    })
+    .expect_err("a zero learning rate cannot imply a gradient");
+    assert!(
+        err.contains("learning rate × step scale must be positive"),
+        "the refusal must name the cause: {err}"
+    );
 }
 
 #[test]
@@ -353,6 +386,47 @@ fn a_sample_too_thin_to_rank_says_so_rather_than_inventing_a_winner() {
     assert!(
         text.contains("no bucket carried enough scored genes to rank"),
         "an unrankable run must say so:\n{text}"
+    );
+}
+
+#[test]
+fn a_ranking_that_fits_entirely_in_best_does_not_claim_nothing_was_rankable() {
+    let (dir, creature, data) = fixture();
+    let out = dir.path().join("out");
+    // A rank limit wider than the eligible set: every bucket lands in `best`
+    // and `worst` is legitimately empty.
+    let config = BackpropConfig::default();
+    let summary = run_gradient_check(GradientCheckRequest {
+        creature: &creature,
+        training_data: &data,
+        config: &config,
+        max_records: Some(8),
+        seed: 4,
+        sample_biases: 16,
+        sample_weights: 16,
+        fd_eps: 1e-4,
+        step_scale: 1.0,
+        outputs_only: false,
+        hidden_only: false,
+        facet_min_scored: 2,
+        rank_limit: 500,
+        output_dir: &out,
+    })
+    .expect("the probe must run with a wide rank limit");
+
+    assert!(!summary.best_classes.is_empty());
+    assert!(
+        summary.worst_classes.is_empty(),
+        "a limit above the eligible count leaves nothing for worst"
+    );
+    let text = summary_text(&summary);
+    assert!(
+        text.contains("worst: every ranked bucket is already listed above"),
+        "the report must not claim nothing was rankable:\n{text}"
+    );
+    assert!(
+        !text.contains("worst: no bucket carried enough"),
+        "that message is only true when nothing ranked:\n{text}"
     );
 }
 

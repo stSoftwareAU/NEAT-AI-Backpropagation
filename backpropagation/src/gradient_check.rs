@@ -111,7 +111,9 @@ pub struct GeneProbeRow {
     /// `|proposal_grad − fd_grad|` — the absolute gradient error.
     pub grad_abs_error: f64,
     /// `grad_abs_error / max(|proposal_grad|, |fd_grad|)` — the relative
-    /// gradient error. `None` when both gradients are exactly zero.
+    /// gradient error. `None` for a gene the finite difference could not
+    /// score (below the FD floor, or a non-finite scale), so an unmeasured
+    /// gene never lands in an error distribution as a spurious `1.0`.
     pub grad_rel_error: Option<f64>,
     /// First-order predicted MSE change, `fd_grad · proposal_delta`.
     pub predicted_delta_mse: f64,
@@ -141,7 +143,7 @@ pub struct ClassStats {
     pub magnitude_ratio_p90: Option<f64>,
 }
 
-/// Schema version of `gradient-check.json` / `genes.jsonl`.
+/// Artefact schema version of `gradient-check.json` / `genes.jsonl`.
 ///
 /// Bumped to `2` by issue #107 (facets, applied-proposal ground truth). A
 /// consumer comparing artefacts across NEAT-AI-core / Backpropagation
@@ -199,14 +201,16 @@ impl CreatureFingerprint {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GradientCheckSummary {
-    /// Artifact schema version — [`GRADIENT_CHECK_SCHEMA`].
+    /// Artefact schema version — [`GRADIENT_CHECK_SCHEMA`].
     pub schema_version: u32,
     /// Crate version.
     pub version: String,
     /// Declared neat-core baseline from `neat-core.expected-version`, so an
     /// artefact says which core it was measured against.
     pub neat_core_baseline: String,
-    /// Issue this probe addresses.
+    /// Issue that introduced the probe (#40). Later extensions — the #107
+    /// facets and gradient error — are tracked by `schema_version`, so this
+    /// stays put and a v1 consumer keeps reading the field it knows.
     pub issue: u32,
     /// Baseline MSE on the probe slice.
     pub baseline_mse: f64,
@@ -295,6 +299,17 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
 
     let lr = calculate_learning_rate(req.config, 0, None);
     let step = effective_step_scale(req.step_scale);
+    // A proposal delta is inverted back through this scale to the gradient it
+    // implies, so a zero or non-finite one is refused here rather than
+    // silently substituted — a substituted scale would report an invented
+    // gradient as a measured one.
+    let proposal_scale = lr * step;
+    if !(proposal_scale.is_finite() && proposal_scale > 0.0) {
+        return Err(format!(
+            "learning rate × step scale must be positive and finite \
+             (learning rate {lr}, step scale {step})"
+        ));
+    }
 
     let mut network = compile_creature(&creature).map_err(|e| e.to_string())?;
     let (baseline_mse, _) =
@@ -336,16 +351,7 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
     let fd = FdCtx {
         eps: req.fd_eps,
         fd_floor: req.config.plank_constant.max(1e-12),
-        // Floored so a zero / non-finite learning rate cannot divide by zero
-        // when a proposal delta is inverted back into a gradient.
-        proposal_scale: {
-            let scale = lr * step;
-            if scale.is_finite() && scale > 0.0 {
-                scale
-            } else {
-                1.0
-            }
-        },
+        proposal_scale,
         training_data: req.training_data,
         max_records: req.max_records,
     };
@@ -448,9 +454,15 @@ pub fn summary_text(summary: &GradientCheckSummary) -> String {
         ("worst", &summary.worst_classes),
     ] {
         if ranked.is_empty() {
-            text.push_str(&format!(
-                "{label}: no bucket carried enough scored genes to rank\n"
-            ));
+            // An empty worst list beside a populated best list means the whole
+            // ranking already fitted above — saying "nothing was rankable"
+            // there would be a plain untruth.
+            let reason = if summary.best_classes.is_empty() {
+                "no bucket carried enough scored genes to rank"
+            } else {
+                "every ranked bucket is already listed above"
+            };
+            text.push_str(&format!("{label}: {reason}\n"));
         }
         for stats in ranked {
             text.push_str(&format!(
@@ -547,9 +559,11 @@ fn eligible_biases(
 
 /// Eligible synapse genes.
 ///
-/// A synapse whose target UUID is not a neuron of this creature is a
-/// corrupt export — refused here rather than silently dropped, so the sample
-/// can never quietly shrink.
+/// A synapse whose target UUID is not a neuron of this creature is a corrupt
+/// export — refused here rather than silently dropped, so the sample can never
+/// quietly shrink. `PropagateLayout::from_creature` rejects the same export
+/// first on any ordinary run, so this is defence in depth on the sampling
+/// path, not the primary guard.
 fn eligible_weights(
     creature: &CreatureExport,
     signal: &LearningSignal,
@@ -701,9 +715,12 @@ fn finalize_row(
     let proposal_grad = -gene.proposal_delta / fd.proposal_scale;
     let grad_abs_error = (proposal_grad - fd_grad).abs();
     // Symmetric relative error: scaled by whichever gradient is larger, so a
-    // near-zero denominator cannot inflate the statistic.
+    // near-zero denominator cannot inflate the statistic. Only a gene the FD
+    // actually scored gets one — an unscored gene has `fd_grad ≈ 0`, which
+    // would otherwise contribute a meaningless 1.0 to every distribution.
     let scale = proposal_grad.abs().max(fd_grad.abs());
-    let grad_rel_error = (scale > 0.0 && scale.is_finite()).then(|| grad_abs_error / scale);
+    let grad_rel_error =
+        (scored && scale > 0.0 && scale.is_finite()).then(|| grad_abs_error / scale);
     GeneProbeRow {
         class: gene.class,
         index: gene.index,
@@ -735,6 +752,7 @@ fn facet_row(row: &GeneProbeRow) -> FacetRow<'_> {
         sign_agree: row.sign_agree,
         improved: row.improved,
         magnitude_ratio: row.magnitude_ratio,
+        grad_abs_error: row.magnitude_ratio.map(|_| row.grad_abs_error),
         grad_rel_error: row.grad_rel_error,
     }
 }
