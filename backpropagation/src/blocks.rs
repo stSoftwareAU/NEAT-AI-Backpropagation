@@ -495,31 +495,20 @@ pub fn plan_blocks(
             BlockStrategy::TopGenes => {
                 push(top_genes_block(magnitudes, plan.top_genes), &mut blocks)
             }
-            BlockStrategy::Neuron => {
-                for target in select_targets(&plan.targets, &ranked, plan.blocks_per_strategy, rng)
+            // The three focus strategies differ only in how far they grow
+            // around the drawn target, so they share one selection loop —
+            // every focus block therefore carries its selection metadata by
+            // construction rather than by repetition.
+            BlockStrategy::Neuron | BlockStrategy::Neighbourhood | BlockStrategy::Subgraph => {
+                for target in select_targets(&plan.targets, &ranked, plan.blocks_per_strategy, rng)?
                 {
                     let focus = target.neuron;
-                    let mut block = graph.block(strategy, Some(focus), BTreeSet::from([focus]));
-                    block.selection = Some(target.selection);
-                    push(block, &mut blocks);
-                }
-            }
-            BlockStrategy::Neighbourhood => {
-                for target in select_targets(&plan.targets, &ranked, plan.blocks_per_strategy, rng)
-                {
-                    let focus = target.neuron;
-                    let neurons = graph.neighbourhood(focus, plan.radius);
+                    let neurons = match strategy {
+                        BlockStrategy::Neuron => BTreeSet::from([focus]),
+                        BlockStrategy::Neighbourhood => graph.neighbourhood(focus, plan.radius),
+                        _ => graph.random_subgraph(focus, plan.subgraph_size, rng),
+                    };
                     let mut block = graph.block(strategy, Some(focus), neurons);
-                    block.selection = Some(target.selection);
-                    push(block, &mut blocks);
-                }
-            }
-            BlockStrategy::Subgraph => {
-                for target in select_targets(&plan.targets, &ranked, plan.blocks_per_strategy, rng)
-                {
-                    let start = target.neuron;
-                    let neurons = graph.random_subgraph(start, plan.subgraph_size, rng);
-                    let mut block = graph.block(strategy, Some(start), neurons);
                     block.selection = Some(target.selection);
                     push(block, &mut blocks);
                 }

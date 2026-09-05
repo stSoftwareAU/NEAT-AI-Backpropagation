@@ -209,7 +209,7 @@ fn the_random_control_fraction_splits_the_draw() {
         random_control_fraction: 0.5,
     };
     let mut rng = StdRng::seed_from_u64(7);
-    let selected = select_targets(&plan, &ranked, 2, &mut rng);
+    let selected = select_targets(&plan, &ranked, 2, &mut rng).expect("valid plan");
     assert_eq!(selected.len(), 2);
     assert_eq!(selected[0].selection.source, TargetSource::Evidence);
     assert_eq!(selected[0].selection.rank, 0);
@@ -228,7 +228,7 @@ fn the_random_control_fraction_splits_the_draw() {
         strategy: TargetStrategy::Evidence,
         random_control_fraction: 0.0,
     };
-    let selected = select_targets(&exploit_only, &ranked, 3, &mut rng);
+    let selected = select_targets(&exploit_only, &ranked, 3, &mut rng).expect("valid plan");
     assert_eq!(
         selected
             .iter()
@@ -257,7 +257,7 @@ fn the_random_strategy_draws_every_target_uniformly() {
     let mut first_ranks = Vec::new();
     for seed in 0..64u64 {
         let mut rng = StdRng::seed_from_u64(seed);
-        let selected = select_targets(&plan, &ranked, 1, &mut rng);
+        let selected = select_targets(&plan, &ranked, 1, &mut rng).expect("valid plan");
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].selection.source, TargetSource::RandomControl);
         counts[selected[0].neuron] += 1;
@@ -285,9 +285,9 @@ fn an_impossible_control_fraction_is_refused() {
             },
             ..BlockPlan::default()
         };
-        let err = plan
-            .validate()
-            .expect_err("fraction {fraction} must be refused");
+        let Err(err) = plan.validate() else {
+            panic!("fraction {fraction} must be refused");
+        };
         assert!(
             err.contains("randomControlFraction"),
             "error must name the setting: {err}"
@@ -453,6 +453,35 @@ fn a_scored_run_compares_the_evidence_and_control_arms() {
         json.contains("randomControl"),
         "the candidate metadata names the control arm"
     );
+}
+
+/// A control fraction the run cannot honour stops the run, rather than being
+/// dropped on the way to a `blocks.json` that looks like it measured both arms.
+#[test]
+fn a_control_fraction_on_a_random_run_stops_the_run() {
+    let fixture = Fixture::new(&["0.1"]);
+    let err = run_blocks(BlocksRequest {
+        creature: &fixture.creature,
+        training_data: &fixture.data,
+        config: &BackpropConfig::default(),
+        max_records: None,
+        seed: 3,
+        step_scale: 0.5,
+        plan: &BlockPlan {
+            strategies: vec![BlockStrategy::Neuron],
+            targets: TargetPlan {
+                strategy: TargetStrategy::Random,
+                random_control_fraction: 0.5,
+            },
+            ..BlockPlan::default()
+        },
+        skip_mse: true,
+        scorer: None,
+        min_score_improvement: DEFAULT_MIN_SCORE_IMPROVEMENT,
+        output_dir: &fixture.root.join("refused"),
+    })
+    .expect_err("an unhonourable control fraction must stop the run");
+    assert!(err.contains("randomControlFraction"), "{err}");
 }
 
 struct Fixture {

@@ -18,7 +18,9 @@ use crate::creature_io::{ObservationWidth, load_forward_only_creature};
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
 use crate::scorer::score_creature;
-use crate::targets::{ArmSample, SelectionComparison, TargetSelection, compare_arms};
+use crate::targets::{
+    ArmSample, SelectionComparison, TargetSelection, TargetStrategy, compare_arms,
+};
 use crate::train::{AcceptanceMode, resolve_acceptance};
 use crate::validate::TrainedTopology;
 use neat_core::{CreatureExport, compile_creature};
@@ -240,6 +242,17 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
         AcceptanceMode::Scorer(settings) => Some(settings.min_improvement),
         AcceptanceMode::Mse => None,
     };
+    // A sparse pass only accumulates for the neurons its own random draw
+    // selected, so every evidence term is zero for the rest and the ranking
+    // degenerates to "rank that random subset". Said out loud rather than left
+    // to be discovered in the rank features.
+    if req.plan.targets.strategy == TargetStrategy::Evidence && req.config.sparse_ratio < 1.0 {
+        eprintln!(
+            "blocks: warning — sparse_ratio {} means only that random share of neurons \
+             accumulated any signal, so evidence target selection ranks that subset alone",
+            req.config.sparse_ratio
+        );
+    }
     let incumbent = load_forward_only_creature(req.creature)?;
     let width = ObservationWidth::of(&incumbent)?;
     let topology = TrainedTopology::of(&incumbent);

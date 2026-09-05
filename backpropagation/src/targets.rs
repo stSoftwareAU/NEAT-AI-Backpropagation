@@ -20,15 +20,23 @@
 //!
 //! | Signal | Weight | Why |
 //! | ------ | ------ | --- |
-//! | Error mass | 0.35 | Accumulated \|error\| is the evidence that something here is wrong. |
-//! | Relative proposal | 0.30 | A proposal large *against the parameter it moves* is a real experiment, not rounding. |
-//! | Activity | 0.15 | A neuron the pass rarely activated, or whose activation never moved, gives an unreliable gradient. |
+//! | Error mass | 0.35 | Accumulated absolute error is the evidence that something here is wrong. |
+//! | Relative proposal | 0.30 | A proposal large *against the parameter it moves*, gated by the absolute move, is a real experiment rather than rounding against nothing. |
+//! | Activity | 0.15 | A neuron few records produced learning for, or whose activation never moved, gives an unreliable gradient. |
 //! | Consistency | 0.15 | Records pulling the same way are worth more than records cancelling out. |
 //! | Degree | 0.05 | Fan-in / fan-out is a secondary structural tie-break, not evidence. |
 //!
 //! Longest-path depth is recorded as a rank feature but **not** scored: no
 //! measurement in this crate establishes which direction depth should push, so
-//! weighting it would be a guess dressed as evidence.
+//! weighting it would be a guess dressed as evidence. Finite-difference sign
+//! confidence is likewise absent: it needs the `gradient-check` probes, which
+//! one accumulation pass does not produce.
+//!
+//! **The ranking is only as wide as the pass.** With `sparse_ratio < 1.0` the
+//! pass accumulates for its own random subset alone, so error mass, proposal
+//! and consistency are zero for every neuron outside it and the ranking
+//! degenerates to "rank that subset" — [`crate::blockwise::run_blocks`] warns
+//! when the two are combined.
 
 use crate::backprop::LearningSignal;
 use crate::blocks::{BlockGraph, ProposalMagnitudes};
@@ -56,9 +64,11 @@ const SECONDS_PER_HOUR: f64 = 3600.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum TargetStrategy {
-    /// Uniform random draw over every eligible neuron — the control this crate
-    /// shipped before issue #108, retained so the heuristic can be measured
-    /// against it.
+    /// Uniform random draw over every eligible neuron — the control arm the
+    /// heuristic is measured against. (The behaviour before issue #108 was a
+    /// deterministic proposal-magnitude ranking, which survives as one term of
+    /// [`TargetStrategy::Evidence`]; this uniform draw is the baseline the
+    /// issue asks the heuristic to beat, not that old behaviour.)
     Random,
     /// Highest-ranked evidence first.
     #[default]
@@ -110,8 +120,17 @@ pub struct TargetFeatures {
     /// `proposal / (proposal + parameter)` — a bounded "how big is this move
     /// against what it moves", `0.0` when neither is present.
     pub relative_proposal: f64,
-    /// Records whose forward pass activated the neuron.
+    /// Records the accumulation pass folded into this neuron's trace.
+    ///
+    /// The pass observes every non-input neuron on every record, so this is
+    /// the pass length rather than a per-neuron count — it is recorded for
+    /// context and **not** scored. [`TargetFeatures::learning_records`] is the
+    /// count that actually varies between targets.
     pub activation_records: u64,
+    /// Records that produced a bias accumulation here — the neuron was inside
+    /// the sparse selection, the pass reached it, and it did not flag
+    /// `noChange`. This is the activation-count signal the ranking uses.
+    pub learning_records: f64,
     /// Largest minus smallest activation seen.
     pub activation_range: f64,
     /// Share of per-record weight proposals pulling the same way, `0.0`–`1.0`.
@@ -209,6 +228,9 @@ impl TargetSelector for EvidenceTargets {
         count: usize,
         _rng: &mut dyn RngCore,
     ) -> Vec<SelectedTarget> {
+        if count == 0 {
+            return Vec::new();
+        }
         pool.iter()
             .take(count)
             .map(|t| t.selected_by(TargetSource::Evidence))
@@ -231,6 +253,11 @@ impl TargetSelector for UniformRandomTargets {
         count: usize,
         rng: &mut dyn RngCore,
     ) -> Vec<SelectedTarget> {
+        // A zero draw must not consume RNG: shuffling for no output would
+        // shift the stream and make the two arms of one run irreproducible.
+        if count == 0 {
+            return Vec::new();
+        }
         // Partial Fisher–Yates over an index list — the same shuffle
         // `select_sparse` uses, so a uniform draw here means what it means
         // there.
@@ -257,8 +284,8 @@ pub struct TargetPlan {
     /// Which strategy draws the exploitation share.
     pub strategy: TargetStrategy,
     /// Share of each draw reserved for the uniform random control arm,
-    /// `0.0`–`1.0`. Ignored by [`TargetStrategy::Random`], whose whole draw is
-    /// already the control.
+    /// `0.0`–`1.0`. Refused above `0.0` on [`TargetStrategy::Random`], whose
+    /// whole draw is already the control — see [`TargetPlan::validate`].
     pub random_control_fraction: f64,
 }
 
@@ -276,15 +303,26 @@ impl TargetPlan {
     ///
     /// A fraction outside `0.0..=1.0` (or a non-finite one) is a
     /// misconfiguration: silently clamping it would report a control arm that
-    /// was never the size the operator asked for.
+    /// was never the size the operator asked for. A control fraction on a
+    /// [`TargetStrategy::Random`] run is refused for the same reason `train`
+    /// refuses scorer settings on an MSE run — the whole draw is already the
+    /// control, so honouring the number is impossible and ignoring it would be
+    /// silent.
     ///
     /// # Errors
-    /// - `random_control_fraction` is non-finite or outside `0.0..=1.0`.
+    /// - `random_control_fraction` is non-finite or outside `0.0..=1.0`;
+    /// - it is above `0.0` on the random strategy.
     pub fn validate(&self) -> Result<(), String> {
         let fraction = self.random_control_fraction;
         if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
             return Err(format!(
                 "randomControlFraction must be between 0.0 and 1.0 — got {fraction}"
+            ));
+        }
+        if self.strategy == TargetStrategy::Random && fraction > 0.0 {
+            return Err(format!(
+                "randomControlFraction {fraction} is refused on the random strategy — its whole \
+                 draw is already the control arm"
             ));
         }
         Ok(())
@@ -293,7 +331,13 @@ impl TargetPlan {
     /// How many of `count` targets the control arm takes.
     ///
     /// A non-zero fraction always yields at least one control target, so a
-    /// small draw cannot silently become pure exploitation.
+    /// small draw cannot silently become pure exploitation — which also means
+    /// a fraction below `1 / count` buys a larger control share than asked
+    /// for; `--blocks-per-strategy` is what makes a small fraction realisable.
+    ///
+    /// `self` must have passed [`TargetPlan::validate`] — that is where an
+    /// impossible fraction is refused loudly. The clamp here is defence in
+    /// depth for a hand-built plan, never the primary check.
     pub fn control_share(&self, count: usize) -> usize {
         if count == 0 {
             return 0;
@@ -340,17 +384,23 @@ pub fn rank_targets(
     }
 
     let max_error = pool_max(features.iter().map(|(_, f)| f.error_mass));
-    let max_records = pool_max(features.iter().map(|(_, f)| f.activation_records as f64));
+    let max_learning = pool_max(features.iter().map(|(_, f)| f.learning_records));
     let max_range = pool_max(features.iter().map(|(_, f)| f.activation_range));
+    let max_proposal = pool_max(features.iter().map(|(_, f)| f.proposal_magnitude));
     let max_degree = pool_max(features.iter().map(|(_, f)| (f.fan_in + f.fan_out) as f64));
 
     let mut scored: Vec<(usize, f64, TargetFeatures)> = features
         .into_iter()
         .map(|(index, f)| {
-            let coverage = normalise(f.activation_records as f64, max_records);
+            let coverage = normalise(f.learning_records, max_learning);
             let range = normalise(f.activation_range, max_range);
+            // The ratio alone would crown a dead gene: an infinitesimal move
+            // against a near-zero parameter is ratio 1.0. Gating it by the
+            // pool-normalised absolute move keeps "big against what it moves"
+            // and drops "big against nothing".
+            let proposal = f.relative_proposal * normalise(f.proposal_magnitude, max_proposal);
             let score = WEIGHT_ERROR_MASS * normalise(f.error_mass, max_error)
-                + WEIGHT_RELATIVE_PROPOSAL * f.relative_proposal
+                + WEIGHT_RELATIVE_PROPOSAL * proposal
                 + WEIGHT_ACTIVITY * (0.5 * coverage + 0.5 * range)
                 + WEIGHT_CONSISTENCY * f.signal_consistency
                 + WEIGHT_DEGREE * normalise((f.fan_in + f.fan_out) as f64, max_degree);
@@ -374,13 +424,22 @@ pub fn rank_targets(
 /// and the uniform random control arm.
 ///
 /// The control targets are drawn from what exploitation did **not** take, so a
-/// control draw is never a relabelled exploitation pick.
+/// control draw is never a relabelled exploitation pick — and, within one run,
+/// never a *top-ranked* one either. That makes the in-run
+/// [`SelectionComparison`] a comparison against the ranking's **tail**, which
+/// flatters the evidence arm; the unbiased measurement is two runs, one per
+/// [`TargetStrategy`], which is what
+/// `scripts/run-target-selection-benchmark.sh` does.
+///
+/// # Errors
+/// - `plan` is impossible — see [`TargetPlan::validate`].
 pub fn select_targets(
     plan: &TargetPlan,
     ranked: &[RankedTarget],
     count: usize,
     rng: &mut dyn RngCore,
-) -> Vec<SelectedTarget> {
+) -> Result<Vec<SelectedTarget>, String> {
+    plan.validate()?;
     let count = count.min(ranked.len());
     let control = plan.control_share(count);
     let exploit = count - control;
@@ -394,7 +453,7 @@ pub fn select_targets(
             .collect();
         selected.extend(UniformRandomTargets.choose(&remaining, control, rng));
     }
-    selected
+    Ok(selected)
 }
 
 /// One scored candidate's contribution to the arm comparison.
@@ -543,6 +602,7 @@ fn features_of(
             0.0
         },
         activation_records: records,
+        learning_records: signal.biases.get(index).map_or(0.0, |b| finite(b.count)),
         activation_range,
         signal_consistency: if observed > 0.0 {
             (directed / observed).clamp(0.0, 1.0)
@@ -707,7 +767,7 @@ mod tests {
             random_control_fraction: 0.5,
         };
         let mut rng = StdRng::seed_from_u64(2);
-        let selected = select_targets(&plan, &ranked, 9, &mut rng);
+        let selected = select_targets(&plan, &ranked, 9, &mut rng).expect("valid plan");
         assert_eq!(selected.len(), 2);
         let mut neurons: Vec<usize> = selected.iter().map(|t| t.neuron).collect();
         neurons.sort_unstable();
@@ -718,7 +778,11 @@ mod tests {
     fn an_empty_pool_selects_nothing() {
         let plan = TargetPlan::default();
         let mut rng = StdRng::seed_from_u64(1);
-        assert!(select_targets(&plan, &[], 4, &mut rng).is_empty());
+        assert!(
+            select_targets(&plan, &[], 4, &mut rng)
+                .expect("valid plan")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -727,7 +791,7 @@ mod tests {
         assert!(
             TargetPlan {
                 strategy: TargetStrategy::Random,
-                random_control_fraction: 1.0,
+                random_control_fraction: 0.0,
             }
             .validate()
             .is_ok()
@@ -739,6 +803,93 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+    }
+
+    /// A control fraction on a run that is already all control cannot be
+    /// honoured, so it is refused rather than quietly dropped.
+    #[test]
+    fn a_control_fraction_on_the_random_strategy_is_refused() {
+        let plan = TargetPlan {
+            strategy: TargetStrategy::Random,
+            random_control_fraction: 0.25,
+        };
+        let Err(err) = plan.validate() else {
+            panic!("a control fraction on the random strategy must be refused");
+        };
+        assert!(err.contains("randomControlFraction"), "{err}");
+        // The refusal reaches the caller through the draw, not only through a
+        // validate() a caller might skip.
+        let mut rng = StdRng::seed_from_u64(4);
+        let (_, ranked) = ranked();
+        assert!(select_targets(&plan, &ranked, 2, &mut rng).is_err());
+    }
+
+    /// The proposal term measures a real move, not a ratio: a gene whose
+    /// parameters are ~zero has ratio 1.0 for an infinitesimal proposal, and
+    /// must not outrank a gene proposing a genuinely large move.
+    #[test]
+    fn an_infinitesimal_move_against_nothing_cannot_outrank_a_real_one() {
+        let creature = parse_creature_json(PAIR).unwrap();
+        let graph = BlockGraph::of(&creature);
+        let signal = LearningSignal::new(creature.neurons.len(), creature.synapses.len());
+        let traces = vec![NeuronTraceStats::default(); creature.neurons.len()];
+        let mut magnitudes = ProposalMagnitudes {
+            biases: vec![0.0; creature.neurons.len()],
+            weights: vec![0.0; creature.synapses.len()],
+        };
+        // h1 proposes a real move against its own weights; h2 proposes almost
+        // nothing, but its genes are zeroed so the ratio alone would crown it.
+        magnitudes.biases[0] = 0.5;
+        magnitudes.biases[1] = 1e-12;
+        let mut creature = creature;
+        creature.neurons[1].bias = 0.0;
+        for synapse in &mut creature.synapses {
+            if synapse.to_uuid == "h2" || synapse.from_uuid == "h2" {
+                synapse.weight = 0.0;
+            }
+        }
+        let ranked = rank_targets(&creature, &graph, &magnitudes, &signal, &traces, &[0, 1]);
+        assert_eq!(ranked[0].neuron, 0, "the real move must rank first");
+        assert!(
+            ranked[1].features.relative_proposal > ranked[0].features.relative_proposal,
+            "the ratio really is higher for the dead gene — the score is what must not follow it"
+        );
+    }
+
+    /// The activation-count signal must discriminate. The trace's own record
+    /// count does not (the pass folds every neuron on every record), so the
+    /// ranking uses the bias accumulation count instead.
+    #[test]
+    fn the_activity_signal_uses_records_that_actually_produced_learning() {
+        let creature = parse_creature_json(PAIR).unwrap();
+        let graph = BlockGraph::of(&creature);
+        let magnitudes = ProposalMagnitudes {
+            biases: vec![0.0; creature.neurons.len()],
+            weights: vec![0.0; creature.synapses.len()],
+        };
+        let mut signal = LearningSignal::new(creature.neurons.len(), creature.synapses.len());
+        signal.biases[1] = BiasSignal {
+            count: 16.0,
+            total_adjusted_bias: 1.0,
+            no_change: false,
+        };
+        // Both neurons were folded into the trace on every record — only the
+        // learning count separates them.
+        let traces = vec![
+            NeuronTraceStats {
+                records: 16,
+                ..NeuronTraceStats::default()
+            };
+            creature.neurons.len()
+        ];
+        let ranked = rank_targets(&creature, &graph, &magnitudes, &signal, &traces, &[0, 1]);
+        assert_eq!(ranked[0].neuron, 1, "the neuron that learnt ranks first");
+        assert_eq!(ranked[0].features.learning_records, 16.0);
+        assert_eq!(ranked[1].features.learning_records, 0.0);
+        assert_eq!(
+            ranked[0].features.activation_records, ranked[1].features.activation_records,
+            "the trace record count is the pass length, not a per-neuron signal"
         );
     }
 }

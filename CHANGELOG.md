@@ -15,7 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error mass, proposal magnitude relative to the parameter it moves,
   activation coverage / range, per-record direction consistency and, as a
   secondary term, fan-in / fan-out; longest-path depth is recorded as a rank
-  feature but deliberately not scored. `--target-selection random` retains the
+  feature but deliberately not scored, and the relative-proposal term is gated
+  by the absolute move so an infinitesimal proposal against a near-zero
+  parameter cannot outrank a real one. `--target-selection random` retains the
   uniform draw as the control arm, and `--random-control-fraction` reserves a
   configurable share of every draw for a uniform draw over the targets
   exploitation did not take — so a run measures its own heuristic and still
@@ -28,7 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `scripts/run-target-selection-benchmark.sh` runs the same creature, corpus
   and seed through both arms and prints wins/hour and score gain/hour for
   each; its targets are env vars, so no stock-market logic lands in this
-  public library (issue #108).
+  public library. Two boundaries are stated rather than left to be
+  discovered: the in-run control arm draws from what exploitation did not
+  take, so `selectionComparison` compares against the ranking's *tail* and
+  the two-run script is the unbiased measurement; and a `sparse_ratio` below
+  `1.0` accumulates for its own random subset alone, which `blocks` now warns
+  about because the ranking can then only rank that subset. A control
+  fraction on a `--target-selection random` run is refused rather than
+  ignored, as `train` refuses scorer settings on an MSE run (issue #108).
 
 - Gradient diagnostics by gene class and squash: `gradient-check` now labels
   every probed gene with the facets a NEAT creature actually varies over —

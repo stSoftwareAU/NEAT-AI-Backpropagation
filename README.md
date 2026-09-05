@@ -351,8 +351,8 @@ needs, so the evidence costs nothing extra:
 
 | Flag | Default | Meaning |
 | ---- | ------- | ------- |
-| `--target-selection` | `evidence` | `evidence` ranks candidates on the accumulated signal; `random` is the uniform draw, retained as the control |
-| `--random-control-fraction` | `0.0` | Share of every focus draw reserved for a uniform random control target, `0.0`–`1.0` |
+| `--target-selection` | `evidence` | `evidence` ranks candidates on the accumulated signal; `random` is the uniform draw the heuristic is measured against |
+| `--random-control-fraction` | `0.0` | Share of every focus draw reserved for a uniform random control target, `0.0`–`1.0`. Refused above `0.0` on a `random` run, whose whole draw is already the control |
 
 A target's score is a weighted sum of five normalised signals, each
 scaled by the pool's own maximum so the score means "loudest *here*":
@@ -360,17 +360,26 @@ scaled by the pool's own maximum so the score means "loudest *here*":
 | Signal | Weight | Why |
 | ------ | ------ | --- |
 | Error mass | 0.35 | Accumulated absolute error is the evidence something here is wrong |
-| Relative proposal | 0.30 | `proposal / (proposal + parameter)` — a move large against what it moves is a real experiment, not rounding |
-| Activity | 0.15 | A neuron rarely activated, or whose activation never moves, gives an unreliable gradient |
+| Relative proposal | 0.30 | `proposal / (proposal + parameter)`, gated by the pool-normalised absolute move, so a real experiment ranks above an infinitesimal move against a near-zero parameter |
+| Activity | 0.15 | A neuron few records produced learning for, or whose activation never moves, gives an unreliable gradient |
 | Consistency | 0.15 | Per-record weight proposals pulling the same way beat records that cancel out |
 | Degree | 0.05 | Fan-in / fan-out is a secondary structural tie-break, not evidence |
 
 Longest-path depth is recorded as a rank feature but **not** scored: no
 measurement in this crate establishes which direction depth should push,
-so weighting it would be a guess dressed as evidence. The weights are
-fixed and documented rather than tuned per corpus — a per-corpus
-weighting is exactly the private, domain-specific logic this public
-repository must not carry.
+so weighting it would be a guess dressed as evidence. Finite-difference
+sign confidence is absent for the same reason it is cheap here to say so
+— it needs the `gradient-check` probes, which one accumulation pass does
+not produce. The weights are fixed and documented rather than tuned per
+corpus — a per-corpus weighting is exactly the private, domain-specific
+logic this public repository must not carry.
+
+The ranking is only as wide as the pass that fed it: with
+`sparse_ratio < 1.0` the pass accumulates for its own random subset
+alone, so the evidence terms are zero outside it and the ranking
+degenerates to "rank that subset". `blocks` prints a warning when the two
+are combined rather than leaving it to be discovered in the rank
+features.
 
 - **Every candidate says why it was picked.** Each focus candidate in
   `blocks.json` carries `selection`: the `source` (`evidence` or
@@ -381,8 +390,16 @@ repository must not carry.
   `--random-control-fraction 0.25` reserves a quarter of every focus draw
   for a uniform draw over the targets exploitation did *not* take, so a
   run measures its own heuristic and still finds accidental wins. A
-  non-zero fraction always keeps at least one control target, and a
-  fraction outside `0.0`–`1.0` is refused rather than clamped.
+  non-zero fraction always keeps at least one control target — which means
+  a fraction below `1 / --blocks-per-strategy` buys a larger control share
+  than asked for — and a fraction outside `0.0`–`1.0` is refused rather
+  than clamped.
+- **The in-run comparison is a tail comparison.** Because the control arm
+  draws from what exploitation did not take, it can never draw a
+  top-ranked target, which flatters the evidence arm. Read
+  `selectionComparison` as "top-k evidence vs the ranking's tail"; the
+  unbiased measurement is two runs, one per `--target-selection`, which is
+  what the benchmark script below does.
 - **Both arms are timed.** Every candidate records `scorerSeconds`, and a
   scored run writes `selectionComparison` — `candidatesScored`, `wins`,
   `scorerSeconds`, `winsPerHour`, `totalScoreGain`, `scoreGainPerHour`
