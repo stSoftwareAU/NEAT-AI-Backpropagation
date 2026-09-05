@@ -86,6 +86,15 @@ reverted and the test passes on the shipped code.
 `RUSTDOCFLAGS="-D warnings" cargo doc` all pass locally, as does
 `markdownlint-cli2`.
 
+CodeQL raised five `rust/cleartext-logging` alerts (#6–#10) on this branch:
+`blockwise.rs:536` and `blockwise_candidates.rs:274`, `291`, `382`, `395`. All
+five are `assert!` / `assert_eq!` failure messages inside `#[test]` functions —
+not logging — and the values they interpolate are creature gene UUIDs (neuron
+identifiers and synapse endpoints) of a synthetic in-test fixture, which are
+topology identifiers rather than credentials or personal data. Naming the gene
+is the whole point of those assertions: without it a failure says only that a
+bias moved, not which one. Dismissed as false positives.
+
 <!-- vibe-quality-gate-skipped reason="codespell is not installed in this container and cannot be installed (no pip); ./quality.sh reaches the codespell preflight and stops there. Every other gate stage was run individually and passes — see the list above. CI runs codespell for real on the PR." -->
 
 ## Acceptance Criteria
