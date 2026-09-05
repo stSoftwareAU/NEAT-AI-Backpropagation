@@ -251,6 +251,8 @@ fn sibling_loaders_reject_a_widthless_creature() {
         step_scale: 1.0,
         outputs_only: false,
         hidden_only: false,
+        facet_min_scored: 5,
+        rank_limit: 5,
         output_dir: &dir.path().join("gc"),
     })
     .unwrap_err();

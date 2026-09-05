@@ -13,6 +13,7 @@ pub mod blockwise;
 pub mod compare;
 pub mod creature_io;
 pub mod ffi;
+pub mod gene_facets;
 pub mod gradient_check;
 pub mod ladder;
 pub mod mse;
@@ -52,9 +53,13 @@ pub use ffi::{
     neat_backprop_abi_version, neat_backprop_buffer_free, neat_backprop_train,
     neat_backprop_version, train_from_json,
 };
+pub use gene_facets::{
+    CreatureTopology, FacetRow, FacetStats, GeneAttributes, aggregate_facets, attributes_for,
+    rank_facets,
+};
 pub use gradient_check::{
-    ClassStats, GeneClass, GeneProbeRow, GradientCheckRequest, GradientCheckSummary,
-    run_gradient_check,
+    ClassStats, CreatureFingerprint, GRADIENT_CHECK_SCHEMA, GeneClass, GeneProbeRow,
+    GradientCheckRequest, GradientCheckSummary, run_gradient_check, summary_text,
 };
 pub use ladder::{
     DEFAULT_STEP_SCALE_LADDER, DEFAULT_STEP_SCALE_LADDER_CSV, parse_step_scale_ladder,

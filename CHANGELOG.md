@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Gradient diagnostics by gene class and squash: `gradient-check` now labels
+  every probed gene with the facets a NEAT creature actually varies over —
+  bias vs weight, output vs hidden, squash name, aggregate vs ordinary
+  (`SquashType::is_aggregate()`), longest-path depth, fan-in / fan-out,
+  activation health read from the accumulate trace (`active`, `saturated`,
+  `lowActivity`, `unobserved`) and proposal-magnitude decade — and aggregates
+  sign agreement, applied-proposal improvement and gradient error across all
+  of them. Each sampled gene is also **applied on its own**, so a row records
+  whether the proposal really lowered slice MSE (`improved`) and how far the
+  first-order prediction `fdGrad · Δ` was from that outcome (`absError`,
+  `relError`); run cost is `(2 + 3 × sampled genes)` MSE passes, bounded by
+  the existing sample caps. `gradient-check.json` gains `schemaVersion`
+  (now `2`), the `seed`, a creature fingerprint, `byFacet` and ranked
+  `bestClasses` / `worstClasses` (`--facet-min-scored`, `--rank-limit`), and
+  the run leaves a concise `summary.txt` for unattended readers. The same
+  seed over the same creature, corpus and caps writes byte-identical
+  artifacts. `scripts/run-gradient-diagnostics.sh` is the documented GRQ
+  integration-testing command — every target is an env var, so no
+  stock-market logic lands in this public library (issue #107).
+
 - Blockwise candidate generation: `blocks` accumulates the corpus **once**
   and applies that one learning signal to a small region at a time instead
   of moving every gene together. Five block strategies sit beside the

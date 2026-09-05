@@ -96,6 +96,8 @@ fn gradient_check_rejects_a_recurrent_creature() {
         step_scale: 1.0,
         outputs_only: false,
         hidden_only: false,
+        facet_min_scored: 5,
+        rank_limit: 5,
         output_dir: &dir.path().join("out"),
     })
     .expect_err("gradient-check must reject a recurrent creature");

@@ -83,6 +83,7 @@ cargo run -p neat_ai_backpropagation --release -- gradient-check \
   ~/src/GRQ-cluster/network.json \
   /tmp/grq-train-slice \
   --max-records 512 --sample-biases 20 --sample-weights 40 \
+  --facet-min-scored 5 --rank-limit 5 \
   --output-dir .backprop/grad-check
 ```
 
@@ -446,12 +447,93 @@ schedule it per epoch, and each epoch's resolved rate is journalled as
 `sqrt(path count)` (NEAT-AI #1872) so dense graphs stop multi-counting a
 neuron's signal.
 `gradient-check` (issue #40) compares per-gene proposal Δ to a
-finite-difference ∂MSE/∂θ and reports sign-agreement by gene class.
+finite-difference ∂MSE/∂θ and reports sign-agreement by gene class, and
+stratifies that agreement by squash and local topology (issue #107,
+below).
 
 Recurrent / re-entrant creatures are refused by every subcommand that
 drives the accumulate engine — `compare`, `gradient-check`, `sweep`, and
 `train` — through the shared
 `creature_io::load_forward_only_creature` loader (issue #54).
+
+### Gradient diagnostics by gene class and squash (issue #107)
+
+A NEAT creature is heterogeneous. One whole-creature sign-agreement
+percentage says nothing about *where* the proposal is trustworthy: a
+TANH pinned at ±1, an aggregate output, a dead ReLU and a shallow
+identity chain all sit in the same graph. `gradient-check` therefore
+labels every probed gene and aggregates the outcome across every facet
+at once, so scorer-guided local backprop can pick gene classes on
+evidence rather than intuition.
+
+Each sampled gene costs three MSE passes over the record slice — `+ε`,
+`−ε` and the **proposal applied on its own** — so the artifact carries
+the ground truth beside the gradient: whether the move actually lowered
+slice MSE (`improved`), and how far the first-order prediction
+`fdGrad · Δ` was from that outcome (`absError`, `relError`). Run cost is
+`(2 + 3 × sampled genes)` passes; the sample caps are what bounds it.
+
+```mermaid
+flowchart LR
+    A[accumulate once] --> B[eligible genes]
+    B --> C[stratified sample<br/>seeded]
+    C --> D["per gene: +ε, −ε, +Δ"]
+    D --> E[label facets]
+    E --> F[gradient-check.json<br/>genes.jsonl]
+    E --> G[summary.txt<br/>best / worst]
+```
+
+| Facet | Buckets |
+| ----- | ------- |
+| `geneKind` | `bias`, `weight` |
+| `role` | `output`, `hidden` |
+| `class` | `hiddenBias`, `outputBias`, `hiddenWeight`, `outputWeight` |
+| `squash` | the neuron's squash name as exported |
+| `aggregate` | `aggregate` (`SquashType::is_aggregate()`), `ordinary` |
+| `depth` | longest hop count from an input — `0-1`, `2-3`, `4-7`, `8-15`, `16+` |
+| `fanIn` / `fanOut` | `0`, `1`, `2-3`, `4-7`, `8-15`, `16+` |
+| `activity` | `active`, `saturated`, `lowActivity`, `unobserved` |
+| `proposalMagnitude` | `<1e-6`, `1e-6..1e-4`, `1e-4..1e-2`, `>=1e-2` |
+
+A weight takes the facets of the neuron it **targets** — that is the
+unit whose saturation and local topology decide whether the weight's
+proposal is trustworthy. `activity` is read from the accumulate trace:
+`saturated` means the mean activation sits within 2% of an end of the
+squash's own range, `lowActivity` that the neuron barely moves across
+the slice (a spread below `1e-6`, judged only once two or more records
+have been seen), `unobserved` that the forward pass never activated it.
+
+| Artifact | Contents |
+| -------- | -------- |
+| `gradient-check.json` | `schemaVersion`, `seed`, creature fingerprint, `byClass`, `byFacet`, `bestClasses`, `worstClasses` |
+| `genes.jsonl` | one row per probed gene: value, Δ, FD gradient, facets, predicted vs actual ΔMSE |
+| `summary.txt` | the concise report an unattended run reads back — also printed to stderr |
+
+`bestClasses` / `worstClasses` rank `(facet, bucket)` pairs by sign
+agreement. Only buckets with at least `--facet-min-scored` scored genes
+are ranked, and a facet with a single bucket is skipped because it
+offers no contrast; ties break on relative error then on name, so the
+ranking is stable. With few eligible buckets the two lists overlap —
+that is the honest reading of a small sample, not two findings.
+
+The run is reproducible from `seed` alone: the same seed over the same
+creature, corpus and caps writes byte-identical artifacts.
+`schemaVersion` plus the creature fingerprint are what let two artifacts
+be compared across NEAT-AI-core / Backpropagation versions — read the
+schema first and refuse one you do not know.
+
+```bash
+CREATURE=~/src/GRQ-cluster/network.json \
+DATA_DIR=~/src/GRQ/.trainData-binary_116 \
+  ./scripts/run-gradient-diagnostics.sh
+```
+
+That is the documented command for the GRQ integration-testing
+workflow. Every target is an env var (`CREATURE`, `DATA_DIR`, `OUT`,
+`SEED`, `MAX_RECORDS`, `SAMPLE_BIASES`, `SAMPLE_WEIGHTS`,
+`FACET_MIN_SCORED`, `RANK_LIMIT`, `STEP_SCALE`, `LEARNING_RATE`,
+`FD_EPS`) — this public library carries no GRQ paths or stock-market
+logic of its own.
 
 ### Output validation gate (issue #94)
 
