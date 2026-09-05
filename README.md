@@ -167,6 +167,67 @@ the same candidate and held the fitness. Point it at the production
 creature and corpus with `CREATURE=` / `DATA_DIR=` to repeat the
 comparison there.
 
+### Scored step-scale ladder (issue #106)
+
+The backtracking line search halves the step until the judge is satisfied and
+stops at the **first** candidate that passes. That is only right if the judge
+is monotonic along the backprop direction — on an evolved production creature
+the scorer optimum may sit at a much smaller step, or at a step whose slice MSE
+is slightly worse. `--step-scale-ladder` replaces "halve until something
+passes" with "score the whole grid and keep the best":
+
+```bash
+cargo run -p neat_ai_backpropagation --release -- train \
+  ~/src/GRQ-cluster/network.json /tmp/grq-train-slice \
+  --acceptance scorer --step-scale-ladder \
+  --scorer ../NEAT-AI-scorer/target/release/rust_scorer
+```
+
+| Flag | Default | Meaning |
+| ---- | ------- | ------- |
+| `--step-scale-ladder` | off | Comma-separated grid; the bare flag selects `0.0001,0.00025,0.0005,0.001,0.0025,0.005,0.01` |
+
+- **One accumulation, many candidates.** The epoch accumulates once — the
+  expensive corpus pass — then applies that same learning at every rung. A rung
+  costs an apply, a slice-MSE pass and a share of one scorer call.
+- **One batch scorer call per epoch.** `rust_scorer` scores a *directory* of
+  creatures, so the whole ladder is scored in a single invocation and each
+  result is matched back by file stem. A candidate the scorer did not report
+  fails the run rather than shifting scores onto the wrong rung.
+- **Best, not first.** The winner is the highest fitness, and it is kept only
+  when it clears `--min-score-improvement`. A rung that improved but lost to a
+  better rung is journalled as `scoreNotBest`. Ties keep the smaller step.
+- **No winner leaves the incumbent unchanged**, exactly as a dry line search
+  does.
+- **Every rung is journalled** as a `"kind":"candidate"` line carrying its own
+  `stepScale`, `candidateMse`, `mseDelta`, `candidateScore` and `scoreDelta`;
+  the epoch line adds `ladderRungs`, and the run header records the grid.
+- MSE stays a diagnostic. `--mse-pre-screen` still applies: a rung whose slice
+  MSE did not fall is dropped before the batch is scored (the issue's optional
+  catastrophic rejection).
+- The ladder **supersedes** `--max-backtracks` — its rungs are the epoch's
+  attempts, so a ladder epoch journals `"backtracks":0`. It requires
+  `--acceptance scorer`, and a rung outside `(0, 1]` (or non-finite) is refused
+  rather than silently rewritten by the applier.
+
+```mermaid
+flowchart TD
+    A[accumulate epoch — once] --> B[apply at every rung of the ladder]
+    B --> C[forward MSE per rung — diagnostic]
+    C --> D{--mse-pre-screen<br/>and MSE rose?}
+    D -- yes --> R[drop rung: msePreScreenRejected]
+    D -- no --> E[one rust_scorer call for the whole grid]
+    E --> F[pick the highest fitness]
+    F --> G{best − incumbent<br/>≥ --min-score-improvement?}
+    G -- yes --> H[keep it: scoreImproved<br/>losing rungs: scoreNotBest]
+    G -- no --> I[incumbent unchanged: scoreNotImproved]
+```
+
+`scripts/run-step-scale-ladder-experiment.sh <rust_scorer>` runs the same
+corpus, seed and epoch budget through both searches and prints each one's
+accepted epochs, scorer gain, wall clock and wins/hour. Point it at production
+with `CREATURE=` / `DATA_DIR=` to repeat the comparison on real GRQ history.
+
 ### Train step size (issue #39)
 
 Every gene's proposal is computed as if the other genes hold still, so
@@ -488,12 +549,12 @@ Every other field is optional and defaults to the matching CLI `train`
 flag — `epochs`, `maxRecords`, `seed`, `disableRandomSamples`,
 `learningRate`, `learningRateStrategy`, `learningRateDecay`,
 `normaliseGradients`, `maximumBiasAdjustmentScale`,
-`maximumWeightAdjustmentScale`, `stepScale`, `outputsOnly`, `hiddenOnly`,
-`acceptance`, `minScoreImprovement`, `msePreScreen`, `acceptAlways`,
-`maxBacktracks`, `scorer`, `traceStore` — so the sampling (#77),
-trace-store (#78) and scorer-guided acceptance (#104) work is reachable
-from the ABI, not only from the CLI. An unknown field is rejected rather
-than ignored.
+`maximumWeightAdjustmentScale`, `stepScale`, `stepScaleLadder`,
+`outputsOnly`, `hiddenOnly`, `acceptance`, `minScoreImprovement`,
+`msePreScreen`, `acceptAlways`, `maxBacktracks`, `scorer`, `traceStore` —
+so the sampling (#77), trace-store (#78), scorer-guided acceptance (#104)
+and step-scale ladder (#106) work is reachable from the ABI, not only from
+the CLI. An unknown field is rejected rather than ignored.
 
 The response carries `bestCreatureJson` (the exact bytes written to
 `best.json`), `baselineMse`, `bestMse`, `acceptedEpochs`, the `bestPath` /

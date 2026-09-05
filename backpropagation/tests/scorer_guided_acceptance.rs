@@ -161,6 +161,7 @@ fn train_with_backtracks(
         acceptance,
         accept_always: false,
         max_backtracks,
+        step_scale_ladder: &[],
         trace_store: None,
     })
 }
@@ -511,6 +512,7 @@ fn accept_always_is_refused_under_scorer_guided_acceptance() {
         acceptance: scorer_guided(),
         accept_always: true,
         max_backtracks: 0,
+        step_scale_ladder: &[],
         trace_store: None,
     })
     .expect_err("must refuse");
@@ -581,6 +583,7 @@ fn a_failing_scorer_fails_the_run() {
         acceptance: scorer_guided(),
         accept_always: false,
         max_backtracks: 0,
+        step_scale_ladder: &[],
         trace_store: None,
     })
     .expect_err("a dead scorer must not be reconciled as a rejection");

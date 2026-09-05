@@ -42,6 +42,19 @@ impl Default for ScorerAcceptance {
 }
 
 impl ScorerAcceptance {
+    /// The scorer verdict for one candidate — the single accept rule both the
+    /// backtracking line search and the step-scale ladder (#106) apply.
+    ///
+    /// A `NaN` on either side fails the comparison and so rejects, which is the
+    /// safe direction: an unscoreable candidate is never kept.
+    pub fn verdict(self, candidate_score: f64, incumbent_score: f64) -> AcceptReason {
+        if candidate_score - incumbent_score >= self.min_improvement {
+            AcceptReason::ScoreImproved
+        } else {
+            AcceptReason::ScoreNotImproved
+        }
+    }
+
     /// Refuse an epsilon that could never gate anything.
     ///
     /// `NaN` is the dangerous one: every comparison against it is false, so an
@@ -83,6 +96,11 @@ pub enum AcceptReason {
     ScoreImproved,
     /// The scorer ran and the gain was below the epsilon (or negative).
     ScoreNotImproved,
+    /// The scorer ran and another rung of the step-scale ladder scored higher
+    /// (issue #106). The ladder keeps one winner per epoch, so a rung that
+    /// improved on the incumbent but lost to a better rung is dropped under
+    /// this reason rather than under [`Self::ScoreNotImproved`].
+    ScoreNotBest,
     /// The optional MSE pre-screen dropped the candidate before scoring it.
     MsePreScreenRejected,
 }
@@ -166,7 +184,25 @@ mod tests {
         assert!(AcceptReason::ScoreImproved.accepted());
         assert!(!AcceptReason::MseNotImproved.accepted());
         assert!(!AcceptReason::ScoreNotImproved.accepted());
+        assert!(!AcceptReason::ScoreNotBest.accepted());
         assert!(!AcceptReason::MsePreScreenRejected.accepted());
+    }
+
+    /// The one accept rule: a gain at or above the epsilon keeps the
+    /// candidate, and anything else — including a `NaN` score — does not.
+    #[test]
+    fn the_verdict_gates_on_the_epsilon_and_rejects_a_nan() {
+        let settings = ScorerAcceptance {
+            min_improvement: 0.1,
+            ..ScorerAcceptance::default()
+        };
+        assert_eq!(settings.verdict(0.75, 0.5), AcceptReason::ScoreImproved);
+        assert_eq!(settings.verdict(0.55, 0.5), AcceptReason::ScoreNotImproved);
+        assert_eq!(settings.verdict(0.4, 0.5), AcceptReason::ScoreNotImproved);
+        assert_eq!(
+            settings.verdict(f64::NAN, 0.5),
+            AcceptReason::ScoreNotImproved
+        );
     }
 
     #[test]
@@ -178,6 +214,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&AcceptReason::MsePreScreenRejected).unwrap(),
             r#""msePreScreenRejected""#
+        );
+        assert_eq!(
+            serde_json::to_string(&AcceptReason::ScoreNotBest).unwrap(),
+            r#""scoreNotBest""#
         );
         assert_eq!(
             serde_json::to_string(&AcceptanceMode::Scorer(ScorerAcceptance::default())).unwrap(),
