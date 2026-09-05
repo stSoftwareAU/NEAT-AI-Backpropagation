@@ -25,7 +25,8 @@
 use crate::backprop::{ApplyOptions, BackpropConfig, LearningRateStrategy};
 use crate::scorer::ScoreResult;
 use crate::train::{
-    BEST_TRACE_FILE, DEFAULT_STEP_SCALE, FAILED_TRACE_DIR, TrainCreature, TrainRequest, run_train,
+    AcceptanceMode, BEST_TRACE_FILE, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE,
+    FAILED_TRACE_DIR, ScorerAcceptance, TrainCreature, TrainRequest, run_train,
 };
 use serde::{Deserialize, Serialize};
 use std::ffi::c_char;
@@ -156,6 +157,22 @@ fn default_max_backtracks() -> u32 {
     6
 }
 
+/// Default minimum scorer gain (CLI `--min-score-improvement`).
+fn default_min_score_improvement() -> f64 {
+    DEFAULT_MIN_SCORE_IMPROVEMENT
+}
+
+/// Acceptance mode selectable over the ABI (mirrors the CLI flag, #104).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AbiAcceptanceMode {
+    /// Training-slice MSE decides accept / rollback.
+    #[default]
+    Mse,
+    /// `NEAT-AI-scorer` fitness decides accept / rollback.
+    Scorer,
+}
+
 /// JSON request for [`train_from_json`] — one `trainDir` run.
 ///
 /// Field names are camelCase on the wire and every optional field defaults to
@@ -210,7 +227,18 @@ pub struct TrainAbiRequest {
     /// Apply only hidden / constant genes (skip output).
     #[serde(default)]
     pub hidden_only: bool,
+    /// What decides accept / rollback — slice MSE, or the scorer (#104).
+    #[serde(default)]
+    pub acceptance: AbiAcceptanceMode,
+    /// Minimum scorer gain to keep a candidate under `acceptance: "scorer"`.
+    #[serde(default = "default_min_score_improvement")]
+    pub min_score_improvement: f64,
+    /// Drop a candidate whose slice MSE did not fall before scoring it.
+    #[serde(default)]
+    pub mse_pre_screen: bool,
     /// Keep the applied creature even if slice MSE rose.
+    ///
+    /// Refused together with `acceptance: "scorer"`.
     #[serde(default)]
     pub accept_always: bool,
     /// Halvings of step scale to retry a rejected apply with.
@@ -243,6 +271,9 @@ impl Default for TrainAbiRequest {
             step_scale: default_step_scale(),
             outputs_only: false,
             hidden_only: false,
+            acceptance: AbiAcceptanceMode::default(),
+            min_score_improvement: default_min_score_improvement(),
+            mse_pre_screen: false,
             accept_always: false,
             max_backtracks: default_max_backtracks(),
             scorer: None,
@@ -321,6 +352,13 @@ pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
             step_scale: request.step_scale,
             outputs_only: request.outputs_only,
             hidden_only: request.hidden_only,
+        },
+        acceptance: match request.acceptance {
+            AbiAcceptanceMode::Mse => AcceptanceMode::Mse,
+            AbiAcceptanceMode::Scorer => AcceptanceMode::Scorer(ScorerAcceptance {
+                min_improvement: request.min_score_improvement,
+                mse_pre_screen: request.mse_pre_screen,
+            }),
         },
         accept_always: request.accept_always,
         max_backtracks: request.max_backtracks,
@@ -501,6 +539,40 @@ mod tests {
         assert_eq!(request.max_backtracks, 6);
         assert!(request.scorer.is_none());
         assert!(request.trace_store.is_none());
+        // #104: MSE acceptance stays the default, so an existing caller that
+        // forwards nothing new keeps the historical behaviour.
+        assert_eq!(request.acceptance, AbiAcceptanceMode::Mse);
+        assert!((request.min_score_improvement - DEFAULT_MIN_SCORE_IMPROVEMENT).abs() < 1e-18);
+        assert!(!request.mse_pre_screen);
+    }
+
+    /// The scorer-guided flags cross the wire as camelCase and reach the
+    /// trainer's own acceptance settings (#104).
+    #[test]
+    fn scorer_acceptance_crosses_the_wire() {
+        let request: TrainAbiRequest = serde_json::from_str(
+            r#"{"creatureJson":"{}","trainingData":"d","outputDir":"o",
+                "acceptance":"scorer","minScoreImprovement":0.002,"msePreScreen":true}"#,
+        )
+        .unwrap();
+        assert_eq!(request.acceptance, AbiAcceptanceMode::Scorer);
+        assert!((request.min_score_improvement - 0.002).abs() < 1e-15);
+        assert!(request.mse_pre_screen);
+    }
+
+    /// A scorer-guided request without a scorer binary is refused by the
+    /// trainer, and the ABI reports that as a train failure rather than a
+    /// silent MSE run (#104).
+    #[test]
+    fn scorer_acceptance_without_a_scorer_binary_fails_loudly() {
+        let err = train_from_json(
+            r#"{"creatureJson":"{}","trainingData":"d","outputDir":"o","acceptance":"scorer"}"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("scorer-guided acceptance"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

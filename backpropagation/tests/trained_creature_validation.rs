@@ -8,7 +8,9 @@
 
 use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
-use neat_ai_backpropagation::train::{TrainCreature, TrainRequest, TrainResult, run_train};
+use neat_ai_backpropagation::train::{
+    AcceptanceMode, TrainCreature, TrainRequest, TrainResult, run_train,
+};
 use neat_core::parse_creature_json;
 use std::fs;
 use std::io::Write;
@@ -77,6 +79,7 @@ fn train(
         output_dir: out,
         scorer: None,
         apply: ApplyOptions::default(),
+        acceptance: AcceptanceMode::Mse,
         accept_always,
         max_backtracks: 0,
         trace_store: None,

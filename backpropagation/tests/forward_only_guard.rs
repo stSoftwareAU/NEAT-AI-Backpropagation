@@ -10,7 +10,7 @@ use neat_ai_backpropagation::compare::run_compare;
 use neat_ai_backpropagation::creature_io::load_forward_only_creature;
 use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
-use neat_ai_backpropagation::train::{TrainCreature, TrainRequest, run_train};
+use neat_ai_backpropagation::train::{AcceptanceMode, TrainCreature, TrainRequest, run_train};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -141,6 +141,7 @@ fn train_rejects_a_recurrent_creature() {
         output_dir: &dir.path().join("out"),
         scorer: None,
         apply: ApplyOptions::default(),
+        acceptance: AcceptanceMode::Mse,
         accept_always: false,
         max_backtracks: 0,
         trace_store: None,

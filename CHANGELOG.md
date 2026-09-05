@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Scorer-guided acceptance: `train --acceptance scorer` puts `NEAT-AI-scorer`
+  in the accept/rollback loop instead of training-slice MSE. The baseline is
+  scored before epoch 1, every attempted candidate (each backtracking step
+  included) is scored and journalled as a `"kind":"candidate"` line carrying
+  the MSE delta beside the scorer delta, and a candidate is kept only when
+  fitness rises by `--min-score-improvement` (default `1e-6`, the production
+  win margin). `--mse-pre-screen` optionally drops a candidate whose slice MSE
+  did not fall before paying for a scorer run; `--accept-always` and a missing
+  `--scorer` are refused rather than silently degrading to MSE. Every epoch
+  line now carries an `acceptReason`, and `acceptance` /
+  `minScoreImprovement` / `msePreScreen` cross the C ABI. MSE remains the
+  default, so existing runs are unchanged. `scripts/run-scorer-guided-experiment.sh`
+  runs one corpus through both modes: on its generated corpus the MSE loop
+  accepted a candidate that cut slice MSE `14.839 → 3.490` while real
+  `rust_scorer` fitness fell `0.7032 → −0.3324`, which scorer-guided
+  acceptance rejected (issue #104).
+
 - Every trained creature is validated by `neat_core::creature_validate`
   before it is scored, written or returned (`validate::TrainedTopology`).
   `train` gates the creature it finishes with, once per completed run;

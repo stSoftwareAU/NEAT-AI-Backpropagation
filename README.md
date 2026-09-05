@@ -85,8 +85,69 @@ cargo run -p neat_ai_backpropagation --release -- gradient-check \
 `train` measures MSE on the **applied** creature and keeps the apply
 only when post-apply MSE is strictly lower than the best so far
 (rollback otherwise). `--accept-always` keeps the candidate anyway
-(for a later full-corpus `rust_scorer` check). `sweep` accumulates
-once and writes one candidate per `--step-scales` entry.
+(for a later full-corpus `rust_scorer` check). `--acceptance scorer`
+makes the scorer the judge instead (issue #104, below). `sweep`
+accumulates once and writes one candidate per `--step-scales` entry.
+
+### Scorer-guided acceptance (issue #104)
+
+Slice MSE is not the objective evolution optimises — `NEAT-AI-scorer`
+is. On an evolved production creature a candidate can lower training
+MSE and lower the real score, so `train` can also put the scorer in the
+accept/rollback loop rather than only reporting it afterwards:
+
+```bash
+cargo run -p neat_ai_backpropagation --release -- train \
+  ~/src/GRQ-cluster/network.json /tmp/grq-train-slice \
+  --acceptance scorer --min-score-improvement 1e-6 \
+  --scorer ../NEAT-AI-scorer/target/release/rust_scorer
+```
+
+| Flag | Default | Meaning |
+| ---- | ------- | ------- |
+| `--acceptance` | `mse` | `mse` keeps the historical loop; `scorer` makes `rust_scorer` the judge |
+| `--min-score-improvement` | `1e-6` | Minimum `candidate − incumbent` fitness to keep an apply — the production win margin |
+| `--mse-pre-screen` | off | Drop a candidate whose slice MSE did not fall *before* paying for a scorer run |
+
+Under `--acceptance scorer`:
+
+- The **baseline is scored before the loop**, so epoch 1 has a real
+  incumbent fitness to beat.
+- Every attempted candidate — including each backtracking step — is
+  scored and journalled as a `"kind":"candidate"` line carrying
+  `incumbentMse`, `candidateMse`, `mseDelta`, `baselineScore`,
+  `candidateScore`, `scoreDelta`, `stepScale` and `acceptReason`.
+- MSE is demoted to a journalled diagnostic (or, with
+  `--mse-pre-screen`, a cheap cost control that never overrides an
+  accept the scorer would have granted).
+- `--accept-always` is **refused**, since keeping every candidate would
+  silently disable the gate, and `--acceptance scorer` without
+  `--scorer` fails loudly rather than falling back to MSE.
+- The accepted candidate's score is reused as the run's `bestScore` —
+  the winner is never re-scored just to learn the same number.
+
+```mermaid
+flowchart TD
+    A[accumulate epoch] --> B[apply at step scale]
+    B --> C[forward MSE — diagnostic]
+    C --> D{--mse-pre-screen<br/>and MSE rose?}
+    D -- yes --> R[rollback: msePreScreenRejected]
+    D -- no --> E[rust_scorer on the candidate]
+    E --> F{score − incumbent<br/>≥ --min-score-improvement?}
+    F -- yes --> G[keep: scoreImproved]
+    F -- no --> H{backtracks left?}
+    H -- yes --> I[step ÷ 2] --> B
+    H -- no --> J[rollback: scoreNotImproved]
+```
+
+`scripts/run-scorer-guided-experiment.sh <rust_scorer>` runs one corpus
+through both modes and prints the two verdicts. On its generated corpus
+(a slice that contradicts 98% of the records) the MSE loop accepted a
+candidate that cut slice MSE `14.839 → 3.490` while `rust_scorer`
+fitness **fell** `0.7032 → −0.3324`; scorer-guided acceptance rejected
+the same candidate and held the fitness. Point it at the production
+creature and corpus with `CREATURE=` / `DATA_DIR=` to repeat the
+comparison there.
 
 ### Train step size (issue #39)
 
@@ -329,9 +390,11 @@ flag — `epochs`, `maxRecords`, `seed`, `disableRandomSamples`,
 `learningRate`, `learningRateStrategy`, `learningRateDecay`,
 `normaliseGradients`, `maximumBiasAdjustmentScale`,
 `maximumWeightAdjustmentScale`, `stepScale`, `outputsOnly`, `hiddenOnly`,
-`acceptAlways`, `maxBacktracks`, `scorer`, `traceStore` — so the sampling
-(#77) and trace-store (#78) work is reachable from the ABI, not only from
-the CLI. An unknown field is rejected rather than ignored.
+`acceptance`, `minScoreImprovement`, `msePreScreen`, `acceptAlways`,
+`maxBacktracks`, `scorer`, `traceStore` — so the sampling (#77),
+trace-store (#78) and scorer-guided acceptance (#104) work is reachable
+from the ABI, not only from the CLI. An unknown field is rejected rather
+than ignored.
 
 The response carries `bestCreatureJson` (the exact bytes written to
 `best.json`), `baselineMse`, `bestMse`, `acceptedEpochs`, the `bestPath` /

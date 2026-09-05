@@ -6,7 +6,8 @@ use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, ru
 use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
 use neat_ai_backpropagation::train::{
-    DEFAULT_STEP_SCALE, TrainCreature, TrainRequest, default_output_dir, run_train,
+    AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, ScorerAcceptance,
+    TrainCreature, TrainRequest, default_output_dir, run_train,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -44,6 +45,28 @@ impl LearningRateStrategyArg {
             Self::Decay => LearningRateStrategy::Decay,
             Self::Adaptive => LearningRateStrategy::Adaptive,
             Self::WarmRestart => LearningRateStrategy::WarmRestart,
+        }
+    }
+}
+
+/// What decides accept / rollback, selectable from the CLI (#104).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum AcceptanceModeArg {
+    /// Training-slice MSE (the historical behaviour).
+    Mse,
+    /// `NEAT-AI-scorer` fitness — requires `--scorer`.
+    Scorer,
+}
+
+impl AcceptanceModeArg {
+    /// Map the CLI value onto the library acceptance mode.
+    fn to_config(self, min_improvement: f64, mse_pre_screen: bool) -> AcceptanceMode {
+        match self {
+            Self::Mse => AcceptanceMode::Mse,
+            Self::Scorer => AcceptanceMode::Scorer(ScorerAcceptance {
+                min_improvement,
+                mse_pre_screen,
+            }),
         }
     }
 }
@@ -148,6 +171,19 @@ enum Commands {
         /// Apply only hidden / constant genes (skip output).
         #[arg(long, default_value_t = false)]
         hidden_only: bool,
+        /// What decides accept / rollback: slice MSE, or the scorer (#104).
+        ///
+        /// `scorer` requires `--scorer` and makes `NEAT-AI-scorer` the judge
+        /// during the loop — MSE stays a journalled diagnostic.
+        #[arg(long, value_enum, default_value = "mse")]
+        acceptance: AcceptanceModeArg,
+        /// Minimum scorer gain to keep a candidate under `--acceptance scorer`.
+        #[arg(long, default_value_t = DEFAULT_MIN_SCORE_IMPROVEMENT)]
+        min_score_improvement: f64,
+        /// Under `--acceptance scorer`, drop a candidate whose slice MSE did
+        /// not fall instead of paying for a scorer run.
+        #[arg(long, default_value_t = false)]
+        mse_pre_screen: bool,
         /// Keep the applied creature even if slice MSE rose.
         #[arg(long, default_value_t = false)]
         accept_always: bool,
@@ -337,6 +373,9 @@ fn run() -> Result<(), String> {
             step_scale,
             outputs_only,
             hidden_only,
+            acceptance,
+            min_score_improvement,
+            mse_pre_screen,
             accept_always,
             max_backtracks,
             scorer,
@@ -366,6 +405,7 @@ fn run() -> Result<(), String> {
                     outputs_only,
                     hidden_only,
                 },
+                acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen),
                 accept_always,
                 max_backtracks,
                 trace_store: trace_store.as_deref(),
@@ -624,6 +664,55 @@ mod tests {
         };
         assert!(disable_random_samples);
         assert_eq!(seed, 42);
+    }
+
+    /// MSE acceptance stays the default, so an existing `train` invocation is
+    /// unchanged by #104 — the scorer gate has to be asked for.
+    #[test]
+    fn acceptance_defaults_to_mse_with_a_conservative_epsilon() {
+        let Commands::Train {
+            acceptance,
+            min_score_improvement,
+            mse_pre_screen,
+            ..
+        } = parse_train(&[])
+        else {
+            panic!("expected train");
+        };
+        assert_eq!(acceptance, AcceptanceModeArg::Mse);
+        assert!((min_score_improvement - DEFAULT_MIN_SCORE_IMPROVEMENT).abs() < 1e-18);
+        assert!(!mse_pre_screen);
+        assert_eq!(
+            acceptance.to_config(min_score_improvement, mse_pre_screen),
+            AcceptanceMode::Mse
+        );
+    }
+
+    #[test]
+    fn scorer_acceptance_carries_its_epsilon_and_pre_screen() {
+        let Commands::Train {
+            acceptance,
+            min_score_improvement,
+            mse_pre_screen,
+            ..
+        } = parse_train(&[
+            "--acceptance",
+            "scorer",
+            "--min-score-improvement",
+            "0.005",
+            "--mse-pre-screen",
+        ])
+        else {
+            panic!("expected train");
+        };
+        assert_eq!(acceptance, AcceptanceModeArg::Scorer);
+        assert_eq!(
+            acceptance.to_config(min_score_improvement, mse_pre_screen),
+            AcceptanceMode::Scorer(ScorerAcceptance {
+                min_improvement: 0.005,
+                mse_pre_screen: true,
+            })
+        );
     }
 
     #[test]

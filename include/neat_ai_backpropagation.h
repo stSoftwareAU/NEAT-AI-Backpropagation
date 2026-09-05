@@ -78,7 +78,10 @@ const char *neat_backprop_version(void);
  *     "stepScale": 0.01,
  *     "outputsOnly": false,
  *     "hiddenOnly": false,
- *     "acceptAlways": false,
+ *     "acceptance": "mse",          // mse | scorer ("scorer" needs "scorer")
+ *     "minScoreImprovement": 1e-6,  // scorer-guided accept epsilon
+ *     "msePreScreen": false,        // skip scoring a candidate MSE rejected
+ *     "acceptAlways": false,        // refused together with "scorer"
  *     "maxBacktracks": 6,
  *     "scorer": null,        // optional rust_scorer binary
  *     "traceStore": null     // optional NEAT-AI traceStore directory

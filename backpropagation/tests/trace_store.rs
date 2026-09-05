@@ -14,7 +14,7 @@
 
 use neat_ai_backpropagation::trace::{NeuronTraceState, SynapseTraceState};
 use neat_ai_backpropagation::{
-    ApplyOptions, BackpropConfig, TrainCreature, TrainRequest, run_train,
+    AcceptanceMode, ApplyOptions, BackpropConfig, TrainCreature, TrainRequest, run_train,
 };
 use serde_json::Value;
 use std::fs;
@@ -78,6 +78,7 @@ fn train(
         output_dir: out,
         scorer: None,
         apply: ApplyOptions::default(),
+        acceptance: AcceptanceMode::Mse,
         accept_always: false,
         max_backtracks: 0,
         trace_store: trace_store.map(PathBuf::as_path),
