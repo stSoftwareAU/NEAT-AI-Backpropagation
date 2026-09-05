@@ -605,10 +605,12 @@ fn run() -> Result<(), String> {
                 output_dir: &output_dir,
             })?;
             eprintln!(
-                "blocks: records={} candidates={} unmoved={} wrote {}",
+                "blocks: records={} planned={} written={} unmoved={} dropped={} wrote {}",
                 summary.records,
                 summary.candidates.len(),
+                summary.written().len(),
                 summary.unmoved_blocks,
+                summary.dropped_empty_blocks + summary.dropped_duplicate_blocks,
                 output_dir.join("blocks.json").display()
             );
             for winner in summary.winners() {

@@ -221,18 +221,30 @@ cargo run -p neat_ai_backpropagation --release -- blocks \
 | `subgraph` | A seeded random connected subgraph of `--subgraph-size` neurons |
 | `top-genes` | The `--top-genes` loudest genes by proposal magnitude |
 
-Focus neurons for `neuron` / `neighbourhood` are the hidden neurons the
-accumulated learning wants to move most — a neuron's rank is its own
-`|Δbias|` plus the `|Δweight|` of every synapse touching it — so the
-blocks land where the signal is. Blocks selecting no gene, and blocks
+Focus neurons for `neuron` / `neighbourhood` / `subgraph` are the hidden
+neurons the accumulated learning wants to move most — a neuron's rank is
+its own `|Δbias|` plus the `|Δweight|` of every synapse touching it — so
+the blocks land where the signal is. Blocks selecting no gene, and blocks
 selecting genes an earlier block already selected, are dropped rather
-than costing a duplicate scorer run.
+than costing a duplicate scorer run; both counts are reported on stderr
+and as `droppedEmptyBlocks` / `droppedDuplicateBlocks` in `blocks.json`,
+never swallowed. `--radius 0` is refused, since it would make every
+neighbourhood block a duplicate of its `neuron` block.
 
-- **One pass, many candidates.** The corpus is accumulated **once**; every
-  block is that same signal restricted to its genes, so a block candidate
-  is exactly the whole-creature candidate with the rest of the creature
-  held still. `--skip-mse` keeps it to that one pass — MSE is the only
-  part that would reread the corpus per candidate.
+A block's size follows the graph, not the flag: `--radius` and
+`--subgraph-size` bound the *neurons*, and each selected neuron brings
+every synapse incident to it. Around a hub neuron a radius-1 block can
+therefore be most of the creature — `geneCount` on each candidate record
+says how large it actually came out, and `neuron` / `top-genes` are the
+strategies that stay small by construction.
+
+- **One pass, many candidates.** The corpus is accumulated **once** for the
+  learning signal; every block is that same signal restricted to its genes,
+  so a block candidate is exactly the whole-creature candidate with the rest
+  of the creature held still. `--skip-mse` drops the per-candidate MSE pass,
+  which is the only *learning-side* reread; `--scorer` still hands the
+  corpus to `rust_scorer` once per candidate, because that is what scoring
+  a candidate independently costs.
 - **Each candidate is judged on its own.** With `--scorer`, the baseline
   is scored once and every written candidate is scored independently;
   `scoreDelta` and `scoreWin` (against `--min-score-improvement`, default
@@ -240,8 +252,8 @@ than costing a duplicate scorer run.
   first. A win margin without `--scorer` is refused, as it is on `train`.
 - **Metadata names the genes.** `blocks.json` records, per candidate, the
   `strategy`, the focus neuron, the UUIDs of every selected neuron, the
-  from/to pair of every selected synapse, how many genes actually moved,
-  and the candidate's relative path. A block whose genes all held still
+  export index and from/to pair of every selected synapse, how many genes
+  actually moved, and the candidate's relative path. A block whose genes all held still
   writes no candidate and is counted in `unmovedBlocks`. The listing is
   literal, so on the GRQ creature the `global` row alone names all 22k
   synapses — drop `global` from `--strategies` when only the small blocks

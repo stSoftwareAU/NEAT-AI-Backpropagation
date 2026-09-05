@@ -19,14 +19,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   candidate is written as a standalone creature, gated by
   `neat_core::creature_validate`, and scored independently when `--scorer`
   is supplied; `blocks.json` records the strategy, focus, selected neuron
-  UUIDs and synapse endpoints, moved-gene counts, MSE and scorer deltas,
-  and `scoreWin` against `--min-score-improvement`. Empty and duplicate
-  blocks are dropped rather than costing a duplicate scorer run, and a
-  block whose genes all held still is counted in `unmovedBlocks` instead of
-  writing a candidate identical to the incumbent.
+  UUIDs, each selected synapse's export index and endpoints, the block's
+  `geneCount`, moved-gene counts, MSE and scorer deltas, and `scoreWin`
+  against `--min-score-improvement`. Nothing is dropped silently: empty and
+  duplicate blocks are reported as `droppedEmptyBlocks` /
+  `droppedDuplicateBlocks`, a block whose genes all held still is counted in
+  `unmovedBlocks` instead of writing a candidate identical to the incumbent,
+  and `--radius 0` is refused because it would turn every neighbourhood block
+  into a duplicate of its `neuron` block.
   `scripts/run-blockwise-benchmark.sh` runs `global` and the blockwise
   strategies over the same creature, corpus and step scale and prints
-  candidates, scorer wins, elapsed seconds and wins/hour for each
+  candidates, scorer wins, elapsed seconds and wins/hour for each. On its
+  generated corpus, one accumulation pass yielded 1 candidate / 1 scorer win
+  for `global` against 14 candidates / 14 wins for the blockwise strategies
+  (best `scoreDelta` `+4.29e-4` global vs `+3.87e-4` blockwise) — more
+  independently judged candidates for the same corpus cost, on a creature too
+  small for the whole-creature apply to overshoot. Point it at the production
+  creature with `CREATURE=` / `DATA_DIR=` to measure the comparison there
   (issue #105).
 
 - Scorer-guided acceptance: `train --acceptance scorer` puts `NEAT-AI-scorer`

@@ -27,10 +27,13 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-/// One end of a selected synapse, recorded in the candidate metadata.
+/// One selected synapse, recorded in the candidate metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockSynapseRef {
+    /// Export `synapses` position — the unambiguous identity, since a creature
+    /// may hold more than one synapse between the same pair of neurons.
+    pub index: usize,
     /// Source neuron UUID (`input-N` for a virtual input).
     pub from_uuid: String,
     /// Target neuron UUID.
@@ -52,6 +55,10 @@ pub struct BlockCandidateRecord {
     pub neurons: Vec<String>,
     /// Every synapse whose weight the block may move.
     pub synapses: Vec<BlockSynapseRef>,
+    /// Genes the block selected — `neurons.len() + synapses.len()`, so a block
+    /// that grew large around a hub neuron is visible without counting the
+    /// arrays.
+    pub gene_count: usize,
     /// Hidden / constant biases that actually moved.
     pub hidden_biases: usize,
     /// Output biases that actually moved.
@@ -111,11 +118,26 @@ pub struct BlocksSummary {
     pub baseline_score: Option<f64>,
     /// Blocks whose genes all held still, so no candidate was written.
     pub unmoved_blocks: usize,
-    /// Generated candidates, in plan order.
+    /// Planned blocks discarded because they selected no gene.
+    pub dropped_empty_blocks: usize,
+    /// Planned blocks discarded because an earlier block selected the same
+    /// genes — `--radius 1` around adjacent focus neurons does this.
+    pub dropped_duplicate_blocks: usize,
+    /// One record per planned block, in plan order. A block whose genes all
+    /// held still is recorded here with `candidate: None` — use
+    /// [`BlocksSummary::written`] for the candidates that reached disk.
     pub candidates: Vec<BlockCandidateRecord>,
 }
 
 impl BlocksSummary {
+    /// Candidates that were actually written and measured.
+    pub fn written(&self) -> Vec<&BlockCandidateRecord> {
+        self.candidates
+            .iter()
+            .filter(|c| c.candidate.is_some())
+            .collect()
+    }
+
     /// Candidates whose scorer gain cleared the win margin, best first.
     pub fn winners(&self) -> Vec<&BlockCandidateRecord> {
         let mut wins: Vec<&BlockCandidateRecord> = self
@@ -183,6 +205,7 @@ fn describe(creature: &CreatureExport, block: &GeneBlock) -> (Vec<String>, Vec<B
         .iter()
         .filter_map(|&i| {
             creature.synapses.get(i).map(|s| BlockSynapseRef {
+                index: i,
                 from_uuid: s.from_uuid.clone(),
                 to_uuid: s.to_uuid.clone(),
             })
@@ -249,16 +272,22 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
         learning_rate,
         req.step_scale,
     );
-    let blocks = plan_blocks(&incumbent, &graph, &magnitudes, req.plan, &mut rng)?;
+    let planned = plan_blocks(&incumbent, &graph, &magnitudes, req.plan, &mut rng)?;
+    if planned.dropped_empty + planned.dropped_duplicate > 0 {
+        eprintln!(
+            "blocks: dropped {} empty and {} duplicate block(s) from the plan",
+            planned.dropped_empty, planned.dropped_duplicate
+        );
+    }
 
     let apply = ApplyOptions {
         step_scale: req.step_scale,
         outputs_only: false,
         hidden_only: false,
     };
-    let mut records = Vec::with_capacity(blocks.len());
+    let mut records = Vec::with_capacity(planned.blocks.len());
     let mut unmoved_blocks = 0usize;
-    for (index, block) in blocks.iter().enumerate() {
+    for (index, block) in planned.blocks.iter().enumerate() {
         let focus_uuid = block
             .focus
             .and_then(|i| incumbent.neurons.get(i))
@@ -282,6 +311,7 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
             focus: focus_uuid,
             neurons,
             synapses,
+            gene_count: block.gene_count(),
             hidden_biases: deltas.hidden_biases,
             output_biases: deltas.output_biases,
             hidden_weights: deltas.hidden_weights,
@@ -359,6 +389,8 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
         baseline_train_mse,
         baseline_score,
         unmoved_blocks,
+        dropped_empty_blocks: planned.dropped_empty,
+        dropped_duplicate_blocks: planned.dropped_duplicate,
         candidates: records,
     };
     fs::write(

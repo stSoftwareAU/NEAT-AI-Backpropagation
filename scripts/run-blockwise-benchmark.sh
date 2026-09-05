@@ -120,18 +120,23 @@ echo "Building neat_ai_backpropagation (release)..."
 )
 BIN="$ROOT/target/release/neat_ai_backpropagation"
 
-# Read one mode's blocks.json and print "candidates wins best_delta".
+# Read one mode's blocks.json and print "candidates wins best_delta wins_per_hour".
+# Arguments reach python through argv, never through interpolated source — an
+# empty value must fail loudly here, not become a python syntax error.
 summarise() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "$2" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 summary = json.loads(Path(sys.argv[1]).read_text())
+elapsed = max(int(sys.argv[2]), 1)
+# Only candidates that reached disk were measured; an unmoved block writes no
+# creature and must not inflate the count.
 candidates = [c for c in summary["candidates"] if c.get("candidate")]
 wins = [c for c in candidates if c.get("scoreWin")]
 best = max((c.get("scoreDelta") or 0.0) for c in candidates) if candidates else 0.0
-print(f"{len(candidates)} {len(wins)} {best:+.6e}")
+print(f"{len(candidates)} {len(wins)} {best:+.6e} {len(wins) * 3600 / elapsed:.1f}")
 PY
 }
 
@@ -160,12 +165,11 @@ run_mode() {
   # rate — never overstates it.
   [[ "$elapsed" -lt 1 ]] && elapsed=1
   local stats
-  stats="$(summarise "$OUT/$mode/blocks.json")"
-  local candidates wins best
-  read -r candidates wins best <<<"$stats"
+  stats="$(summarise "$OUT/$mode/blocks.json" "$elapsed")"
+  local candidates wins best rate
+  read -r candidates wins best rate <<<"$stats"
   printf '%-10s candidates=%-3s wins=%-3s best_score_delta=%s elapsed=%ss wins/hour=%s\n' \
-    "$mode" "$candidates" "$wins" "$best" "$elapsed" \
-    "$(python3 -c "print(f'{$wins * 3600 / $elapsed:.1f}')")"
+    "$mode" "$candidates" "$wins" "$best" "$elapsed" "$rate"
 }
 
 run_mode global "global"

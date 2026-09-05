@@ -192,6 +192,13 @@ impl BlockGraph {
                 neighbours[b].push(a);
             }
         }
+        // A self-loop touches its neuron twice and parallel edges repeat a
+        // neighbour, which would double-weight those genes in the focus
+        // ranking and bias the subgraph walk towards multiply-connected pairs.
+        for list in incident.iter_mut().chain(neighbours.iter_mut()) {
+            list.sort_unstable();
+            list.dedup();
+        }
         Self {
             incident,
             neighbours,
@@ -314,6 +321,16 @@ impl BlockPlan {
         if self.blocks_per_strategy == 0 {
             return Err("blocksPerStrategy must be at least 1".into());
         }
+        // `radius: 0` would make every neighbourhood block identical to the
+        // neuron block for the same focus, so the whole strategy would vanish
+        // into the duplicate filter and read as "found nothing".
+        if self.strategies.contains(&BlockStrategy::Neighbourhood) && self.radius == 0 {
+            return Err(
+                "radius must be at least 1 for the neighbourhood strategy — radius 0 is the \
+                 neuron strategy"
+                    .into(),
+            );
+        }
         if self.subgraph_size == 0 {
             return Err("subgraphSize must be at least 1".into());
         }
@@ -430,29 +447,51 @@ fn top_genes_block(magnitudes: &ProposalMagnitudes, k: usize) -> GeneBlock {
     block
 }
 
+/// What [`plan_blocks`] produced, including what it had to drop.
+///
+/// The drops are counted rather than swallowed: a plan that asked for eight
+/// neighbourhood blocks and got two back has to say so, or the run reads as
+/// "blockwise generation found nothing" when it was the planner that discarded
+/// them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlockPlanOutcome {
+    /// The blocks to generate candidates from.
+    pub blocks: Vec<GeneBlock>,
+    /// Blocks discarded because they selected no gene at all.
+    pub dropped_empty: usize,
+    /// Blocks discarded because an earlier block selected the same genes.
+    pub dropped_duplicate: usize,
+}
+
 /// Generate every candidate block one accumulation pass supports.
 ///
 /// Blocks selecting no gene, and blocks selecting exactly the genes an earlier
 /// block already selected, are dropped — a duplicate would cost a full scorer
-/// run to learn a number already known.
+/// run to learn a number already known — and both counts are reported in the
+/// returned [`BlockPlanOutcome`].
 pub fn plan_blocks(
     creature: &CreatureExport,
     graph: &BlockGraph,
     magnitudes: &ProposalMagnitudes,
     plan: &BlockPlan,
     rng: &mut impl Rng,
-) -> Result<Vec<GeneBlock>, String> {
+) -> Result<BlockPlanOutcome, String> {
     plan.validate()?;
     let ranked = rank_neurons(graph, magnitudes);
     let pool = focus_pool(creature, &ranked);
     let mut blocks = Vec::new();
+    let mut dropped_empty = 0usize;
+    let mut dropped_duplicate = 0usize;
     let mut seen: HashSet<(BTreeSet<usize>, BTreeSet<usize>)> = HashSet::new();
     let mut push = |block: GeneBlock, blocks: &mut Vec<GeneBlock>| {
         if block.is_empty() {
+            dropped_empty += 1;
             return;
         }
         if seen.insert((block.neurons.clone(), block.synapses.clone())) {
             blocks.push(block);
+        } else {
+            dropped_duplicate += 1;
         }
     };
     for &strategy in &plan.strategies {
@@ -491,7 +530,11 @@ pub fn plan_blocks(
     if blocks.is_empty() {
         return Err("blockwise generation produced no candidate blocks".into());
     }
-    Ok(blocks)
+    Ok(BlockPlanOutcome {
+        blocks,
+        dropped_empty,
+        dropped_duplicate,
+    })
 }
 
 #[cfg(test)]
@@ -681,7 +724,7 @@ mod tests {
         let graph = BlockGraph::of(&creature);
         let magnitudes = proposal_magnitudes(&creature, &signal, &config, 0.01, 0.01);
         let mut rng = StdRng::seed_from_u64(5);
-        let blocks = plan_blocks(
+        let planned = plan_blocks(
             &creature,
             &graph,
             &magnitudes,
@@ -694,6 +737,7 @@ mod tests {
             &mut rng,
         )
         .unwrap();
+        let blocks = &planned.blocks;
 
         // The global block is present for parity, and it is the only block
         // holding every gene.
@@ -725,12 +769,70 @@ mod tests {
         }
         // No two blocks select the same genes.
         let mut seen = HashSet::new();
-        for block in &blocks {
+        for block in blocks {
             assert!(
                 seen.insert((block.neurons.clone(), block.synapses.clone())),
                 "duplicate block {:?}",
                 block.strategy
             );
+        }
+        // On this 3-neuron chain a radius-1 neighbourhood is the whole
+        // creature, so both neighbourhood blocks duplicate the global one —
+        // and the planner has to say how many it dropped rather than quietly
+        // returning fewer blocks than were asked for.
+        assert!(
+            planned.dropped_duplicate >= 2,
+            "expected both neighbourhood blocks to be reported as duplicates, got {}",
+            planned.dropped_duplicate
+        );
+        assert_eq!(planned.dropped_empty, 0);
+        assert!(
+            !blocks
+                .iter()
+                .any(|b| b.strategy == BlockStrategy::Neighbourhood)
+        );
+    }
+
+    /// `--radius 0` would make every neighbourhood block identical to the
+    /// neuron block for the same focus, so the strategy would vanish into the
+    /// duplicate filter and read as "found nothing" (#105).
+    #[test]
+    fn radius_zero_is_refused_for_the_neighbourhood_strategy() {
+        let plan = BlockPlan {
+            strategies: vec![BlockStrategy::Neuron, BlockStrategy::Neighbourhood],
+            radius: 0,
+            ..BlockPlan::default()
+        };
+        let err = plan.validate().unwrap_err();
+        assert!(err.contains("radius"), "{err}");
+        // A plan that never asks for a neighbourhood is unaffected.
+        BlockPlan {
+            strategies: vec![BlockStrategy::Neuron],
+            radius: 0,
+            ..BlockPlan::default()
+        }
+        .validate()
+        .unwrap();
+    }
+
+    /// A self-loop and parallel edges must not double-weight a neuron's genes
+    /// in the focus ranking or repeat a neighbour in the walk.
+    #[test]
+    fn adjacency_holds_each_synapse_and_neighbour_once() {
+        let creature = chain();
+        let graph = BlockGraph::of(&creature);
+        for (i, incident) in graph.incident.iter().enumerate() {
+            let mut unique = incident.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), incident.len(), "neuron {i} incident synapses");
+        }
+        for (i, neighbours) in graph.neighbours.iter().enumerate() {
+            let mut unique = neighbours.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), neighbours.len(), "neuron {i} neighbours");
+            assert!(!neighbours.contains(&i), "neuron {i} is its own neighbour");
         }
     }
 

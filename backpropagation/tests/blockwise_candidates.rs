@@ -315,11 +315,7 @@ fn every_candidate_is_scored_on_its_own() {
         true,
         true,
     );
-    let written: Vec<_> = summary
-        .candidates
-        .iter()
-        .filter(|c| c.candidate.is_some())
-        .collect();
+    let written = summary.written();
     assert!(written.len() > 2, "expected several written candidates");
     // One baseline score plus one per written candidate — no candidate shares
     // another's verdict.
@@ -410,6 +406,22 @@ fn candidate_metadata_names_exactly_the_genes_that_moved() {
             "{} mse delta",
             candidate.label
         );
+    }
+
+    // Every record's gene count matches the genes it names, and each synapse
+    // carries its export index so parallel edges stay distinguishable.
+    for candidate in &reloaded.candidates {
+        assert_eq!(
+            candidate.gene_count,
+            candidate.neurons.len() + candidate.synapses.len(),
+            "{} gene count",
+            candidate.label
+        );
+        for synapse in &candidate.synapses {
+            let export = &source.synapses[synapse.index];
+            assert_eq!(export.from_uuid, synapse.from_uuid);
+            assert_eq!(export.to_uuid, synapse.to_uuid);
+        }
     }
 
     // The output-head block is confined to the output side of the graph.

@@ -30,8 +30,8 @@ pub use backprop::{
     calculate_learning_rate, count_apply_deltas, nearly_equal,
 };
 pub use blocks::{
-    BlockGraph, BlockPlan, BlockStrategy, GeneBlock, ProposalMagnitudes, plan_blocks,
-    proposal_magnitudes,
+    BlockGraph, BlockPlan, BlockPlanOutcome, BlockStrategy, GeneBlock, ProposalMagnitudes,
+    plan_blocks, proposal_magnitudes,
 };
 pub use blockwise::{
     BlockCandidateRecord, BlockSynapseRef, BlocksRequest, BlocksSummary, run_blocks,
