@@ -126,7 +126,8 @@ Under `--acceptance scorer`:
 - Every attempted candidate — including each backtracking step — is
   scored and journalled as a `"kind":"candidate"` line carrying
   `incumbentMse`, `candidateMse`, `mseDelta`, `baselineScore`,
-  `candidateScore`, `scoreDelta`, `stepScale` and `acceptReason`.
+  `candidateScore`, `scoreDelta`, `stepScale`, `realisedStepScale`, the
+  realised `update` norms (#109) and `acceptReason`.
 - MSE is demoted to a journalled diagnostic. `--mse-pre-screen` turns it
   back into a **gate in front of the scorer**: a candidate MSE rejects is
   never scored, so a scorer win MSE disagreed with is lost. Use it only
@@ -232,9 +233,18 @@ with `CREATURE=` / `DATA_DIR=` to repeat the comparison on real GRQ history.
 ### Train step size (issue #39)
 
 Every gene's proposal is computed as if the other genes hold still, so
-moving all of them the whole way at once overshoots on a large creature
-(~16.6k parameters move together on the GRQ network). The defaults are
+moving all of them the whole way at once overshoots on a large creature —
+thousands of genes move together on the GRQ network. The defaults are
 therefore sweep-informed rather than full-jump:
+
+> `--step-scale` is a **per-gene** factor, so it does not describe a
+> fixed-sized whole-creature step. The `0.01` default was measured when the
+> GRQ creature carried roughly 16.6k parameters; the creature has since grown
+> to thousands of neurons and tens of thousands of synapses, and the same
+> per-gene step now moves a much larger aggregate distance. Use the
+> [trust-region update budget](#trust-region-update-budget-issue-109) below to
+> bound that aggregate directly — the step scale on its own is not a size
+> guarantee at any creature size.
 
 | Flag | Default | Why |
 | ---- | ------- | --- |
@@ -256,6 +266,74 @@ flowchart LR
     E -- yes --> F[step ÷ 2] --> B
     E -- no --> G[rollback]
 ```
+
+### Trust-region update budget (issue #109)
+
+`--step-scale` scales each gene's own proposal, so the size of the move the
+*whole creature* makes grows with the number and magnitude of the genes that
+move. A fixed step scale is therefore not a fixed-sized optimisation step as a
+creature evolves. `train` now measures the update it is about to apply and,
+when a budget is configured, rescales that whole update to fit:
+
+```bash
+cargo run -p neat_ai_backpropagation --release -- train \
+  ~/src/GRQ-cluster/network.json /tmp/grq-train-slice \
+  --step-scale 0.01 --trust-region-l2 0.5 \
+  --acceptance scorer --scorer ../NEAT-AI-scorer/target/release/rust_scorer
+```
+
+| Flag | Default | Budget it bounds |
+| ---- | ------- | ---------------- |
+| `--trust-region-l2` | off | L2 norm of the whole-creature delta |
+| `--trust-region-rms` | off | RMS per-gene delta |
+| `--trust-region-relative-rms` | off | RMS *relative* change (`Δ / value`) |
+| `--trust-region-bias-l2` | off | L2 norm of the bias genes alone |
+| `--trust-region-weight-l2` | off | L2 norm of the weight genes alone |
+| `--trust-region-max-genes` | off | Genes one update may move (largest kept) |
+
+- **Fixed-step parity is the default.** With no `--trust-region-*` flag the
+  candidate is exactly what the step scale alone produces, byte for byte — the
+  budget has to be asked for.
+- **The step scale stays an input.** The trust region only ever *shrinks* it:
+  the proposal is built at `--step-scale`, measured, and re-applied at
+  `step × scale` when a budget binds. It never amplifies a small step.
+- **The tightest budget wins.** Each budget yields its own rescale factor and
+  the smallest is used, so the update satisfies every configured budget at
+  once.
+- **`--trust-region-max-genes` is an L0 budget**: the largest moves are kept
+  and every other gene is held at its incumbent value, with ties broken by gene
+  order so the same proposal always trims to the same candidate.
+- **Measured before apply, journalled after.** Every epoch line carries
+  `stepScale` (what was requested), `realisedStepScale` (what was applied) and
+  an `update` object — changed genes, `l1`, `l2`, `rms`, `maxAbs`,
+  `relativeL2`, `relativeRms` — reported for the whole update and split by
+  `biases` / `weights` and `hidden` / `output`. Scorer-guided candidate lines
+  carry the same fields per attempt or ladder rung, so a realised update norm
+  sits beside the `scoreDelta` it produced; `blocks.json` records it per block
+  candidate for the same correlation.
+- **An unusable budget is refused**, not ignored: a zero, negative or
+  non-finite budget (or `--trust-region-max-genes 0`) fails before the corpus
+  is read, and a budget cannot bound a non-finite update norm.
+
+```mermaid
+flowchart TD
+    A[accumulate epoch] --> B["apply at --step-scale → proposal"]
+    B --> C[measure the update:<br/>changed genes, L1 / L2 / RMS, relative]
+    C --> D{within every<br/>configured budget?}
+    D -- yes --> F[candidate as proposed]
+    D -- no --> E["re-apply at step × budget ÷ measured"] --> F
+    F --> G{--trust-region-max-genes<br/>exceeded?}
+    G -- yes --> H[hold all but the largest moves] --> I
+    G -- no --> I[candidate creature]
+    I --> J[journal requested step,<br/>realised step and realised norms]
+```
+
+`scripts/run-trust-region-experiment.sh <rust_scorer>` runs the same creature,
+corpus, seed and epoch budget through an unbudgeted control arm and one arm per
+`BUDGETS=` entry, printing each arm's accepted epochs, scorer gain, realised
+update norm, wall clock and wins/hour. Point it at production with
+`CREATURE=` / `DATA_DIR=` to choose a budget on a current production-size
+creature.
 
 ### Blockwise candidates (issue #105)
 
@@ -751,11 +829,12 @@ Every other field is optional and defaults to the matching CLI `train`
 flag — `epochs`, `maxRecords`, `seed`, `disableRandomSamples`,
 `learningRate`, `learningRateStrategy`, `learningRateDecay`,
 `normaliseGradients`, `maximumBiasAdjustmentScale`,
-`maximumWeightAdjustmentScale`, `stepScale`, `stepScaleLadder`,
-`outputsOnly`, `hiddenOnly`, `acceptance`, `minScoreImprovement`,
-`msePreScreen`, `acceptAlways`, `maxBacktracks`, `scorer`, `traceStore` —
-so the sampling (#77), trace-store (#78), scorer-guided acceptance (#104)
-and step-scale ladder (#106) work is reachable from the ABI, not only from
+`maximumWeightAdjustmentScale`, `stepScale`, `trustRegion`,
+`stepScaleLadder`, `outputsOnly`, `hiddenOnly`, `acceptance`,
+`minScoreImprovement`, `msePreScreen`, `acceptAlways`, `maxBacktracks`,
+`scorer`, `traceStore` — so the sampling (#77), trace-store (#78),
+scorer-guided acceptance (#104), step-scale ladder (#106) and
+trust-region budget (#109) work is reachable from the ABI, not only from
 the CLI. An unknown field is rejected rather than ignored.
 
 The response carries `bestCreatureJson` (the exact bytes written to
