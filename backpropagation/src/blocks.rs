@@ -14,6 +14,8 @@
 //! the whole-creature candidate restricted to the block's genes.
 
 use crate::backprop::{BackpropConfig, LearningSignal, effective_step_scale};
+use crate::propagate_layout::NeuronTraceStats;
+use crate::targets::{TargetPlan, TargetSelection, rank_targets, select_targets};
 use neat_core::CreatureExport;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -55,7 +57,7 @@ impl BlockStrategy {
 ///
 /// Indices are positions in `CreatureExport.neurons` / `CreatureExport.synapses`
 /// — the same indexing [`LearningSignal`] uses.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GeneBlock {
     /// How this block was selected.
     pub strategy: BlockStrategy,
@@ -65,6 +67,10 @@ pub struct GeneBlock {
     pub neurons: BTreeSet<usize>,
     /// Export synapse indices whose weight may move.
     pub synapses: BTreeSet<usize>,
+    /// Why the focus target was chosen, for a focus-grown block (issue #108).
+    /// `None` for the strategies that select a region rather than a target —
+    /// `global`, `output-head` and `top-genes`.
+    pub selection: Option<TargetSelection>,
 }
 
 impl GeneBlock {
@@ -205,6 +211,11 @@ impl BlockGraph {
         }
     }
 
+    /// Synapse indices touching export neuron `index`, in either direction.
+    pub fn incident(&self, index: usize) -> &[usize] {
+        self.incident.get(index).map_or(&[][..], Vec::as_slice)
+    }
+
     /// Build a block owning `neurons` and every synapse incident to them.
     pub fn block(
         &self,
@@ -214,15 +225,14 @@ impl BlockGraph {
     ) -> GeneBlock {
         let mut synapses = BTreeSet::new();
         for &neuron in &neurons {
-            if let Some(incident) = self.incident.get(neuron) {
-                synapses.extend(incident.iter().copied());
-            }
+            synapses.extend(self.incident(neuron).iter().copied());
         }
         GeneBlock {
             strategy,
             focus,
             neurons,
             synapses,
+            selection: None,
         }
     }
 
@@ -288,6 +298,9 @@ pub struct BlockPlan {
     pub subgraph_size: usize,
     /// Genes kept by [`BlockStrategy::TopGenes`].
     pub top_genes: usize,
+    /// How the focus targets are drawn (issue #108).
+    #[serde(default)]
+    pub targets: TargetPlan,
 }
 
 impl Default for BlockPlan {
@@ -305,6 +318,7 @@ impl Default for BlockPlan {
             radius: 1,
             subgraph_size: 8,
             top_genes: 32,
+            targets: TargetPlan::default(),
         }
     }
 }
@@ -337,53 +351,27 @@ impl BlockPlan {
         if self.top_genes == 0 {
             return Err("topGenes must be at least 1".into());
         }
+        self.targets.validate()?;
         Ok(())
     }
 }
 
-/// Rank export neuron indices by how much learning wants to move them.
-///
-/// A neuron's weight is its own |Δbias| plus the |Δweight| of every synapse
-/// incident to it, so the ranking answers "where is the signal", not "where is
-/// the graph busiest". Ties keep export order, so the plan is deterministic.
-fn rank_neurons(graph: &BlockGraph, magnitudes: &ProposalMagnitudes) -> Vec<usize> {
-    let mut scored: Vec<(usize, f64)> = magnitudes
-        .biases
-        .iter()
-        .enumerate()
-        .map(|(i, bias)| {
-            let incident: f64 = graph
-                .incident
-                .get(i)
-                .into_iter()
-                .flatten()
-                .filter_map(|&s| magnitudes.weights.get(s))
-                .sum();
-            (i, bias + incident)
-        })
-        .collect();
-    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-    scored.into_iter().map(|(i, _)| i).collect()
-}
-
-/// The neurons a focus-based strategy may grow from.
+/// The neurons a focus-based strategy may grow from, in export order.
 ///
 /// Hidden / constant neurons are the target — the output head has a strategy of
 /// its own. A creature with no hidden neurons falls back to all of them, so a
-/// small creature still yields blocks instead of an empty plan.
-fn focus_pool(creature: &CreatureExport, ranked: &[usize]) -> Vec<usize> {
-    let hidden: Vec<usize> = ranked
+/// small creature still yields blocks instead of an empty plan. Which of them
+/// is worth an experiment is [`crate::targets`]' decision, not this one's.
+fn focus_pool(creature: &CreatureExport) -> Vec<usize> {
+    let hidden: Vec<usize> = creature
+        .neurons
         .iter()
-        .copied()
-        .filter(|&i| {
-            creature
-                .neurons
-                .get(i)
-                .is_some_and(|n| n.neuron_type != "output")
-        })
+        .enumerate()
+        .filter(|(_, n)| n.neuron_type != "output")
+        .map(|(i, _)| i)
         .collect();
     if hidden.is_empty() {
-        ranked.to_vec()
+        (0..creature.neurons.len()).collect()
     } else {
         hidden
     }
@@ -396,6 +384,7 @@ fn global_block(creature: &CreatureExport) -> GeneBlock {
         focus: None,
         neurons: (0..creature.neurons.len()).collect(),
         synapses: (0..creature.synapses.len()).collect(),
+        selection: None,
     }
 }
 
@@ -436,6 +425,7 @@ fn top_genes_block(magnitudes: &ProposalMagnitudes, k: usize) -> GeneBlock {
         focus: None,
         neurons: BTreeSet::new(),
         synapses: BTreeSet::new(),
+        selection: None,
     };
     for (is_bias, index, _) in genes {
         if is_bias {
@@ -453,7 +443,7 @@ fn top_genes_block(magnitudes: &ProposalMagnitudes, k: usize) -> GeneBlock {
 /// neighbourhood blocks and got two back has to say so, or the run reads as
 /// "blockwise generation found nothing" when it was the planner that discarded
 /// them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct BlockPlanOutcome {
     /// The blocks to generate candidates from.
     pub blocks: Vec<GeneBlock>,
@@ -465,20 +455,24 @@ pub struct BlockPlanOutcome {
 
 /// Generate every candidate block one accumulation pass supports.
 ///
-/// Blocks selecting no gene, and blocks selecting exactly the genes an earlier
-/// block already selected, are dropped — a duplicate would cost a full scorer
-/// run to learn a number already known — and both counts are reported in the
-/// returned [`BlockPlanOutcome`].
+/// Focus targets are drawn by [`crate::targets`] under `plan.targets`: the
+/// ranked evidence the same accumulation pass produced, plus the configured
+/// uniform random control share. Blocks selecting no gene, and blocks
+/// selecting exactly the genes an earlier block already selected, are dropped
+/// — a duplicate would cost a full scorer run to learn a number already known
+/// — and both counts are reported in the returned [`BlockPlanOutcome`].
 pub fn plan_blocks(
     creature: &CreatureExport,
     graph: &BlockGraph,
     magnitudes: &ProposalMagnitudes,
+    signal: &LearningSignal,
+    traces: &[NeuronTraceStats],
     plan: &BlockPlan,
     rng: &mut impl Rng,
 ) -> Result<BlockPlanOutcome, String> {
     plan.validate()?;
-    let ranked = rank_neurons(graph, magnitudes);
-    let pool = focus_pool(creature, &ranked);
+    let pool = focus_pool(creature);
+    let ranked = rank_targets(creature, graph, magnitudes, signal, traces, &pool);
     let mut blocks = Vec::new();
     let mut dropped_empty = 0usize;
     let mut dropped_duplicate = 0usize;
@@ -502,27 +496,32 @@ pub fn plan_blocks(
                 push(top_genes_block(magnitudes, plan.top_genes), &mut blocks)
             }
             BlockStrategy::Neuron => {
-                for &focus in pool.iter().take(plan.blocks_per_strategy) {
-                    push(
-                        graph.block(strategy, Some(focus), BTreeSet::from([focus])),
-                        &mut blocks,
-                    );
+                for target in select_targets(&plan.targets, &ranked, plan.blocks_per_strategy, rng)
+                {
+                    let focus = target.neuron;
+                    let mut block = graph.block(strategy, Some(focus), BTreeSet::from([focus]));
+                    block.selection = Some(target.selection);
+                    push(block, &mut blocks);
                 }
             }
             BlockStrategy::Neighbourhood => {
-                for &focus in pool.iter().take(plan.blocks_per_strategy) {
+                for target in select_targets(&plan.targets, &ranked, plan.blocks_per_strategy, rng)
+                {
+                    let focus = target.neuron;
                     let neurons = graph.neighbourhood(focus, plan.radius);
-                    push(graph.block(strategy, Some(focus), neurons), &mut blocks);
+                    let mut block = graph.block(strategy, Some(focus), neurons);
+                    block.selection = Some(target.selection);
+                    push(block, &mut blocks);
                 }
             }
             BlockStrategy::Subgraph => {
-                for _ in 0..plan.blocks_per_strategy {
-                    if pool.is_empty() {
-                        break;
-                    }
-                    let start = pool[rng.random_range(0..pool.len())];
+                for target in select_targets(&plan.targets, &ranked, plan.blocks_per_strategy, rng)
+                {
+                    let start = target.neuron;
                     let neurons = graph.random_subgraph(start, plan.subgraph_size, rng);
-                    push(graph.block(strategy, Some(start), neurons), &mut blocks);
+                    let mut block = graph.block(strategy, Some(start), neurons);
+                    block.selection = Some(target.selection);
+                    push(block, &mut blocks);
                 }
             }
         }
@@ -724,10 +723,13 @@ mod tests {
         let graph = BlockGraph::of(&creature);
         let magnitudes = proposal_magnitudes(&creature, &signal, &config, 0.01, 0.01);
         let mut rng = StdRng::seed_from_u64(5);
+        let traces = vec![NeuronTraceStats::default(); creature.neurons.len()];
         let planned = plan_blocks(
             &creature,
             &graph,
             &magnitudes,
+            &signal,
+            &traces,
             &BlockPlan {
                 blocks_per_strategy: 2,
                 subgraph_size: 2,
@@ -841,10 +843,19 @@ mod tests {
         let creature = chain();
         let graph = BlockGraph::of(&creature);
         let magnitudes = ProposalMagnitudes::default();
+        let signal = LearningSignal::new(creature.neurons.len(), creature.synapses.len());
+        let traces = vec![NeuronTraceStats::default(); creature.neurons.len()];
         let mut rng = StdRng::seed_from_u64(1);
         for plan in [
             BlockPlan {
                 strategies: Vec::new(),
+                ..BlockPlan::default()
+            },
+            BlockPlan {
+                targets: TargetPlan {
+                    random_control_fraction: 1.5,
+                    ..TargetPlan::default()
+                },
                 ..BlockPlan::default()
             },
             BlockPlan {
@@ -861,7 +872,16 @@ mod tests {
             },
         ] {
             assert!(
-                plan_blocks(&creature, &graph, &magnitudes, &plan, &mut rng).is_err(),
+                plan_blocks(
+                    &creature,
+                    &graph,
+                    &magnitudes,
+                    &signal,
+                    &traces,
+                    &plan,
+                    &mut rng
+                )
+                .is_err(),
                 "{plan:?} must be refused"
             );
         }

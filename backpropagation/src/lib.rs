@@ -22,6 +22,7 @@ pub mod sampling;
 pub mod scorer;
 pub mod sweep;
 pub mod tags;
+pub mod targets;
 pub mod trace;
 pub mod train;
 pub mod validate;
@@ -76,6 +77,11 @@ pub use sampling::{
 };
 pub use scorer::{ScoreResult, score_creature, score_creatures};
 pub use sweep::{SweepRequest, SweepRow, SweepSummary, run_sweep};
+pub use targets::{
+    ArmSample, ArmThroughput, EvidenceTargets, RankedTarget, SelectedTarget, SelectionComparison,
+    TargetFeatures, TargetPlan, TargetSelection, TargetSelector, TargetSource, TargetStrategy,
+    UniformRandomTargets, compare_arms, rank_targets, select_targets,
+};
 pub use trace::{NeuronTraceState, SynapseTraceState, build_creature_trace, write_creature_trace};
 pub use train::{
     AcceptReason, AcceptanceMode, BEST_TRACE_FILE, DEFAULT_MIN_SCORE_IMPROVEMENT,

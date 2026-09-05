@@ -18,6 +18,7 @@ use crate::creature_io::{ObservationWidth, load_forward_only_creature};
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
 use crate::scorer::score_creature;
+use crate::targets::{ArmSample, SelectionComparison, TargetSelection, compare_arms};
 use crate::train::{AcceptanceMode, resolve_acceptance};
 use crate::validate::TrainedTopology;
 use neat_core::{CreatureExport, compile_creature};
@@ -26,6 +27,7 @@ use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 /// One selected synapse, recorded in the candidate metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +53,11 @@ pub struct BlockCandidateRecord {
     /// UUID of the neuron the block was grown from, when it has one.
     #[serde(default)]
     pub focus: Option<String>,
+    /// Why that target was selected and the rank features behind it — absent
+    /// for the strategies that select a region rather than a target
+    /// (issue #108).
+    #[serde(default)]
+    pub selection: Option<TargetSelection>,
     /// UUIDs of every neuron whose bias the block may move.
     pub neurons: Vec<String>,
     /// Every synapse whose weight the block may move.
@@ -83,6 +90,10 @@ pub struct BlockCandidateRecord {
     /// Whether the scorer gain cleared the win margin.
     #[serde(default)]
     pub score_win: Option<bool>,
+    /// Wall-clock seconds this candidate's scorer run took — the cost side of
+    /// the wins/hour comparison (issue #108).
+    #[serde(default)]
+    pub scorer_seconds: Option<f64>,
     /// Relative path of the written candidate — absent when no gene moved, so
     /// there was no candidate to write.
     #[serde(default)]
@@ -127,6 +138,11 @@ pub struct BlocksSummary {
     /// held still is recorded here with `candidate: None` — use
     /// [`BlocksSummary::written`] for the candidates that reached disk.
     pub candidates: Vec<BlockCandidateRecord>,
+    /// Scorer wins/hour and score gain/hour of the evidence arm beside the
+    /// uniform random control arm (issue #108). Absent without a scorer —
+    /// there is no throughput to compare when nothing was scored.
+    #[serde(default)]
+    pub selection_comparison: Option<SelectionComparison>,
 }
 
 impl BlocksSummary {
@@ -272,7 +288,15 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
         learning_rate,
         req.step_scale,
     );
-    let planned = plan_blocks(&incumbent, &graph, &magnitudes, req.plan, &mut rng)?;
+    let planned = plan_blocks(
+        &incumbent,
+        &graph,
+        &magnitudes,
+        &report.learning,
+        &report.neuron_traces,
+        req.plan,
+        &mut rng,
+    )?;
     if planned.dropped_empty + planned.dropped_duplicate > 0 {
         eprintln!(
             "blocks: dropped {} empty and {} duplicate block(s) from the plan",
@@ -287,6 +311,7 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
     };
     let mut records = Vec::with_capacity(planned.blocks.len());
     let mut unmoved_blocks = 0usize;
+    let mut arm_samples: Vec<ArmSample> = Vec::new();
     for (index, block) in planned.blocks.iter().enumerate() {
         let focus_uuid = block
             .focus
@@ -309,6 +334,7 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
             strategy: block.strategy,
             label: label.clone(),
             focus: focus_uuid,
+            selection: block.selection.clone(),
             neurons,
             synapses,
             gene_count: block.gene_count(),
@@ -321,6 +347,7 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
             score: None,
             score_delta: None,
             score_win: None,
+            scorer_seconds: None,
             candidate: None,
         };
         if !record.moved() {
@@ -353,15 +380,30 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
             record.mse_delta = Some(mse - baseline);
         }
         if let (Some(scorer), Some(baseline), Some(margin)) = (req.scorer, baseline_score, margin) {
+            // The scorer run is the scarce resource issue #108 is about, so
+            // its wall clock is measured rather than estimated.
+            let started = Instant::now();
             let scored = score_creature(
                 scorer,
                 &json,
                 req.training_data,
                 &score_dir.join("candidate"),
             )?;
+            let seconds = started.elapsed().as_secs_f64();
+            let delta = scored.score - baseline;
+            let win = delta >= margin;
             record.score = Some(scored.score);
-            record.score_delta = Some(scored.score - baseline);
-            record.score_win = Some(scored.score - baseline >= margin);
+            record.score_delta = Some(delta);
+            record.score_win = Some(win);
+            record.scorer_seconds = Some(seconds);
+            if let Some(selection) = &block.selection {
+                arm_samples.push(ArmSample {
+                    source: selection.source,
+                    score_delta: Some(delta),
+                    win,
+                    scorer_seconds: seconds,
+                });
+            }
         }
         eprintln!(
             "blocks {label}: genes={} moved={} mse_delta={} score_delta={}",
@@ -392,6 +434,7 @@ pub fn run_blocks(req: BlocksRequest<'_>) -> Result<BlocksSummary, String> {
         dropped_empty_blocks: planned.dropped_empty,
         dropped_duplicate_blocks: planned.dropped_duplicate,
         candidates: records,
+        selection_comparison: (!arm_samples.is_empty()).then(|| compare_arms(&arm_samples)),
     };
     fs::write(
         req.output_dir.join("blocks.json"),
