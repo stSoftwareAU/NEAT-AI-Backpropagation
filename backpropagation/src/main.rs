@@ -10,6 +10,7 @@ use neat_ai_backpropagation::gradient_check::{
 };
 use neat_ai_backpropagation::ladder::{DEFAULT_STEP_SCALE_LADDER_CSV, parse_step_scale_ladder};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
+use neat_ai_backpropagation::targets::{TargetPlan, TargetStrategy};
 use neat_ai_backpropagation::train::{
     AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, TrainCreature, TrainRequest,
     default_output_dir, resolve_acceptance, run_train,
@@ -102,6 +103,26 @@ impl BlockStrategyArg {
             Self::OutputHead => BlockStrategy::OutputHead,
             Self::Subgraph => BlockStrategy::Subgraph,
             Self::TopGenes => BlockStrategy::TopGenes,
+        }
+    }
+}
+
+/// Target-selection strategy selectable from the CLI (mirrors
+/// [`TargetStrategy`], issue #108).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum TargetStrategyArg {
+    /// Uniform random draw over every eligible neuron — the control arm.
+    Random,
+    /// Highest-ranked accumulated evidence first.
+    Evidence,
+}
+
+impl TargetStrategyArg {
+    /// Map the CLI value onto the library strategy.
+    fn to_config(self) -> TargetStrategy {
+        match self {
+            Self::Random => TargetStrategy::Random,
+            Self::Evidence => TargetStrategy::Evidence,
         }
     }
 }
@@ -332,6 +353,14 @@ enum Commands {
         /// Genes kept by the top-genes strategy.
         #[arg(long, default_value_t = 32)]
         top_genes: usize,
+        /// How focus targets are drawn: ranked evidence, or uniform random
+        /// (issue #108).
+        #[arg(long, value_enum, default_value_t = TargetStrategyArg::Evidence)]
+        target_selection: TargetStrategyArg,
+        /// Share of every focus draw reserved for the uniform random control
+        /// arm, 0.0–1.0.
+        #[arg(long, default_value_t = 0.0)]
+        random_control_fraction: f64,
         /// Skip every MSE pass (write and score candidates only).
         #[arg(long, default_value_t = false)]
         skip_mse: bool,
@@ -595,6 +624,8 @@ fn run() -> Result<(), String> {
             radius,
             subgraph_size,
             top_genes,
+            target_selection,
+            random_control_fraction,
             skip_mse,
             scorer,
             min_score_improvement,
@@ -616,6 +647,10 @@ fn run() -> Result<(), String> {
                 radius,
                 subgraph_size,
                 top_genes,
+                targets: TargetPlan {
+                    strategy: target_selection.to_config(),
+                    random_control_fraction,
+                },
             };
             let summary = run_blocks(BlocksRequest {
                 creature: &creature,
@@ -647,6 +682,21 @@ fn run() -> Result<(), String> {
                     winner.score_delta.unwrap_or_default(),
                     winner.neurons.len() + winner.synapses.len()
                 );
+            }
+            if let Some(comparison) = &summary.selection_comparison {
+                for arm in [&comparison.evidence, &comparison.random_control] {
+                    eprintln!(
+                        "  arm {:?}: scored={} wins={} scorer_seconds={:.3} wins/h={} gain/h={}",
+                        arm.source,
+                        arm.candidates_scored,
+                        arm.wins,
+                        arm.scorer_seconds,
+                        arm.wins_per_hour
+                            .map_or_else(|| "-".into(), |v| format!("{v:.3}")),
+                        arm.score_gain_per_hour
+                            .map_or_else(|| "-".into(), |v| format!("{v:.6e}")),
+                    );
+                }
             }
             Ok(())
         }
@@ -969,6 +1019,8 @@ mod tests {
             radius,
             subgraph_size,
             top_genes,
+            target_selection,
+            random_control_fraction,
             skip_mse,
             min_score_improvement,
             ..
@@ -985,6 +1037,10 @@ mod tests {
         assert_eq!(top_genes, 32);
         assert!(!skip_mse);
         assert!((min_score_improvement - DEFAULT_MIN_SCORE_IMPROVEMENT).abs() < 1e-18);
+        // Evidence-driven targets by default, with the random control arm off
+        // until it is asked for (issue #108).
+        assert_eq!(target_selection, TargetStrategyArg::Evidence);
+        assert!(random_control_fraction.abs() < 1e-12);
 
         // The parsed list must survive the mapping onto the library plan.
         let plan = BlockPlan {
@@ -996,6 +1052,10 @@ mod tests {
             radius,
             subgraph_size,
             top_genes,
+            targets: TargetPlan {
+                strategy: target_selection.to_config(),
+                random_control_fraction,
+            },
         };
         plan.validate().unwrap();
         assert_eq!(plan.strategies, BlockPlan::default().strategies);
@@ -1052,6 +1112,7 @@ mod tests {
             radius,
             subgraph_size,
             top_genes,
+            targets: TargetPlan::default(),
         };
         assert!(plan.validate().is_err());
     }
