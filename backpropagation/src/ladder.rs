@@ -10,8 +10,8 @@
 //! A ladder replaces "halve until something passes" with "apply the one
 //! accumulated learning at every configured step scale, score them all, keep
 //! the best". This module owns the grid — its default and the validation that
-//! refuses a rung the applier would silently rewrite — and the per-epoch
-//! evaluation [`run_ladder_epoch`] that turns it into a winner.
+//! refuses a rung the applier would silently rewrite — and the crate-internal
+//! per-epoch evaluation (`run_ladder_epoch`) that turns it into a winner.
 
 use crate::acceptance::{AcceptReason, ScorerAcceptance};
 use crate::backprop::{
