@@ -186,7 +186,11 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
             compute_mse_selected(&candidate, &mut net, req.training_data, req.selection)?;
         // The pre-screen is the issue's "optional catastrophic rejection": off
         // by default, MSE is only a diagnostic and every rung is scored.
-        let screened_out = req.settings.mse_pre_screen && mse >= req.incumbent_mse;
+        // "Did not improve" is the negation of the line search's own `<` test,
+        // so a diverged `NaN` MSE is screened out here exactly as it is there —
+        // every comparison against `NaN` is false.
+        let mse_improved = mse < req.incumbent_mse;
+        let screened_out = req.settings.mse_pre_screen && !mse_improved;
         rungs.push(Rung {
             index,
             step_scale,
