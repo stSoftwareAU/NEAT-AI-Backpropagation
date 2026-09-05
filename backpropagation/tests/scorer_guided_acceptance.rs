@@ -80,10 +80,15 @@ impl Fixture {
     }
 
     /// How many times the stub scorer was invoked so far.
+    ///
+    /// A missing file is zero calls; any other read error is a broken fixture
+    /// and must not be reported as "the scorer never ran" — several tests
+    /// assert exactly that.
     fn scorer_calls(&self) -> usize {
         match fs::read_to_string(&self.calls) {
             Ok(text) => text.lines().count(),
-            Err(_) => 0,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => panic!("cannot read {}: {e}", self.calls.display()),
         }
     }
 
@@ -123,12 +128,23 @@ printf '{{"trained":{{"score":%s,"error":0.0}}}}\n' "$score"
     path
 }
 
-/// Run one epoch over `fixture` with the given acceptance mode.
+/// Run one epoch over `fixture` with the given acceptance mode, single attempt.
 fn train(
     fixture: &Fixture,
     out_name: &str,
     acceptance: AcceptanceMode,
     with_scorer: bool,
+) -> Result<TrainResult, String> {
+    train_with_backtracks(fixture, out_name, acceptance, with_scorer, 0)
+}
+
+/// Run one epoch, allowing the backtracking line search `max_backtracks` retries.
+fn train_with_backtracks(
+    fixture: &Fixture,
+    out_name: &str,
+    acceptance: AcceptanceMode,
+    with_scorer: bool,
+    max_backtracks: u32,
 ) -> Result<TrainResult, String> {
     let out = fixture.root.join(out_name);
     run_train(TrainRequest {
@@ -144,7 +160,7 @@ fn train(
         apply: ApplyOptions::default(),
         acceptance,
         accept_always: false,
-        max_backtracks: 0,
+        max_backtracks,
         trace_store: None,
     })
 }
@@ -351,6 +367,99 @@ fn the_mse_pre_screen_skips_the_scorer_when_slice_mse_did_not_fall() {
     assert_eq!(rec.score_delta, None);
 }
 
+/// Every step of the backtracking line search is scored and journalled, not
+/// just the candidate the epoch finished on — the halved step is a different
+/// creature and the scorer is the only thing that can judge it.
+#[test]
+fn each_backtracking_step_is_scored_and_journalled() {
+    // Baseline 0.5, then three losing candidates: the full step and two
+    // halvings all fail the gate, so the epoch exhausts its budget.
+    let fixture = Fixture::new(2.0, &["0.5", "0.1", "0.2", "0.3"]);
+
+    let result = train_with_backtracks(&fixture, "out", scorer_guided(), true, 2).expect("train");
+
+    assert_eq!(result.accepted_epochs, 0);
+    // Baseline + one scorer run per attempt.
+    assert_eq!(fixture.scorer_calls(), 4);
+    let candidates: Vec<TrainCandidateRecord> = fixture
+        .journal_lines(&fixture.root.join("out"), "candidate")
+        .iter()
+        .map(|line| serde_json::from_str(line).expect("candidate line"))
+        .collect();
+    assert_eq!(candidates.len(), 3);
+    for (index, rec) in candidates.iter().enumerate() {
+        assert_eq!(rec.attempt, index as u32);
+        assert_eq!(rec.epoch, 1);
+        assert_eq!(rec.accept_reason, AcceptReason::ScoreNotImproved);
+        // Each attempt is judged against the same unmoved incumbent.
+        assert_eq!(rec.baseline_score, 0.5);
+        assert!(rec.candidate_score.is_some());
+    }
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|r| r.candidate_score)
+            .collect::<Vec<_>>(),
+        vec![Some(0.1), Some(0.2), Some(0.3)]
+    );
+    // The step halves on every retry.
+    for pair in candidates.windows(2) {
+        assert!(
+            (pair[1].step_scale - pair[0].step_scale / 2.0).abs() < 1e-15,
+            "step should halve: {} -> {}",
+            pair[0].step_scale,
+            pair[1].step_scale
+        );
+    }
+}
+
+/// A backtracked step the scorer likes is kept, and its score becomes the
+/// incumbent the run reports.
+#[test]
+fn a_backtracked_step_can_win_on_score() {
+    let fixture = Fixture::new(2.0, &["0.5", "0.1", "0.9"]);
+
+    let result = train_with_backtracks(&fixture, "out", scorer_guided(), true, 3).expect("train");
+
+    assert_eq!(result.accepted_epochs, 1);
+    assert_eq!(result.best_score.expect("best scored").score, 0.9);
+    // Baseline, the losing full step, then the winning halved step — the
+    // search stops as soon as the scorer accepts.
+    assert_eq!(fixture.scorer_calls(), 3);
+    let epoch: TrainEpochRecord =
+        serde_json::from_str(&fixture.journal_lines(&fixture.root.join("out"), "epoch")[0])
+            .expect("epoch line");
+    assert_eq!(epoch.backtracks, 1);
+    assert_eq!(epoch.accept_reason, AcceptReason::ScoreImproved);
+    assert_eq!(epoch.candidate_score, Some(0.9));
+}
+
+/// With the pre-screen on, a candidate whose MSE *did* fall still reaches the
+/// scorer — the screen filters, it does not decide.
+#[test]
+fn the_mse_pre_screen_still_lets_an_improving_candidate_reach_the_scorer() {
+    let fixture = Fixture::new(2.0, &["0.5", "0.6"]);
+
+    let result = train(
+        &fixture,
+        "out",
+        AcceptanceMode::Scorer(ScorerAcceptance {
+            mse_pre_screen: true,
+            ..ScorerAcceptance::default()
+        }),
+        true,
+    )
+    .expect("train");
+
+    assert_eq!(result.accepted_epochs, 1);
+    assert_eq!(fixture.scorer_calls(), 2);
+    let rec: TrainCandidateRecord =
+        serde_json::from_str(&fixture.journal_lines(&fixture.root.join("out"), "candidate")[0])
+            .expect("candidate line");
+    assert_eq!(rec.accept_reason, AcceptReason::ScoreImproved);
+    assert_eq!(rec.candidate_score, Some(0.6));
+}
+
 /// Without the pre-screen the scorer judges a candidate MSE would have dropped.
 #[test]
 fn without_the_pre_screen_a_worse_mse_candidate_can_still_win_on_score() {
@@ -410,26 +519,30 @@ fn accept_always_is_refused_under_scorer_guided_acceptance() {
     assert_eq!(fixture.scorer_calls(), 0);
 }
 
-/// A negative or non-finite epsilon is a configuration error.
+/// A negative or non-finite epsilon is a configuration error `run_train`
+/// refuses — a `NaN` epsilon would reject every candidate and read as "the
+/// scorer found nothing".
 #[test]
-fn a_negative_minimum_improvement_is_refused() {
-    let fixture = Fixture::new(2.0, &["0.5"]);
+fn a_negative_or_non_finite_minimum_improvement_is_refused() {
+    for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        let fixture = Fixture::new(2.0, &["0.5"]);
+        let err = train(
+            &fixture,
+            "out",
+            AcceptanceMode::Scorer(ScorerAcceptance {
+                min_improvement: bad,
+                ..ScorerAcceptance::default()
+            }),
+            true,
+        )
+        .expect_err("must refuse");
 
-    let err = train(
-        &fixture,
-        "out",
-        AcceptanceMode::Scorer(ScorerAcceptance {
-            min_improvement: -1.0,
-            ..ScorerAcceptance::default()
-        }),
-        true,
-    )
-    .expect_err("must refuse");
-
-    assert!(
-        err.contains("minimum score improvement"),
-        "unexpected error: {err}"
-    );
+        assert!(
+            err.contains("minimum score improvement"),
+            "{bad}: unexpected error: {err}"
+        );
+        assert_eq!(fixture.scorer_calls(), 0, "{bad}: refuse before scoring");
+    }
 }
 
 /// A scorer that dies mid-loop fails the run — a missing verdict is never

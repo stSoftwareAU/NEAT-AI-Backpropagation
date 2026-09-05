@@ -31,6 +31,9 @@ The `neat-core` path dependency in
 - **actionlint** — lints GitHub Actions workflow YAML (`brew install actionlint`)
 - **cargo-deny** — `cargo install cargo-deny --locked`
 - **codespell** — `pip install --user codespell`
+- **python3** — used by `scripts/check-branch-protection.sh`,
+  `scripts/check-renovate-config.sh` and
+  `scripts/run-scorer-guided-experiment.sh`
 
 ## Local gate
 

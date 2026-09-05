@@ -33,6 +33,10 @@ if [[ ! -x "$SCORER" ]]; then
   echo "      build NEAT-AI-scorer, or pass the binary path as \$1" >&2
   exit 2
 fi
+if ! command -v python3 &>/dev/null; then
+  echo "FAIL: python3 is required to generate the synthetic corpus" >&2
+  exit 2
+fi
 
 CREATURE="${CREATURE:-$OUT/creature.json}"
 DATA_DIR="${DATA_DIR:-$OUT/data}"
@@ -41,7 +45,10 @@ DATA_DIR="${DATA_DIR:-$OUT/data}"
 rm -rf "$OUT/mse" "$OUT/scorer"
 mkdir -p "$OUT"
 
-if [[ ! -e "$DATA_DIR" ]]; then
+# Gate on a record file, never on the directory: a directory left behind by an
+# interrupted generator would otherwise look like a corpus and both modes would
+# "compare" on no records at all.
+if [[ ! -f "$DATA_DIR/0.bin" ]]; then
   mkdir -p "$DATA_DIR"
   # 1000 records of `y = x + 0.1`, except the 5 leading records of each file
   # (20 of 1000), which follow `y = -2x + 1`. A leading-prefix slice of 20
@@ -59,9 +66,13 @@ for file_index in range(4):
             y = -2.0 * x + 1.0 if i < 5 else 1.0 * x + 0.1
             handle.write(struct.pack("<ff", x, y))
 PY
+  if [[ ! -s "$DATA_DIR/0.bin" ]]; then
+    echo "FAIL: corpus generation wrote no records to $DATA_DIR" >&2
+    exit 2
+  fi
 fi
 
-if [[ ! -e "$CREATURE" ]]; then
+if [[ ! -s "$CREATURE" ]]; then
   # Already fitted to the 98% majority — the shape of an evolved production
   # creature, where a slice-driven move is far more likely to hurt than help.
   cat >"$CREATURE" <<'JSON'
@@ -109,8 +120,12 @@ run_mode() {
   # Epoch lines only: scorer mode also journals a line per attempted
   # candidate, so counting every acceptReason would not compare like for like.
   echo "epoch verdicts:"
-  grep '"kind":"epoch"' "$OUT/$mode/journal.jsonl" |
-    grep -o '"acceptReason":"[a-zA-Z]*"' | sort | uniq -c
+  local verdicts
+  if ! verdicts="$(grep '"kind":"epoch"' "$OUT/$mode/journal.jsonl")"; then
+    echo "FAIL: $OUT/$mode/journal.jsonl has no epoch lines" >&2
+    exit 2
+  fi
+  printf '%s\n' "$verdicts" | grep -o '"acceptReason":"[a-zA-Z]*"' | sort | uniq -c
 }
 
 run_mode mse

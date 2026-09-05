@@ -6,6 +6,7 @@
 
 #![warn(missing_docs)]
 
+pub mod acceptance;
 pub mod backprop;
 pub mod compare;
 pub mod creature_io;

@@ -3,6 +3,10 @@
 //! The judge is [`AcceptanceMode`]: training-slice MSE by default, or
 //! `NEAT-AI-scorer` fitness under [`AcceptanceMode::Scorer`] (#104).
 
+pub use crate::acceptance::{
+    AcceptReason, AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, ScorerAcceptance,
+    resolve_acceptance,
+};
 use crate::backprop::{
     ApplyOptions, BackpropConfig, apply_learnings_with, calculate_learning_rate,
     count_apply_deltas, effective_step_scale,
@@ -30,84 +34,12 @@ use std::path::{Path, PathBuf};
 /// above it, and the backtracking line search shrinks further when needed.
 pub const DEFAULT_STEP_SCALE: f64 = 0.01;
 
-/// Conservative default epsilon for scorer-guided acceptance (#104).
-///
-/// The production win protocol calls a `rust_scorer` gain a win only past
-/// `1e-6`, so the trainer's own gate starts at the same margin rather than
-/// keeping a candidate for a difference that is scorer noise.
-pub const DEFAULT_MIN_SCORE_IMPROVEMENT: f64 = 1e-6;
-
 /// Trace of the best epoch, written beside `best.json` (issue #78).
 pub const BEST_TRACE_FILE: &str = "best-trace.json";
 
 /// Sub-directory of the trace store holding rejected candidates, mirroring
 /// NEAT-AI's `traceStore/failed/` (issue #78).
 pub const FAILED_TRACE_DIR: &str = "failed";
-
-/// Scorer-guided acceptance settings (#104).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScorerAcceptance {
-    /// Minimum `candidate − incumbent` scorer fitness required to keep an
-    /// apply. Must be finite and non-negative; defaults to
-    /// [`DEFAULT_MIN_SCORE_IMPROVEMENT`].
-    pub min_improvement: f64,
-    /// When true, a candidate whose training-slice MSE did not fall is dropped
-    /// before paying for a scorer run.
-    ///
-    /// Off by default, and it **is** a second gate: a candidate MSE rejects is
-    /// never scored, so a scorer win MSE disagreed with is lost. Turn it on
-    /// only when the scorer run is too expensive to spend on every candidate.
-    pub mse_pre_screen: bool,
-}
-
-impl Default for ScorerAcceptance {
-    fn default() -> Self {
-        Self {
-            min_improvement: DEFAULT_MIN_SCORE_IMPROVEMENT,
-            mse_pre_screen: false,
-        }
-    }
-}
-
-/// What decides whether an epoch's candidate is kept (#104).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum AcceptanceMode {
-    /// Training-slice MSE — `after_mse < best_mse` (the historical default).
-    #[default]
-    Mse,
-    /// `NEAT-AI-scorer` fitness, with MSE demoted to a diagnostic.
-    Scorer(ScorerAcceptance),
-}
-
-/// Why a candidate was kept or dropped, journalled per attempt (#104).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum AcceptReason {
-    /// Training-slice MSE fell below the incumbent's best.
-    MseImproved,
-    /// Training-slice MSE did not fall.
-    MseNotImproved,
-    /// Kept regardless of MSE under `accept_always`.
-    AcceptAlways,
-    /// Scorer fitness rose by at least the configured epsilon.
-    ScoreImproved,
-    /// The scorer ran and the gain was below the epsilon (or negative).
-    ScoreNotImproved,
-    /// The optional MSE pre-screen dropped the candidate before scoring it.
-    MsePreScreenRejected,
-}
-
-impl AcceptReason {
-    /// Whether this verdict keeps the candidate.
-    fn accepted(self) -> bool {
-        matches!(
-            self,
-            Self::MseImproved | Self::AcceptAlways | Self::ScoreImproved
-        )
-    }
-}
 
 /// One attempted candidate in the journal — scorer-guided mode only (#104).
 ///
@@ -363,45 +295,7 @@ fn resolve_scorer_acceptance<'a>(
                 .into(),
         );
     }
-    if !settings.min_improvement.is_finite() || settings.min_improvement < 0.0 {
-        return Err(format!(
-            "minimum score improvement must be finite and non-negative: {}",
-            settings.min_improvement
-        ));
-    }
-    Ok(Some((scorer, settings)))
-}
-
-/// Build an [`AcceptanceMode`] from a caller's flags, refusing scorer-guided
-/// settings a plain MSE run would silently ignore (#104).
-///
-/// The CLI and the C ABI both carry `min_improvement` / `mse_pre_screen`
-/// alongside the mode selector, so a caller that sets one and forgets to ask
-/// for the scorer gets a run that *looks* configured. Fail loudly instead.
-pub fn resolve_acceptance(
-    scorer_guided: bool,
-    min_improvement: f64,
-    mse_pre_screen: bool,
-) -> Result<AcceptanceMode, String> {
-    if scorer_guided {
-        return Ok(AcceptanceMode::Scorer(ScorerAcceptance {
-            min_improvement,
-            mse_pre_screen,
-        }));
-    }
-    if mse_pre_screen {
-        return Err(
-            "msePreScreen only applies to scorer-guided acceptance — set acceptance to \"scorer\""
-                .into(),
-        );
-    }
-    if min_improvement != DEFAULT_MIN_SCORE_IMPROVEMENT {
-        return Err(format!(
-            "minScoreImprovement ({min_improvement}) only applies to scorer-guided acceptance \
-             — set acceptance to \"scorer\""
-        ));
-    }
-    Ok(AcceptanceMode::Mse)
+    Ok(Some((scorer, settings.validate()?)))
 }
 
 /// Run the experimental trainer and write `journal.jsonl` + `best.json`.
@@ -531,6 +425,15 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             let (after_mse, _) =
                 compute_mse_selected(&candidate, &mut cand_net, req.training_data, selection)?;
             let mse_improved = after_mse < best_mse;
+            // The fitness the candidate must beat: the run baseline until an
+            // epoch is accepted, the last accepted candidate's score after.
+            let incumbent_fitness = match &incumbent_score {
+                Some(scored) => Some(scored.score),
+                None if scorer_acceptance.is_some() => {
+                    return Err("scorer-guided acceptance has no baseline score".into());
+                }
+                None => None,
+            };
             // The acceptance gate. Under MSE the slice decides; under
             // scorer-guided acceptance the slice is only a diagnostic (or an
             // opt-in pre-screen) and `rust_scorer` returns the verdict (#104).
@@ -553,10 +456,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                         req.training_data,
                         &score_dir.join("candidate"),
                     )?;
-                    let incumbent_fitness = incumbent_score
-                        .as_ref()
-                        .ok_or("scorer-guided acceptance has no baseline score")?
-                        .score;
+                    let incumbent_fitness = incumbent_fitness
+                        .ok_or("scorer-guided acceptance has no baseline score")?;
                     let reason = if scored.score - incumbent_fitness >= settings.min_improvement {
                         AcceptReason::ScoreImproved
                     } else {
@@ -568,11 +469,9 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             // Scorer-guided runs journal every candidate the line search tried,
             // MSE delta beside scorer delta, so a rejected epoch is auditable
             // rather than a single "0 accepts" line (#104).
-            if scorer_acceptance.is_some() {
-                let baseline_fitness = incumbent_score
-                    .as_ref()
-                    .ok_or("scorer-guided acceptance has no baseline score")?
-                    .score;
+            if let Some(baseline_fitness) =
+                incumbent_fitness.filter(|_| scorer_acceptance.is_some())
+            {
                 let attempt = TrainCandidateRecord {
                     kind: "candidate".into(),
                     epoch,
