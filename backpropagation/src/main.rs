@@ -1195,6 +1195,83 @@ mod tests {
         );
     }
 
+    /// Every budget is off unless it is asked for — an existing `train`
+    /// invocation keeps the fixed-step apply (#109).
+    #[test]
+    fn the_trust_region_budgets_are_off_by_default() {
+        let Commands::Train {
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
+            ..
+        } = parse_train(&[])
+        else {
+            panic!("expected train");
+        };
+        let region = TrustRegion {
+            l2: trust_region_l2,
+            rms: trust_region_rms,
+            relative_rms: trust_region_relative_rms,
+            bias_l2: trust_region_bias_l2,
+            weight_l2: trust_region_weight_l2,
+            max_changed_genes: trust_region_max_genes,
+        };
+        assert_eq!(region, TrustRegion::default());
+        assert!(!region.is_active(), "the parity mode is the default");
+    }
+
+    #[test]
+    fn the_trust_region_flags_build_the_library_budget() {
+        let Commands::Train {
+            trust_region_l2,
+            trust_region_rms,
+            trust_region_relative_rms,
+            trust_region_bias_l2,
+            trust_region_weight_l2,
+            trust_region_max_genes,
+            ..
+        } = parse_train(&[
+            "--trust-region-l2",
+            "0.5",
+            "--trust-region-rms",
+            "0.01",
+            "--trust-region-relative-rms",
+            "0.02",
+            "--trust-region-bias-l2",
+            "0.1",
+            "--trust-region-weight-l2",
+            "0.4",
+            "--trust-region-max-genes",
+            "512",
+        ])
+        else {
+            panic!("expected train");
+        };
+        let region = TrustRegion {
+            l2: trust_region_l2,
+            rms: trust_region_rms,
+            relative_rms: trust_region_relative_rms,
+            bias_l2: trust_region_bias_l2,
+            weight_l2: trust_region_weight_l2,
+            max_changed_genes: trust_region_max_genes,
+        };
+        assert_eq!(
+            region,
+            TrustRegion {
+                l2: Some(0.5),
+                rms: Some(0.01),
+                relative_rms: Some(0.02),
+                bias_l2: Some(0.1),
+                weight_l2: Some(0.4),
+                max_changed_genes: Some(512),
+            }
+        );
+        region.validate().expect("a positive budget is usable");
+    }
+
     #[test]
     fn invalid_step_scales_are_rejected() {
         assert!(parse_step_scales("0.01,-1").is_err());

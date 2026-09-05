@@ -183,6 +183,25 @@ fn train(
     ladder: &[f64],
     epochs: u64,
 ) -> Result<TrainResult, String> {
+    train_within(
+        fixture,
+        out_name,
+        acceptance,
+        ladder,
+        epochs,
+        TrustRegion::default(),
+    )
+}
+
+/// [`train`] with an explicit whole-creature update budget (#109).
+fn train_within(
+    fixture: &Fixture,
+    out_name: &str,
+    acceptance: AcceptanceMode,
+    ladder: &[f64],
+    epochs: u64,
+    trust_region: TrustRegion,
+) -> Result<TrainResult, String> {
     let out = fixture.root.join(out_name);
     run_train(TrainRequest {
         creature: TrainCreature::Path(&fixture.creature),
@@ -201,7 +220,7 @@ fn train(
         // so the halving budget must not add attempts of its own.
         max_backtracks: 6,
         step_scale_ladder: ladder,
-        trust_region: TrustRegion::default(),
+        trust_region,
         trace_store: None,
     })
 }
@@ -513,5 +532,68 @@ fn train_help_documents_the_step_scale_ladder_flag() {
     assert!(
         help.contains("--step-scale-ladder"),
         "train --help documents --step-scale-ladder:\n{help}"
+    );
+}
+
+/// Scorer-guided rungs carry the realised update norm beside the scorer delta,
+/// so a production journal can correlate "how far the creature moved" with
+/// "did the scorer like it" (#109).
+#[test]
+fn every_rung_journals_its_realised_update_norm() {
+    let fixture = Fixture::new(2.0, &["0.5", "0.6", "0.9", "0.7"]);
+    let ladder = [0.001, 0.005, 0.01];
+
+    // Unbudgeted first: the realised step is the rung, and the norms are real.
+    train(&fixture, "free", scorer_guided(), &ladder, 1).expect("train");
+    let free = fixture.candidates(&fixture.root.join("free"));
+    for (index, rec) in free.iter().enumerate() {
+        assert!(
+            (rec.realised_step_scale - ladder[index]).abs() < 1e-15,
+            "rung {index} applied {} for a requested {}",
+            rec.realised_step_scale,
+            ladder[index]
+        );
+        assert!(rec.update.total.changed > 0, "rung {index} moved genes");
+        assert!(rec.update.total.l2 > 0.0);
+    }
+
+    // Now bound every rung to a quarter of the largest rung's update: the top
+    // rungs are rescaled, and the journal records the step they really applied.
+    let budget = free
+        .iter()
+        .map(|rec| rec.update.total.l2)
+        .fold(f64::MIN, f64::max)
+        / 4.0;
+    let bounded = Fixture::new(2.0, &["0.5", "0.6", "0.9", "0.7"]);
+    train_within(
+        &bounded,
+        "bounded",
+        scorer_guided(),
+        &ladder,
+        1,
+        TrustRegion {
+            l2: Some(budget),
+            ..TrustRegion::default()
+        },
+    )
+    .expect("train");
+    let capped = bounded.candidates(&bounded.root.join("bounded"));
+    for (index, rec) in capped.iter().enumerate() {
+        assert!(
+            rec.update.total.l2 <= budget * 1.000_001,
+            "rung {index} update L2 {} exceeded the budget {budget}",
+            rec.update.total.l2
+        );
+        assert!(
+            rec.realised_step_scale <= rec.step_scale,
+            "the trust region only ever shrinks a rung"
+        );
+        assert!((rec.step_scale - ladder[index]).abs() < 1e-15, "requested");
+    }
+    assert!(
+        capped
+            .iter()
+            .any(|rec| rec.realised_step_scale < rec.step_scale),
+        "the budget must bind at least the top rung"
     );
 }
