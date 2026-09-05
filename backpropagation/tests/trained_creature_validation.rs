@@ -82,6 +82,7 @@ fn train(
         acceptance: AcceptanceMode::Mse,
         accept_always,
         max_backtracks: 0,
+        step_scale_ladder: &[],
         trace_store: None,
     })
 }

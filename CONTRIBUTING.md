@@ -32,8 +32,9 @@ The `neat-core` path dependency in
 - **cargo-deny** — `cargo install cargo-deny --locked`
 - **codespell** — `pip install --user codespell`
 - **python3** — used by `scripts/check-branch-protection.sh`,
-  `scripts/check-renovate-config.sh` and
-  `scripts/run-scorer-guided-experiment.sh`
+  `scripts/check-renovate-config.sh`,
+  `scripts/run-scorer-guided-experiment.sh` and
+  `scripts/run-step-scale-ladder-experiment.sh`
 
 ## Local gate
 

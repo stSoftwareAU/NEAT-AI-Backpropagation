@@ -81,6 +81,7 @@ fn train(
         acceptance: AcceptanceMode::Mse,
         accept_always: false,
         max_backtracks: 0,
+        step_scale_ladder: &[],
         trace_store: trace_store.map(PathBuf::as_path),
     })
     .unwrap();
