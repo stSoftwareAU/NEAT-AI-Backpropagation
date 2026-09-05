@@ -45,8 +45,9 @@ pub const FAILED_TRACE_DIR: &str = "failed";
 /// One attempted candidate in the journal — scorer-guided mode only (#104).
 ///
 /// The epoch line records the candidate the epoch finished on; this line
-/// records *every* candidate the line search tried, with both the cheap MSE
-/// diagnostic and the authoritative scorer delta that decided it.
+/// records *every* candidate the epoch tried — each step of the backtracking
+/// line search, or each rung of the step-scale ladder (#106) — with both the
+/// cheap MSE diagnostic and the authoritative scorer delta that decided it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrainCandidateRecord {
@@ -54,7 +55,8 @@ pub struct TrainCandidateRecord {
     pub kind: String,
     /// 1-based epoch index.
     pub epoch: u64,
-    /// 0-based attempt within the epoch (the backtracking line search).
+    /// 0-based attempt within the epoch: the halving index under the
+    /// backtracking line search, or the rung index under the ladder (#106).
     pub attempt: u32,
     /// Step scale this attempt applied.
     pub step_scale: f64,
@@ -543,12 +545,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                         )?;
                         let incumbent_fitness = incumbent_fitness
                             .ok_or("scorer-guided acceptance has no baseline score")?;
-                        let reason = if scored.score - incumbent_fitness >= settings.min_improvement
-                        {
-                            AcceptReason::ScoreImproved
-                        } else {
-                            AcceptReason::ScoreNotImproved
-                        };
+                        let reason = settings.verdict(scored.score, incumbent_fitness);
                         (Some(scored), reason)
                     }
                 };

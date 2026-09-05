@@ -25,9 +25,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than letting the applier silently rewrite it. `stepScaleLadder` crosses the C
   ABI. `scripts/run-step-scale-ladder-experiment.sh` runs one corpus through
   both searches and prints accepted epochs, scorer gain, wall clock and
-  wins/hour: on its generated corpus, with the trainer starting at an
-  overshooting `--step-scale 1.0`, the line search accepted 1 epoch for
-  `+1.225e-2` fitness while the ladder accepted 4 for `+1.742e-2` (issue #106).
+  wins/hour. **Not yet measured against `rust_scorer` or GRQ history**: on the
+  script's generated corpus, run with `STEP_SCALE=1.0` (an overshooting start,
+  not the script's `0.01` default) and a throwaway stand-in scorer whose
+  fitness is the negative full-corpus MSE, the line search accepted 1 epoch for
+  `+1.225e-2` while the ladder accepted 4 for `+1.742e-2`; at the default step
+  both searches found the same winner. Point the script at the production
+  creature and corpus for the real comparison (issue #106).
 
 - Scorer-guided acceptance: `train --acceptance scorer` puts `NEAT-AI-scorer`
   in the accept/rollback loop instead of training-slice MSE. The baseline is

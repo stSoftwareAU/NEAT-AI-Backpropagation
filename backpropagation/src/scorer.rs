@@ -210,6 +210,23 @@ mod tests {
             assert!(err.contains("no score for candidate 'rung-1'"), "{err}");
         }
 
+        /// A single candidate is matched by position, deliberately: callers
+        /// have always accepted whatever stem the scorer chose to echo, and
+        /// tightening that would change the untouched baseline / line-search
+        /// path. Pinned so the leniency is a decision, not an accident — with
+        /// two candidates the same response fails loudly (test above).
+        #[test]
+        fn a_single_candidate_accepts_whatever_stem_the_scorer_echoes() {
+            let dir = tempdir().unwrap();
+            let scorer = stub(
+                dir.path(),
+                r#"{"something-else":{"score":0.7,"error":0.0}}"#,
+            );
+            let scored = score_creature(&scorer, "{}", dir.path(), &dir.path().join("work"))
+                .expect("single candidate is matched by position");
+            assert!((scored.score - 0.7).abs() < 1e-15);
+        }
+
         /// The candidate directory is reused across epochs, so a stale file
         /// from a longer earlier ladder must not be scored again.
         #[test]

@@ -68,12 +68,21 @@ pub fn validate_step_scale_ladder(ladder: &[f64]) -> Result<(), String> {
 }
 
 /// Parse a comma-separated step-scale ladder, refusing an unusable rung.
+///
+/// An empty field (`"0.001,,0.01"`, a trailing comma, or a whitespace-only
+/// grid) is a malformed grid, not a rung to skip quietly: a remote runner that
+/// built the string wrong must hear about it.
 pub fn parse_step_scale_ladder(raw: &str) -> Result<Vec<f64>, String> {
+    if raw.trim().is_empty() {
+        return Err("step-scale ladder is empty — supply at least one step scale".into());
+    }
     let mut ladder = Vec::new();
     for part in raw.split(',') {
         let trimmed = part.trim();
         if trimmed.is_empty() {
-            continue;
+            return Err(format!(
+                "step-scale ladder has an empty rung — check the commas in '{raw}'"
+            ));
         }
         ladder.push(
             trimmed
@@ -215,6 +224,16 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
             .map(|(stem, json)| (stem.as_str(), *json))
             .collect();
         let scored = score_creatures(req.scorer, &request, req.training_data, req.score_dir)?;
+        // Checked, not assumed: `zip` truncates silently, and a short result set
+        // would leave a rung unscored — which `rung_reason` would then journal
+        // as an MSE pre-screen rejection that never happened.
+        if scored.len() != request.len() {
+            return Err(format!(
+                "scorer returned {} score(s) for {} ladder candidate(s)",
+                scored.len(),
+                request.len()
+            ));
+        }
         for (rung, score) in rungs
             .iter_mut()
             .filter(|rung| !rung.screened_out)
@@ -286,20 +305,15 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
     })
 }
 
-/// Verdict for one rung: the winner is judged against the epsilon, a scored
-/// rung that lost carries [`AcceptReason::ScoreNotBest`], and an unscored rung
-/// was dropped by the pre-screen.
+/// Verdict for one rung: the winner is judged against the epsilon — by the same
+/// [`ScorerAcceptance::verdict`] the line search applies — a scored rung that
+/// lost carries [`AcceptReason::ScoreNotBest`], and an unscored rung was
+/// dropped by the pre-screen.
 fn rung_reason(rung: &Rung, is_winner: bool, req: &LadderEpochRequest<'_>) -> AcceptReason {
     match rung.score.as_ref() {
         None => AcceptReason::MsePreScreenRejected,
         Some(_) if !is_winner => AcceptReason::ScoreNotBest,
-        Some(score) => {
-            if score.score - req.incumbent_fitness >= req.settings.min_improvement {
-                AcceptReason::ScoreImproved
-            } else {
-                AcceptReason::ScoreNotImproved
-            }
-        }
+        Some(score) => req.settings.verdict(score.score, req.incumbent_fitness),
     }
 }
 
@@ -349,11 +363,25 @@ mod tests {
                 .unwrap_err()
                 .contains("empty")
         );
-        assert!(
-            parse_step_scale_ladder(" , ")
-                .unwrap_err()
-                .contains("empty")
-        );
+        for blank in ["", "   "] {
+            assert!(
+                parse_step_scale_ladder(blank)
+                    .unwrap_err()
+                    .contains("step-scale ladder is empty"),
+                "{blank:?}"
+            );
+        }
+    }
+
+    /// A malformed grid is a fault, not a rung to skip: a stray or trailing
+    /// comma from a remote runner must surface rather than silently shrink the
+    /// ladder.
+    #[test]
+    fn an_empty_rung_is_refused_rather_than_skipped() {
+        for malformed in ["0.001,,0.01", "0.001,", ",0.001", " , "] {
+            let err = parse_step_scale_ladder(malformed).unwrap_err();
+            assert!(err.contains("empty rung"), "{malformed:?}: {err}");
+        }
     }
 
     #[test]

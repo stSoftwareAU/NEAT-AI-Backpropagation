@@ -76,6 +76,7 @@ const char *neat_backprop_version(void);
  *     "maximumBiasAdjustmentScale": 1.0,
  *     "maximumWeightAdjustmentScale": 1.0,
  *     "stepScale": 0.01,
+ *     "stepScaleLadder": [],  // scorer-guided step-scale grid; [] = line search
  *     "outputsOnly": false,
  *     "hiddenOnly": false,
  *     "acceptance": "mse",          // mse | scorer ("scorer" needs "scorer")

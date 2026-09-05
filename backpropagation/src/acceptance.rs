@@ -42,6 +42,19 @@ impl Default for ScorerAcceptance {
 }
 
 impl ScorerAcceptance {
+    /// The scorer verdict for one candidate — the single accept rule both the
+    /// backtracking line search and the step-scale ladder (#106) apply.
+    ///
+    /// A `NaN` on either side fails the comparison and so rejects, which is the
+    /// safe direction: an unscoreable candidate is never kept.
+    pub fn verdict(self, candidate_score: f64, incumbent_score: f64) -> AcceptReason {
+        if candidate_score - incumbent_score >= self.min_improvement {
+            AcceptReason::ScoreImproved
+        } else {
+            AcceptReason::ScoreNotImproved
+        }
+    }
+
     /// Refuse an epsilon that could never gate anything.
     ///
     /// `NaN` is the dangerous one: every comparison against it is false, so an
@@ -173,6 +186,23 @@ mod tests {
         assert!(!AcceptReason::ScoreNotImproved.accepted());
         assert!(!AcceptReason::ScoreNotBest.accepted());
         assert!(!AcceptReason::MsePreScreenRejected.accepted());
+    }
+
+    /// The one accept rule: a gain at or above the epsilon keeps the
+    /// candidate, and anything else — including a `NaN` score — does not.
+    #[test]
+    fn the_verdict_gates_on_the_epsilon_and_rejects_a_nan() {
+        let settings = ScorerAcceptance {
+            min_improvement: 0.1,
+            ..ScorerAcceptance::default()
+        };
+        assert_eq!(settings.verdict(0.75, 0.5), AcceptReason::ScoreImproved);
+        assert_eq!(settings.verdict(0.55, 0.5), AcceptReason::ScoreNotImproved);
+        assert_eq!(settings.verdict(0.4, 0.5), AcceptReason::ScoreNotImproved);
+        assert_eq!(
+            settings.verdict(f64::NAN, 0.5),
+            AcceptReason::ScoreNotImproved
+        );
     }
 
     #[test]

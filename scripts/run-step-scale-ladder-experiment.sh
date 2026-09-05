@@ -23,7 +23,9 @@ SEED="${SEED:-1}"
 LEARNING_RATE="${LEARNING_RATE:-1.0}"
 STEP_SCALE="${STEP_SCALE:-0.01}"
 MAX_BACKTRACKS="${MAX_BACKTRACKS:-6}"
-LADDER="${LADDER:-0.0001,0.00025,0.0005,0.001,0.0025,0.005,0.01}"
+# Empty = pass `--step-scale-ladder` bare and let the CLI supply its own default
+# grid, so the grid has one definition (backpropagation/src/ladder.rs).
+LADDER="${LADDER:-}"
 
 if [[ ! -x "$SCORER" ]]; then
   echo "FAIL: rust_scorer not found or not executable: $SCORER" >&2
@@ -135,11 +137,36 @@ run_mode() {
   echo "epoch verdicts:"
   printf '%s\n' "$epochs_line" | grep -o '"acceptReason":"[a-zA-Z]*"' | sort | uniq -c
   echo "candidates scored: $(grep -c '"kind":"candidate"' "$journal" || true)"
+  # The gain is read back out of the journal rather than scraped from the
+  # trainer's stderr, so a run whose journal disagrees with its own log fails
+  # here instead of being reported as a win.
+  python3 - "$journal" <<'PY'
+import json
+import sys
+
+baseline = None
+best = None
+for line in open(sys.argv[1], encoding="utf-8"):
+    record = json.loads(line)
+    if record["kind"] == "runHeader":
+        baseline = best = record.get("baselineScore")
+    elif record["kind"] == "epoch" and record.get("accepted"):
+        if record.get("candidateScore") is not None:
+            best = record["candidateScore"]
+if baseline is None:
+    sys.exit(f"FAIL: {sys.argv[1]} has no baseline score — was --acceptance scorer used?")
+print(f"scorer gain: baseline={baseline:.12f} best={best:.12f} Δ={best - baseline:+.6e}")
+PY
   python3 -c "print(f'wall clock: {$elapsed:.2f}s'); print(f'wins/hour: {$wins * 3600 / $elapsed:.1f}')"
 }
 
 run_mode line-search --max-backtracks "$MAX_BACKTRACKS"
-run_mode ladder --step-scale-ladder "$LADDER"
+# A bare `--step-scale-ladder` takes the CLI's default grid; `LADDER=` overrides.
+if [[ -n "$LADDER" ]]; then
+  run_mode ladder --step-scale-ladder "$LADDER"
+else
+  run_mode ladder --step-scale-ladder
+fi
 
 echo
 echo "Journals: $OUT/line-search/journal.jsonl and $OUT/ladder/journal.jsonl"
