@@ -221,6 +221,12 @@ pub struct TrainAbiRequest {
     /// Multiply `(proposed − current)` by this factor before writing.
     #[serde(default = "default_step_scale")]
     pub step_scale: f64,
+    /// Step scales to score as a ladder under `acceptance: "scorer"` (#106).
+    ///
+    /// Empty (the default) keeps the backtracking line search; a non-empty
+    /// grid supersedes it and is refused on an `acceptance: "mse"` run.
+    #[serde(default)]
+    pub step_scale_ladder: Vec<f64>,
     /// Apply only output neurons and synapses that target them.
     #[serde(default)]
     pub outputs_only: bool,
@@ -269,6 +275,7 @@ impl Default for TrainAbiRequest {
             maximum_bias_adjustment_scale: default_adjustment_scale(),
             maximum_weight_adjustment_scale: default_adjustment_scale(),
             step_scale: default_step_scale(),
+            step_scale_ladder: Vec::new(),
             outputs_only: false,
             hidden_only: false,
             acceptance: AbiAcceptanceMode::default(),
@@ -362,6 +369,7 @@ pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
         acceptance,
         accept_always: request.accept_always,
         max_backtracks: request.max_backtracks,
+        step_scale_ladder: &request.step_scale_ladder,
         trace_store: request.trace_store.as_deref(),
     })?;
 
@@ -533,6 +541,7 @@ mod tests {
         assert!((request.maximum_bias_adjustment_scale - 1.0).abs() < 1e-12);
         assert!((request.maximum_weight_adjustment_scale - 1.0).abs() < 1e-12);
         assert!((request.step_scale - DEFAULT_STEP_SCALE).abs() < 1e-12);
+        assert!(request.step_scale_ladder.is_empty());
         assert!(!request.outputs_only);
         assert!(!request.hidden_only);
         assert!(!request.accept_always);
@@ -558,6 +567,36 @@ mod tests {
         assert_eq!(request.acceptance, AbiAcceptanceMode::Scorer);
         assert!((request.min_score_improvement - 0.002).abs() < 1e-15);
         assert!(request.mse_pre_screen);
+    }
+
+    /// The step-scale ladder crosses the wire as a camelCase array and is
+    /// empty — the historical line search — unless the caller asks for it
+    /// (#106).
+    #[test]
+    fn the_step_scale_ladder_crosses_the_wire() {
+        let default: TrainAbiRequest =
+            serde_json::from_str(r#"{"creatureJson":"{}","trainingData":"d","outputDir":"o"}"#)
+                .unwrap();
+        assert!(default.step_scale_ladder.is_empty());
+
+        let request: TrainAbiRequest = serde_json::from_str(
+            r#"{"creatureJson":"{}","trainingData":"d","outputDir":"o",
+                "acceptance":"scorer","stepScaleLadder":[0.0001,0.001,0.01]}"#,
+        )
+        .unwrap();
+        assert_eq!(request.step_scale_ladder, vec![0.0001, 0.001, 0.01]);
+    }
+
+    /// A ladder on an `acceptance: "mse"` request is refused rather than
+    /// silently ignored — the run would otherwise look configured (#106).
+    #[test]
+    fn a_ladder_on_an_mse_request_fails_loudly() {
+        let err = train_from_json(
+            r#"{"creatureJson":"{}","trainingData":"d","outputDir":"o",
+                "stepScaleLadder":[0.001]}"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("step-scale ladder"), "unexpected error: {err}");
     }
 
     /// A scorer-guided request without a scorer binary is refused by the

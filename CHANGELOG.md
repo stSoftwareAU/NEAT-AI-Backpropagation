@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Scored step-scale ladder: `train --acceptance scorer --step-scale-ladder`
+  applies the epoch's single accumulation at every rung of a configurable grid
+  (default `0.0001,0.00025,0.0005,0.001,0.0025,0.005,0.01`), scores the whole
+  grid in **one** `rust_scorer` invocation — the scorer takes a directory of
+  creatures, so results are matched back by file stem and a candidate it did
+  not report fails the run — and keeps the best scorer improvement rather than
+  the first candidate to clear the epsilon. Every rung is journalled with its
+  own `stepScale`, `candidateMse`, `mseDelta`, `candidateScore` and
+  `scoreDelta`; a rung that improved but lost to a better one is
+  `scoreNotBest`; ties keep the smaller step; no winner leaves the incumbent
+  unchanged. The epoch line gains `ladderRungs` and the run header records the
+  grid. `--mse-pre-screen` still drops a rung whose slice MSE did not fall
+  before the batch is scored. The ladder supersedes `--max-backtracks`,
+  requires `--acceptance scorer`, and refuses a rung outside `(0, 1]` rather
+  than letting the applier silently rewrite it. `stepScaleLadder` crosses the C
+  ABI. `scripts/run-step-scale-ladder-experiment.sh` runs one corpus through
+  both searches and prints accepted epochs, scorer gain, wall clock and
+  wins/hour: on its generated corpus, with the trainer starting at an
+  overshooting `--step-scale 1.0`, the line search accepted 1 epoch for
+  `+1.225e-2` fitness while the ladder accepted 4 for `+1.742e-2` (issue #106).
+
 - Scorer-guided acceptance: `train --acceptance scorer` puts `NEAT-AI-scorer`
   in the accept/rollback loop instead of training-slice MSE. The baseline is
   scored before epoch 1, every attempted candidate (each backtracking step

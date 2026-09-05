@@ -97,6 +97,7 @@ fn train(creature_path: &Path, data: &Path, out: &Path) -> Result<TrainResult, S
         acceptance: AcceptanceMode::Mse,
         accept_always: false,
         max_backtracks: 0,
+        step_scale_ladder: &[],
         trace_store: None,
     })
 }

@@ -83,6 +83,11 @@ pub enum AcceptReason {
     ScoreImproved,
     /// The scorer ran and the gain was below the epsilon (or negative).
     ScoreNotImproved,
+    /// The scorer ran and another rung of the step-scale ladder scored higher
+    /// (issue #106). The ladder keeps one winner per epoch, so a rung that
+    /// improved on the incumbent but lost to a better rung is dropped under
+    /// this reason rather than under [`Self::ScoreNotImproved`].
+    ScoreNotBest,
     /// The optional MSE pre-screen dropped the candidate before scoring it.
     MsePreScreenRejected,
 }
@@ -166,6 +171,7 @@ mod tests {
         assert!(AcceptReason::ScoreImproved.accepted());
         assert!(!AcceptReason::MseNotImproved.accepted());
         assert!(!AcceptReason::ScoreNotImproved.accepted());
+        assert!(!AcceptReason::ScoreNotBest.accepted());
         assert!(!AcceptReason::MsePreScreenRejected.accepted());
     }
 
@@ -178,6 +184,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&AcceptReason::MsePreScreenRejected).unwrap(),
             r#""msePreScreenRejected""#
+        );
+        assert_eq!(
+            serde_json::to_string(&AcceptReason::ScoreNotBest).unwrap(),
+            r#""scoreNotBest""#
         );
         assert_eq!(
             serde_json::to_string(&AcceptanceMode::Scorer(ScorerAcceptance::default())).unwrap(),

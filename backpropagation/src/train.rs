@@ -12,6 +12,7 @@ use crate::backprop::{
     count_apply_deltas, effective_step_scale,
 };
 use crate::creature_io::{ObservationWidth, parse_forward_only_creature};
+use crate::ladder::{LadderEpochRequest, run_ladder_epoch, validate_step_scale_ladder};
 use crate::mse::compute_mse_selected;
 use crate::propagate_layout::accumulate_creature_learning_selected;
 use crate::sampling::{RecordSample, RecordSelection, plan_record_sample};
@@ -109,6 +110,9 @@ pub struct TrainJournalHeader {
     pub learning_rate: f64,
     /// Apply step scale.
     pub step_scale: f64,
+    /// Step-scale ladder the epochs scored, when one was configured (#106).
+    #[serde(default)]
+    pub step_scale_ladder: Option<Vec<f64>>,
     /// Whether only output genes were written.
     pub outputs_only: bool,
     /// What decided accept / rollback this run (#104).
@@ -156,9 +160,16 @@ pub struct TrainEpochRecord {
     #[serde(default)]
     pub score_delta: Option<f64>,
     /// Step-scale halvings tried after the initial step this epoch (#38).
+    ///
+    /// Always `0` on a ladder epoch — see [`Self::ladder_rungs`].
     #[serde(default)]
     pub backtracks: u32,
-    /// Step scale of the final (kept or last-tried) candidate (#38).
+    /// Rungs the step-scale ladder evaluated this epoch, absent when the epoch
+    /// used the backtracking line search (#106).
+    #[serde(default)]
+    pub ladder_rungs: Option<u32>,
+    /// Step scale of the final (kept or last-tried) candidate (#38), or of the
+    /// winning ladder rung (#106).
     #[serde(default)]
     pub step_scale: f64,
     /// Hidden / constant biases that moved.
@@ -262,7 +273,19 @@ pub struct TrainRequest<'a> {
     /// Backtracking line search (#38): on a rejected apply, retry the same
     /// accumulated learning at step/2, step/4, … up to this many halvings
     /// before declaring the epoch dry. `0` = single attempt (old behaviour).
+    ///
+    /// Ignored when [`Self::step_scale_ladder`] is set — the ladder's rungs
+    /// are the epoch's attempts.
     pub max_backtracks: u32,
+    /// Scorer-guided step-scale ladder (#106): apply the epoch's one
+    /// accumulation at each of these step scales, batch-score them all, and
+    /// keep the best scorer improvement.
+    ///
+    /// Empty = off, which is the historical backtracking line search. A
+    /// non-empty ladder requires [`AcceptanceMode::Scorer`] — under MSE
+    /// acceptance it is refused rather than silently ignored — and every rung
+    /// must be finite and within `(0, 1]`.
+    pub step_scale_ladder: &'a [f64],
     /// Optional NEAT-AI `traceStore` directory (issue #78).
     ///
     /// When set, every epoch writes a `CreatureTrace`: an epoch that lowered
@@ -281,8 +304,18 @@ fn resolve_scorer_acceptance<'a>(
     req: &TrainRequest<'a>,
 ) -> Result<Option<(&'a Path, ScorerAcceptance)>, String> {
     let AcceptanceMode::Scorer(settings) = req.acceptance else {
+        if !req.step_scale_ladder.is_empty() {
+            return Err(
+                "the step-scale ladder only applies to scorer-guided acceptance — set acceptance \
+                 to \"scorer\""
+                    .into(),
+            );
+        }
         return Ok(None);
     };
+    if !req.step_scale_ladder.is_empty() {
+        validate_step_scale_ladder(req.step_scale_ladder)?;
+    }
     let Some(scorer) = req.scorer else {
         return Err(
             "scorer-guided acceptance needs a scorer binary — pass the rust_scorer path".into(),
@@ -372,6 +405,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         disable_random_samples: req.disable_random_samples,
         learning_rate: initial_lr,
         step_scale: req.apply.step_scale,
+        step_scale_ladder: (!req.step_scale_ladder.is_empty())
+            .then(|| req.step_scale_ladder.to_vec()),
         outputs_only: req.apply.outputs_only,
         acceptance: req.acceptance,
         baseline_score: baseline_score.as_ref().map(|s| s.score),
@@ -404,97 +439,149 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             selection,
             &mut rng,
         )?;
+        // Scorer-guided step-scale ladder (#106): the accumulate above is the
+        // expensive part, so apply it at every configured step scale, score
+        // the whole grid in one batch, and keep the best scorer improvement —
+        // rather than stopping at the first step the judge happens to pass.
+        let ladder_epoch = match scorer_acceptance {
+            Some((scorer, settings)) if !req.step_scale_ladder.is_empty() => {
+                let incumbent_fitness = incumbent_score
+                    .as_ref()
+                    .map(|scored| scored.score)
+                    .ok_or("scorer-guided acceptance has no baseline score")?;
+                Some(run_ladder_epoch(LadderEpochRequest {
+                    epoch,
+                    incumbent: &incumbent,
+                    learning: &report.learning,
+                    config: req.config,
+                    learning_rate: lr,
+                    apply: req.apply,
+                    ladder: req.step_scale_ladder,
+                    width,
+                    training_data: req.training_data,
+                    selection,
+                    incumbent_mse: best_mse,
+                    scorer,
+                    score_dir: &score_dir.join("ladder"),
+                    settings,
+                    incumbent_fitness,
+                })?)
+            }
+            _ => None,
+        };
         // Backtracking line search (#38): the accumulate above is the
         // expensive part — on a rejected apply, halve the step and re-test
         // the same learning instead of discarding the epoch.
         let mut step_scale = effective_step_scale(req.apply.step_scale);
         let mut backtracks = 0u32;
-        let (candidate, deltas, after_mse, candidate_score, reason) = loop {
-            let candidate = apply_learnings_with(
-                &incumbent,
-                &report.learning,
-                req.config,
-                lr,
-                ApplyOptions {
-                    step_scale,
-                    ..req.apply
-                },
-            );
-            let deltas = count_apply_deltas(&incumbent, &candidate, req.config.plank_constant);
-            let mut cand_net = compile_creature(&candidate).map_err(|e| e.to_string())?;
-            let (after_mse, _) =
-                compute_mse_selected(&candidate, &mut cand_net, req.training_data, selection)?;
-            let mse_improved = after_mse < best_mse;
-            // The fitness the candidate must beat: the run baseline until an
-            // epoch is accepted, the last accepted candidate's score after.
-            let incumbent_fitness = match &incumbent_score {
-                Some(scored) => Some(scored.score),
-                None if scorer_acceptance.is_some() => {
-                    return Err("scorer-guided acceptance has no baseline score".into());
-                }
-                None => None,
-            };
-            // The acceptance gate. Under MSE the slice decides; under
-            // scorer-guided acceptance the slice is only a diagnostic (or an
-            // opt-in pre-screen) and `rust_scorer` returns the verdict (#104).
-            let (candidate_score, reason) = match scorer_acceptance {
-                None if mse_improved => (None, AcceptReason::MseImproved),
-                None if req.accept_always => (None, AcceptReason::AcceptAlways),
-                None => (None, AcceptReason::MseNotImproved),
-                Some((_, settings)) if settings.mse_pre_screen && !mse_improved => {
-                    (None, AcceptReason::MsePreScreenRejected)
-                }
-                Some((scorer, settings)) => {
-                    // One reused directory, not one per attempt: a production
-                    // creature is megabytes and `--max-backtracks` defaults to
-                    // 6, so per-attempt copies would grow without bound. The
-                    // rejected candidate itself is already captured by
-                    // `candidate.json` and the trace store (#78).
-                    let scored = score_creature(
-                        scorer,
-                        &width.checked_json_pretty(&candidate)?,
-                        req.training_data,
-                        &score_dir.join("candidate"),
-                    )?;
-                    let incumbent_fitness = incumbent_fitness
-                        .ok_or("scorer-guided acceptance has no baseline score")?;
-                    let reason = if scored.score - incumbent_fitness >= settings.min_improvement {
-                        AcceptReason::ScoreImproved
-                    } else {
-                        AcceptReason::ScoreNotImproved
-                    };
-                    (Some(scored), reason)
-                }
-            };
-            // Scorer-guided runs journal every candidate the line search tried,
-            // MSE delta beside scorer delta, so a rejected epoch is auditable
-            // rather than a single "0 accepts" line (#104).
-            if let Some(baseline_fitness) =
-                incumbent_fitness.filter(|_| scorer_acceptance.is_some())
-            {
-                let attempt = TrainCandidateRecord {
-                    kind: "candidate".into(),
-                    epoch,
-                    attempt: backtracks,
-                    step_scale,
-                    learning_rate: lr,
-                    incumbent_mse: best_mse,
-                    candidate_mse: after_mse,
-                    mse_delta: after_mse - best_mse,
-                    baseline_score: baseline_fitness,
-                    candidate_score: candidate_score.as_ref().map(|s| s.score),
-                    score_delta: candidate_score.as_ref().map(|s| s.score - baseline_fitness),
-                    accepted: reason.accepted(),
-                    accept_reason: reason,
-                };
-                journal.push_str(&serde_json::to_string(&attempt).map_err(|e| e.to_string())?);
+        let mut ladder_rungs = None;
+        let (candidate, deltas, after_mse, candidate_score, reason) = if let Some(outcome) =
+            ladder_epoch
+        {
+            // Every rung is journalled — score and MSE for every step — so a
+            // dry epoch is an auditable grid rather than a single line.
+            for line in &outcome.journal {
+                journal.push_str(&serde_json::to_string(line).map_err(|e| e.to_string())?);
                 journal.push('\n');
             }
-            if reason.accepted() || backtracks >= req.max_backtracks {
-                break (candidate, deltas, after_mse, candidate_score, reason);
+            step_scale = outcome.step_scale;
+            ladder_rungs = Some(outcome.rungs);
+            (
+                outcome.candidate,
+                outcome.deltas,
+                outcome.after_mse,
+                outcome.score,
+                outcome.reason,
+            )
+        } else {
+            loop {
+                let candidate = apply_learnings_with(
+                    &incumbent,
+                    &report.learning,
+                    req.config,
+                    lr,
+                    ApplyOptions {
+                        step_scale,
+                        ..req.apply
+                    },
+                );
+                let deltas = count_apply_deltas(&incumbent, &candidate, req.config.plank_constant);
+                let mut cand_net = compile_creature(&candidate).map_err(|e| e.to_string())?;
+                let (after_mse, _) =
+                    compute_mse_selected(&candidate, &mut cand_net, req.training_data, selection)?;
+                let mse_improved = after_mse < best_mse;
+                // The fitness the candidate must beat: the run baseline until an
+                // epoch is accepted, the last accepted candidate's score after.
+                let incumbent_fitness = match &incumbent_score {
+                    Some(scored) => Some(scored.score),
+                    None if scorer_acceptance.is_some() => {
+                        return Err("scorer-guided acceptance has no baseline score".into());
+                    }
+                    None => None,
+                };
+                // The acceptance gate. Under MSE the slice decides; under
+                // scorer-guided acceptance the slice is only a diagnostic (or an
+                // opt-in pre-screen) and `rust_scorer` returns the verdict (#104).
+                let (candidate_score, reason) = match scorer_acceptance {
+                    None if mse_improved => (None, AcceptReason::MseImproved),
+                    None if req.accept_always => (None, AcceptReason::AcceptAlways),
+                    None => (None, AcceptReason::MseNotImproved),
+                    Some((_, settings)) if settings.mse_pre_screen && !mse_improved => {
+                        (None, AcceptReason::MsePreScreenRejected)
+                    }
+                    Some((scorer, settings)) => {
+                        // One reused directory, not one per attempt: a production
+                        // creature is megabytes and `--max-backtracks` defaults to
+                        // 6, so per-attempt copies would grow without bound. The
+                        // rejected candidate itself is already captured by
+                        // `candidate.json` and the trace store (#78).
+                        let scored = score_creature(
+                            scorer,
+                            &width.checked_json_pretty(&candidate)?,
+                            req.training_data,
+                            &score_dir.join("candidate"),
+                        )?;
+                        let incumbent_fitness = incumbent_fitness
+                            .ok_or("scorer-guided acceptance has no baseline score")?;
+                        let reason = if scored.score - incumbent_fitness >= settings.min_improvement
+                        {
+                            AcceptReason::ScoreImproved
+                        } else {
+                            AcceptReason::ScoreNotImproved
+                        };
+                        (Some(scored), reason)
+                    }
+                };
+                // Scorer-guided runs journal every candidate the line search tried,
+                // MSE delta beside scorer delta, so a rejected epoch is auditable
+                // rather than a single "0 accepts" line (#104).
+                if let Some(baseline_fitness) =
+                    incumbent_fitness.filter(|_| scorer_acceptance.is_some())
+                {
+                    let attempt = TrainCandidateRecord {
+                        kind: "candidate".into(),
+                        epoch,
+                        attempt: backtracks,
+                        step_scale,
+                        learning_rate: lr,
+                        incumbent_mse: best_mse,
+                        candidate_mse: after_mse,
+                        mse_delta: after_mse - best_mse,
+                        baseline_score: baseline_fitness,
+                        candidate_score: candidate_score.as_ref().map(|s| s.score),
+                        score_delta: candidate_score.as_ref().map(|s| s.score - baseline_fitness),
+                        accepted: reason.accepted(),
+                        accept_reason: reason,
+                    };
+                    journal.push_str(&serde_json::to_string(&attempt).map_err(|e| e.to_string())?);
+                    journal.push('\n');
+                }
+                if reason.accepted() || backtracks >= req.max_backtracks {
+                    break (candidate, deltas, after_mse, candidate_score, reason);
+                }
+                backtracks += 1;
+                step_scale /= 2.0;
             }
-            backtracks += 1;
-            step_scale /= 2.0;
         };
         let accepted = reason.accepted();
         fs::write(
@@ -551,6 +638,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                 .zip(baseline_fitness)
                 .map(|(s, base)| s.score - base),
             backtracks,
+            ladder_rungs,
             step_scale,
             hidden_biases: deltas.hidden_biases,
             output_biases: deltas.output_biases,
@@ -693,6 +781,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: false,
             max_backtracks: 0,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })
@@ -748,6 +837,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: true,
             max_backtracks: 0,
+            step_scale_ladder: &[],
             trace_store: None,
         })
         .unwrap();
@@ -805,6 +895,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: false,
             max_backtracks: 0,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })
@@ -854,6 +945,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: false,
             max_backtracks: 2,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })
@@ -916,6 +1008,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: false,
             max_backtracks: 0,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })
@@ -934,6 +1027,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: false,
             max_backtracks: 8,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1034,6 +1128,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: true,
             max_backtracks: 0,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1124,6 +1219,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: true,
             max_backtracks: 0,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1176,6 +1272,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: true,
             max_backtracks: 0,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })
@@ -1218,6 +1315,7 @@ mod tests {
             acceptance: AcceptanceMode::Mse,
             accept_always: false,
             max_backtracks: 0,
+            step_scale_ladder: &[],
             trace_store: None,
             disable_random_samples: false,
         })

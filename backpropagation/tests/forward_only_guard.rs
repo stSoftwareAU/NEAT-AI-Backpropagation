@@ -144,6 +144,7 @@ fn train_rejects_a_recurrent_creature() {
         acceptance: AcceptanceMode::Mse,
         accept_always: false,
         max_backtracks: 0,
+        step_scale_ladder: &[],
         trace_store: None,
     })
     .expect_err("train must reject a recurrent creature");

@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig, LearningRateStrategy};
 use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, run_compare};
 use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
+use neat_ai_backpropagation::ladder::{DEFAULT_STEP_SCALE_LADDER_CSV, parse_step_scale_ladder};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
 use neat_ai_backpropagation::train::{
     AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, TrainCreature, TrainRequest,
@@ -164,6 +165,15 @@ enum Commands {
         /// Multiply (proposed − current) by this factor before writing.
         #[arg(long, default_value_t = DEFAULT_STEP_SCALE)]
         step_scale: f64,
+        /// Comma-separated step scales to score as a ladder (#106).
+        ///
+        /// Requires `--acceptance scorer`. The epoch's one accumulation is
+        /// applied at every rung, the whole grid is scored in a single
+        /// `rust_scorer` call, and the best scorer improvement wins —
+        /// superseding the `--max-backtracks` halving search. Pass the flag
+        /// without a value for the default grid.
+        #[arg(long, num_args = 0..=1, default_missing_value = DEFAULT_STEP_SCALE_LADDER_CSV)]
+        step_scale_ladder: Option<String>,
         /// Apply only output neurons and synapses that target them.
         #[arg(long, default_value_t = false)]
         outputs_only: bool,
@@ -370,6 +380,7 @@ fn run() -> Result<(), String> {
             maximum_bias_adjustment_scale,
             maximum_weight_adjustment_scale,
             step_scale,
+            step_scale_ladder,
             outputs_only,
             hidden_only,
             acceptance,
@@ -389,6 +400,12 @@ fn run() -> Result<(), String> {
                 maximum_weight_adjustment_scale,
                 normalise_gradients,
             );
+            // Parsed here, validated by the library — one gate every caller
+            // (CLI and C ABI alike) goes through.
+            let ladder = match step_scale_ladder.as_deref() {
+                Some(raw) => parse_step_scale_ladder(raw)?,
+                None => Vec::new(),
+            };
             let result = run_train(TrainRequest {
                 creature: TrainCreature::Path(&creature),
                 training_data: &training_data,
@@ -407,6 +424,7 @@ fn run() -> Result<(), String> {
                 acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen)?,
                 accept_always,
                 max_backtracks,
+                step_scale_ladder: &ladder,
                 trace_store: trace_store.as_deref(),
             })?;
             eprintln!(
@@ -732,6 +750,42 @@ mod tests {
                 min_improvement: 0.005,
                 mse_pre_screen: true,
             })
+        );
+    }
+
+    /// The ladder is off unless it is asked for, and the bare flag selects the
+    /// default grid (#106).
+    #[test]
+    fn the_step_scale_ladder_is_opt_in_with_a_default_grid() {
+        let Commands::Train {
+            step_scale_ladder, ..
+        } = parse_train(&[])
+        else {
+            panic!("expected train");
+        };
+        assert_eq!(step_scale_ladder, None);
+
+        let Commands::Train {
+            step_scale_ladder, ..
+        } = parse_train(&["--step-scale-ladder"])
+        else {
+            panic!("expected train");
+        };
+        assert_eq!(
+            parse_step_scale_ladder(&step_scale_ladder.expect("bare flag takes the default grid"))
+                .unwrap(),
+            parse_step_scale_ladder(DEFAULT_STEP_SCALE_LADDER_CSV).unwrap()
+        );
+
+        let Commands::Train {
+            step_scale_ladder, ..
+        } = parse_train(&["--step-scale-ladder", "0.002,0.02"])
+        else {
+            panic!("expected train");
+        };
+        assert_eq!(
+            parse_step_scale_ladder(&step_scale_ladder.expect("explicit grid")).unwrap(),
+            vec![0.002, 0.02]
         );
     }
 

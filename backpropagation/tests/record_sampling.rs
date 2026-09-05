@@ -87,6 +87,7 @@ fn train_baseline_mse(
         acceptance: AcceptanceMode::Mse,
         accept_always: false,
         max_backtracks: 0,
+        step_scale_ladder: &[],
         trace_store: None,
         disable_random_samples,
     })

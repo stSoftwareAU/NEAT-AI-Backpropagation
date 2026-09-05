@@ -12,6 +12,7 @@ pub mod compare;
 pub mod creature_io;
 pub mod ffi;
 pub mod gradient_check;
+pub mod ladder;
 pub mod mse;
 pub mod propagate_layout;
 pub mod sampling;
@@ -46,6 +47,10 @@ pub use gradient_check::{
     ClassStats, GeneClass, GeneProbeRow, GradientCheckRequest, GradientCheckSummary,
     run_gradient_check,
 };
+pub use ladder::{
+    DEFAULT_STEP_SCALE_LADDER, DEFAULT_STEP_SCALE_LADDER_CSV, parse_step_scale_ladder,
+    validate_step_scale_ladder,
+};
 pub use mse::{compute_mse, compute_mse_selected};
 pub use propagate_layout::{
     AccumulateReport, NeuronTraceStats, PropagateLayout, accumulate_creature_learning,
@@ -55,7 +60,7 @@ pub use sampling::{
     FileSample, RecordCursor, RecordSample, RecordSelection, plan_record_sample,
     select_file_sample_indexes,
 };
-pub use scorer::{ScoreResult, score_creature};
+pub use scorer::{ScoreResult, score_creature, score_creatures};
 pub use sweep::{SweepRequest, SweepRow, SweepSummary, run_sweep};
 pub use trace::{NeuronTraceState, SynapseTraceState, build_creature_trace, write_creature_trace};
 pub use train::{
