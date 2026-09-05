@@ -686,7 +686,7 @@ fn run() -> Result<(), String> {
             if let Some(comparison) = &summary.selection_comparison {
                 for arm in [&comparison.evidence, &comparison.random_control] {
                     eprintln!(
-                        "  arm {:?}: scored={} wins={} scorer_seconds={:.1} wins/h={} gain/h={}",
+                        "  arm {:?}: scored={} wins={} scorer_seconds={:.3} wins/h={} gain/h={}",
                         arm.source,
                         arm.candidates_scored,
                         arm.wins,

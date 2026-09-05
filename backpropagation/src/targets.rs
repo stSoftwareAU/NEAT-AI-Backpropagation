@@ -179,7 +179,7 @@ pub struct SelectedTarget {
 
 /// How targets are drawn — the strategy interface.
 ///
-/// Implementors receive the ranking [`rank_targets`] produced and return the
+/// Implementations receive the ranking [`rank_targets`] produced and return the
 /// targets to spend experiments on. `pool` is best-ranked first.
 pub trait TargetSelector {
     /// Which arm the drawn targets belong to.

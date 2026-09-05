@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Evidence-driven sparse target selection: `blocks` no longer spreads its
+  scarce scorer runs over focus neurons picked without regard to the learning
+  signal. `--target-selection evidence` (the new default) ranks candidate
+  targets from the **same single accumulation pass** on accumulated absolute
+  error mass, proposal magnitude relative to the parameter it moves,
+  activation coverage / range, per-record direction consistency and, as a
+  secondary term, fan-in / fan-out; longest-path depth is recorded as a rank
+  feature but deliberately not scored. `--target-selection random` retains the
+  uniform draw as the control arm, and `--random-control-fraction` reserves a
+  configurable share of every draw for a uniform draw over the targets
+  exploitation did not take — so a run measures its own heuristic and still
+  finds accidental wins. Every focus candidate in `blocks.json` carries
+  `selection` (`source`, `rank`, `score` and each rank feature), every scorer
+  run is timed into `scorerSeconds`, and a scored run writes
+  `selectionComparison` — `winsPerHour`, `scoreGainPerHour`, `wins`,
+  `candidatesScored`, `totalScoreGain` and `bestScoreDelta` per arm, with
+  `null` rates rather than a rate divided out of no scorer time.
+  `scripts/run-target-selection-benchmark.sh` runs the same creature, corpus
+  and seed through both arms and prints wins/hour and score gain/hour for
+  each; its targets are env vars, so no stock-market logic lands in this
+  public library (issue #108).
+
 - Gradient diagnostics by gene class and squash: `gradient-check` now labels
   every probed gene with the facets a NEAT creature actually varies over —
   bias vs weight, output vs hidden, squash name, aggregate vs ordinary

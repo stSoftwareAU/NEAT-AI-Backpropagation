@@ -283,10 +283,10 @@ cargo run -p neat_ai_backpropagation --release -- blocks \
 | `subgraph` | A seeded random connected subgraph of `--subgraph-size` neurons |
 | `top-genes` | The `--top-genes` loudest genes by proposal magnitude |
 
-Focus neurons for `neuron` / `neighbourhood` / `subgraph` are the hidden
-neurons the accumulated learning wants to move most — a neuron's rank is
-its own `|Δbias|` plus the `|Δweight|` of every synapse touching it — so
-the blocks land where the signal is. Blocks selecting no gene, and blocks
+Focus neurons for `neuron` / `neighbourhood` / `subgraph` are chosen by
+the target-selection strategy below (issue #108) — by default the hidden
+neurons the accumulation pass left the strongest evidence for — so the
+blocks land where the signal is. Blocks selecting no gene, and blocks
 selecting genes an earlier block already selected, are dropped rather
 than costing a duplicate scorer run; both counts are reported on stderr
 and as `droppedEmptyBlocks` / `droppedDuplicateBlocks` in `blocks.json`,
@@ -337,6 +337,80 @@ the blockwise strategies, and prints candidates, scorer wins, elapsed
 seconds and **wins/hour** for each. Point it at the production creature
 and corpus with `CREATURE=` / `DATA_DIR=` to measure the comparison
 there.
+
+### Evidence-driven target selection (issue #108)
+
+`sparse_ratio` decides *how much* of the network participates in a pass.
+This decides *where the scorer runs are spent* afterwards. On an already
+highly evolved creature a scorer run is the scarce resource, so drawing
+focus neurons uniformly at random spends most of them on genes the
+accumulation pass gave no usable signal for.
+
+The same single accumulation pass already measures everything the ranking
+needs, so the evidence costs nothing extra:
+
+| Flag | Default | Meaning |
+| ---- | ------- | ------- |
+| `--target-selection` | `evidence` | `evidence` ranks candidates on the accumulated signal; `random` is the uniform draw, retained as the control |
+| `--random-control-fraction` | `0.0` | Share of every focus draw reserved for a uniform random control target, `0.0`–`1.0` |
+
+A target's score is a weighted sum of five normalised signals, each
+scaled by the pool's own maximum so the score means "loudest *here*":
+
+| Signal | Weight | Why |
+| ------ | ------ | --- |
+| Error mass | 0.35 | Accumulated absolute error is the evidence something here is wrong |
+| Relative proposal | 0.30 | `proposal / (proposal + parameter)` — a move large against what it moves is a real experiment, not rounding |
+| Activity | 0.15 | A neuron rarely activated, or whose activation never moves, gives an unreliable gradient |
+| Consistency | 0.15 | Per-record weight proposals pulling the same way beat records that cancel out |
+| Degree | 0.05 | Fan-in / fan-out is a secondary structural tie-break, not evidence |
+
+Longest-path depth is recorded as a rank feature but **not** scored: no
+measurement in this crate establishes which direction depth should push,
+so weighting it would be a guess dressed as evidence. The weights are
+fixed and documented rather than tuned per corpus — a per-corpus
+weighting is exactly the private, domain-specific logic this public
+repository must not carry.
+
+- **Every candidate says why it was picked.** Each focus candidate in
+  `blocks.json` carries `selection`: the `source` (`evidence` or
+  `randomControl`), the target's `rank`, its `score`, and every rank
+  feature above. `global`, `output-head` and `top-genes` select a region
+  rather than a target, so they carry no `selection`.
+- **The control arm keeps the heuristic honest.**
+  `--random-control-fraction 0.25` reserves a quarter of every focus draw
+  for a uniform draw over the targets exploitation did *not* take, so a
+  run measures its own heuristic and still finds accidental wins. A
+  non-zero fraction always keeps at least one control target, and a
+  fraction outside `0.0`–`1.0` is refused rather than clamped.
+- **Both arms are timed.** Every candidate records `scorerSeconds`, and a
+  scored run writes `selectionComparison` — `candidatesScored`, `wins`,
+  `scorerSeconds`, `winsPerHour`, `totalScoreGain`, `scoreGainPerHour`
+  and `bestScoreDelta` per arm. `winsPerHour` is `null` when an arm spent
+  no scorer time, never a rate divided out of nothing, and only *positive*
+  score deltas count towards the gain: a rejected candidate is rolled
+  back, so its loss is not a negative gain.
+
+```mermaid
+flowchart TD
+    A[accumulate once over the corpus] --> B[per-neuron trace: error mass, activation count/range]
+    A --> C[per-gene accumulators: proposal, direction split]
+    B --> D[rank targets: weighted evidence score]
+    C --> D
+    D --> E{exploit vs random control}
+    E -->|1 − fraction| F[top-ranked targets]
+    E -->|fraction| G[uniform draw over the rest]
+    F --> H[blocks → candidates → rust_scorer]
+    G --> H
+    H --> I[blocks.json: selection features + wins/hour and gain/hour per arm]
+```
+
+`scripts/run-target-selection-benchmark.sh <rust_scorer>` runs the same
+creature, corpus, seed and step scale through `--target-selection
+evidence` and `--target-selection random`, and prints candidates, scorer
+wins, best score delta, elapsed seconds, **wins/hour** and **score
+gain/hour** for each arm. Point it at the production creature and corpus
+with `CREATURE=` / `DATA_DIR=` to measure the comparison there.
 
 ### Train record sampling (issue #77)
 
