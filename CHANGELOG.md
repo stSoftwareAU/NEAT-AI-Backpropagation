@@ -15,16 +15,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   activation health read from the accumulate trace (`active`, `saturated`,
   `lowActivity`, `unobserved`) and proposal-magnitude decade — and aggregates
   sign agreement, applied-proposal improvement and gradient error across all
-  of them. Each sampled gene is also **applied on its own**, so a row records
-  whether the proposal really lowered slice MSE (`improved`) and how far the
-  first-order prediction `fdGrad · Δ` was from that outcome (`absError`,
-  `relError`); run cost is `(2 + 3 × sampled genes)` MSE passes, bounded by
-  the existing sample caps. `gradient-check.json` gains `schemaVersion`
-  (now `2`), the `seed`, a creature fingerprint, `byFacet` and ranked
-  `bestClasses` / `worstClasses` (`--facet-min-scored`, `--rank-limit`), and
+  of them. Gradient error is the proposal judged against the finite
+  difference in its own units: a descent step is inverted back through
+  `lr × step` to the gradient it implies (`proposalGrad`), giving
+  `gradAbsError` / `gradRelError`, so a clamped or mis-scaled proposal is
+  visible. Each sampled gene is also **applied on its own**, so a row records
+  whether the proposal really lowered slice MSE (`improved`) beside the
+  first-order prediction it is compared against (`predictedDeltaMse` vs
+  `actualDeltaMse`); run cost is `(2 + 3 × sampled genes)` MSE passes, bounded
+  by the existing sample caps. `gradient-check.json` gains `schemaVersion`
+  (now `2`), `neatCoreBaseline`, the `seed`, a creature fingerprint, `byFacet`
+  and ranked, non-overlapping `bestClasses` / `worstClasses`
+  (`--facet-min-scored`, `--rank-limit`), and
   the run leaves a concise `summary.txt` for unattended readers. The same
   seed over the same creature, corpus and caps writes byte-identical
-  artifacts. `scripts/run-gradient-diagnostics.sh` is the documented GRQ
+  artefacts. `scripts/run-gradient-diagnostics.sh` is the documented GRQ
   integration-testing command — every target is an env var, so no
   stock-market logic lands in this public library (issue #107).
 

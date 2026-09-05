@@ -6,9 +6,9 @@
 # improvement and relative gradient error by gene class, squash, aggregate vs
 # ordinary, depth, fan-in / fan-out, activation health and proposal magnitude.
 #
-# Every target is an env var: this library holds no GRQ paths of its own, and
-# no stock-market logic belongs in it. The defaults are the locked integration
-# targets used by `scripts/run-production-win.sh`; override any of them.
+# Every target is an env var — no stock-market logic belongs in this public
+# library. The defaults below are the same locked integration paths
+# `scripts/run-production-win.sh` already carries; override any of them.
 #
 #   CREATURE=... DATA_DIR=... OUT=... ./scripts/run-gradient-diagnostics.sh
 set -euo pipefail

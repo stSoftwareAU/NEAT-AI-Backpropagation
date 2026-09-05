@@ -12,7 +12,7 @@
 //! stratification — squash, aggregate vs ordinary, depth, fan-in / fan-out,
 //! activation health and proposal magnitude — and added the ground truth
 //! behind the gradient: each sampled gene is also *applied* on its own so the
-//! artifact records whether the proposal actually lowered slice MSE, and how
+//! artefact records whether the proposal actually lowered slice MSE, and how
 //! far the first-order prediction `fd_grad · Δ` was from that outcome. See
 //! [`crate::gene_facets`] for the labelling and ranking.
 
@@ -22,7 +22,7 @@ use crate::backprop::{
 use crate::creature_io::load_forward_only_creature;
 use crate::gene_facets::{
     CreatureTopology, FacetRow, FacetStats, GeneAttributes, aggregate_facets, attributes_for,
-    percentile, rank_facets,
+    percentage, percentile, rank_facets, sorted_values,
 };
 use crate::mse::compute_mse;
 use crate::propagate_layout::accumulate_creature_learning_report;
@@ -104,15 +104,19 @@ pub struct GeneProbeRow {
     /// Squash, aggregate flag, depth, degrees and activation health of the
     /// gene's neuron (issue #107).
     pub attributes: GeneAttributes,
+    /// Gradient implied by the proposal, `−proposal_delta / (lr · step)` —
+    /// the descent step inverted back through the learning rate and step
+    /// scale, so it is comparable with `fd_grad`.
+    pub proposal_grad: f64,
+    /// `|proposal_grad − fd_grad|` — the absolute gradient error.
+    pub grad_abs_error: f64,
+    /// `grad_abs_error / max(|proposal_grad|, |fd_grad|)` — the relative
+    /// gradient error. `None` when both gradients are exactly zero.
+    pub grad_rel_error: Option<f64>,
     /// First-order predicted MSE change, `fd_grad · proposal_delta`.
     pub predicted_delta_mse: f64,
     /// Measured MSE change from applying the proposal to this gene alone.
     pub actual_delta_mse: f64,
-    /// `|actual − predicted|` — the absolute gradient error.
-    pub abs_error: f64,
-    /// `abs_error / max(|actual|, |predicted|)` — the relative gradient error.
-    /// `None` when both are exactly zero, so nothing was predicted or moved.
-    pub rel_error: Option<f64>,
     /// True when applying the proposal actually lowered slice MSE.
     pub improved: bool,
 }
@@ -140,11 +144,31 @@ pub struct ClassStats {
 /// Schema version of `gradient-check.json` / `genes.jsonl`.
 ///
 /// Bumped to `2` by issue #107 (facets, applied-proposal ground truth). A
-/// consumer comparing artifacts across NEAT-AI-core / Backpropagation
+/// consumer comparing artefacts across NEAT-AI-core / Backpropagation
 /// versions reads this first and refuses a schema it does not know.
 pub const GRADIENT_CHECK_SCHEMA: u32 = 2;
 
-/// Shape of the probed creature, so two artifacts can be shown to describe
+/// The repository's declared neat-core baseline, as committed in
+/// `neat-core.expected-version` (issue #107).
+///
+/// neat-core is an unpinned `path` dependency tracking head, so the crate
+/// version alone cannot tell two artefacts apart when the difference came
+/// from core. Stamping the handled baseline beside it makes the comparison
+/// legible: a comment-and-blank-line header followed by the version.
+const NEAT_CORE_EXPECTED_VERSION: &str = include_str!("../../neat-core.expected-version");
+
+/// The version line of [`NEAT_CORE_EXPECTED_VERSION`], or `"unknown"` when
+/// the file carries no version line.
+fn neat_core_baseline() -> String {
+    NEAT_CORE_EXPECTED_VERSION
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty() && !line.starts_with('#'))
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// Shape of the probed creature, so two artefacts can be shown to describe
 /// the same network before their numbers are compared (issue #107).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -179,6 +203,9 @@ pub struct GradientCheckSummary {
     pub schema_version: u32,
     /// Crate version.
     pub version: String,
+    /// Declared neat-core baseline from `neat-core.expected-version`, so an
+    /// artefact says which core it was measured against.
+    pub neat_core_baseline: String,
     /// Issue this probe addresses.
     pub issue: u32,
     /// Baseline MSE on the probe slice.
@@ -191,7 +218,7 @@ pub struct GradientCheckSummary {
     pub step_scale: f64,
     /// Learning rate used for proposals.
     pub learning_rate: f64,
-    /// Seed the sampling ran under — the artifact is reproducible from it.
+    /// Seed the sampling ran under — the artefact is reproducible from it.
     pub seed: u64,
     /// Shape of the probed creature.
     pub creature: CreatureFingerprint,
@@ -216,9 +243,9 @@ pub struct GradientCheckSummary {
     /// `improved / sampled` as a percentage.
     pub improved_pct: f64,
     /// Median relative gradient error over the sample.
-    pub rel_error_p50: Option<f64>,
+    pub grad_rel_error_p50: Option<f64>,
     /// 90th percentile of the relative gradient error.
-    pub rel_error_p90: Option<f64>,
+    pub grad_rel_error_p90: Option<f64>,
     /// Per-gene rows (same order as written to `genes.jsonl`).
     pub genes: Vec<GeneProbeRow>,
 }
@@ -309,6 +336,16 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
     let fd = FdCtx {
         eps: req.fd_eps,
         fd_floor: req.config.plank_constant.max(1e-12),
+        // Floored so a zero / non-finite learning rate cannot divide by zero
+        // when a proposal delta is inverted back into a gradient.
+        proposal_scale: {
+            let scale = lr * step;
+            if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            }
+        },
         training_data: req.training_data,
         max_records: req.max_records,
     };
@@ -333,16 +370,12 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
     let scored: usize = by_class.iter().map(|c| c.scored).sum();
     let sign_agree: usize = by_class.iter().map(|c| c.sign_agree).sum();
     let improved = genes.iter().filter(|g| g.improved).count();
-    let mut errors: Vec<f64> = genes
-        .iter()
-        .filter_map(|g| g.rel_error)
-        .filter(|e| e.is_finite())
-        .collect();
-    errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let errors = sorted_values(genes.iter().filter_map(|g| g.grad_rel_error));
 
     let summary = GradientCheckSummary {
         schema_version: GRADIENT_CHECK_SCHEMA,
         version: env!("CARGO_PKG_VERSION").to_string(),
+        neat_core_baseline: neat_core_baseline(),
         issue: 40,
         baseline_mse,
         records: report.records,
@@ -361,8 +394,8 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
         sign_agree_pct: percentage(sign_agree, scored),
         improved,
         improved_pct: percentage(improved, sampled),
-        rel_error_p50: percentile(&errors, 0.50),
-        rel_error_p90: percentile(&errors, 0.90),
+        grad_rel_error_p50: percentile(&errors, 0.50),
+        grad_rel_error_p90: percentile(&errors, 0.90),
         genes: genes.clone(),
     };
 
@@ -391,13 +424,14 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
 /// Written to `<output-dir>/summary.txt` and printed by the CLI: the headline
 /// numbers, then the best and worst gene classes with the evidence behind
 /// each. Everything here is also in `gradient-check.json` — this is the human
-/// end of the same artifact, never a second source of truth.
+/// end of the same artefact, never a second source of truth.
 pub fn summary_text(summary: &GradientCheckSummary) -> String {
     let mut text = format!(
-        "gradient-check v{} schema={} seed={} records={} creature={}n/{}s\n\
-         sampled={} scored={} signAgree={:.1}% improved={:.1}% relErrorP50={} relErrorP90={}\n",
+        "gradient-check v{} schema={} neat-core={} seed={} records={} creature={}n/{}s\n\
+         sampled={} scored={} signAgree={:.1}% improved={:.1}% gradRelErrorP50={} gradRelErrorP90={}\n",
         summary.version,
         summary.schema_version,
+        summary.neat_core_baseline,
         summary.seed,
         summary.records,
         summary.creature.neurons,
@@ -406,8 +440,8 @@ pub fn summary_text(summary: &GradientCheckSummary) -> String {
         summary.scored,
         summary.sign_agree_pct,
         summary.improved_pct,
-        format_optional(summary.rel_error_p50),
-        format_optional(summary.rel_error_p90),
+        format_optional(summary.grad_rel_error_p50),
+        format_optional(summary.grad_rel_error_p90),
     );
     for (label, ranked) in [
         ("best ", &summary.best_classes),
@@ -420,12 +454,12 @@ pub fn summary_text(summary: &GradientCheckSummary) -> String {
         }
         for stats in ranked {
             text.push_str(&format!(
-                "{label}: {}={} signAgree={:.1}% improved={:.1}% relErrorP50={} n={}\n",
+                "{label}: {}={} signAgree={:.1}% improved={:.1}% gradRelErrorP50={} n={}\n",
                 stats.facet,
                 stats.bucket,
                 stats.sign_agree_pct,
                 stats.improved_pct,
-                format_optional(stats.rel_error_p50),
+                format_optional(stats.grad_rel_error_p50),
                 stats.scored,
             ));
         }
@@ -436,15 +470,6 @@ pub fn summary_text(summary: &GradientCheckSummary) -> String {
 /// Render an optional statistic without pretending a missing one is zero.
 fn format_optional(value: Option<f64>) -> String {
     value.map_or_else(|| "n/a".to_string(), |v| format!("{v:.4}"))
-}
-
-/// `part / whole` as a percentage, 0 when `whole` is 0.
-fn percentage(part: usize, whole: usize) -> f64 {
-    if whole == 0 {
-        0.0
-    } else {
-        100.0 * part as f64 / whole as f64
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -470,6 +495,9 @@ struct PoolFilter<'a> {
 struct FdCtx<'a> {
     eps: f64,
     fd_floor: f64,
+    /// `learning_rate × step_scale` — inverts a proposal delta back into the
+    /// gradient it implies. Never zero: the caller floors it.
+    proposal_scale: f64,
     training_data: &'a Path,
     max_records: Option<u64>,
 }
@@ -630,7 +658,7 @@ fn probe_gene(
         gene,
         fd_grad,
         applied - baseline_mse,
-        fd.fd_floor,
+        fd,
         attributes,
     ))
 }
@@ -656,22 +684,26 @@ fn finalize_row(
     gene: &EligibleGene,
     fd_grad: f64,
     actual_delta_mse: f64,
-    fd_floor: f64,
+    fd: &FdCtx<'_>,
     attributes: GeneAttributes,
 ) -> GeneProbeRow {
-    let scored = fd_grad.is_finite() && fd_grad.abs() >= fd_floor;
+    let scored = fd_grad.is_finite() && fd_grad.abs() >= fd.fd_floor;
     let sign_agree = scored && gene.proposal_delta * fd_grad < 0.0;
     let magnitude_ratio = if scored {
         Some(gene.proposal_delta.abs() / fd_grad.abs())
     } else {
         None
     };
-    let predicted_delta_mse = fd_grad * gene.proposal_delta;
-    let abs_error = (actual_delta_mse - predicted_delta_mse).abs();
-    // Symmetric relative error: scaled by whichever of the two MSE changes is
-    // larger, so a near-zero denominator cannot inflate the statistic.
-    let scale = actual_delta_mse.abs().max(predicted_delta_mse.abs());
-    let rel_error = (scale > 0.0 && scale.is_finite()).then(|| abs_error / scale);
+    // A descent step is `Δ = −lr · step · g`, so inverting it recovers the
+    // gradient the proposal implies and puts it in the finite difference's
+    // units. Clamped proposals show up here as a gradient error, which is
+    // exactly what the diagnostic is asked to measure.
+    let proposal_grad = -gene.proposal_delta / fd.proposal_scale;
+    let grad_abs_error = (proposal_grad - fd_grad).abs();
+    // Symmetric relative error: scaled by whichever gradient is larger, so a
+    // near-zero denominator cannot inflate the statistic.
+    let scale = proposal_grad.abs().max(fd_grad.abs());
+    let grad_rel_error = (scale > 0.0 && scale.is_finite()).then(|| grad_abs_error / scale);
     GeneProbeRow {
         class: gene.class,
         index: gene.index,
@@ -682,10 +714,11 @@ fn finalize_row(
         sign_agree,
         magnitude_ratio,
         attributes,
-        predicted_delta_mse,
+        proposal_grad,
+        grad_abs_error,
+        grad_rel_error,
+        predicted_delta_mse: fd_grad * gene.proposal_delta,
         actual_delta_mse,
-        abs_error,
-        rel_error,
         improved: actual_delta_mse < 0.0,
     }
 }
@@ -702,7 +735,7 @@ fn facet_row(row: &GeneProbeRow) -> FacetRow<'_> {
         sign_agree: row.sign_agree,
         improved: row.improved,
         magnitude_ratio: row.magnitude_ratio,
-        rel_error: row.rel_error,
+        grad_rel_error: row.grad_rel_error,
     }
 }
 
@@ -728,11 +761,7 @@ fn aggregate_by_class(genes: &[GeneProbeRow]) -> Vec<ClassStats> {
             .collect();
         let scored = scored_rows.len();
         let sign_agree = scored_rows.iter().filter(|g| g.sign_agree).count();
-        let mut ratios: Vec<f64> = scored_rows
-            .iter()
-            .filter_map(|g| g.magnitude_ratio)
-            .collect();
-        ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let ratios = sorted_values(scored_rows.iter().filter_map(|g| g.magnitude_ratio));
         stats.push(ClassStats {
             class: class.as_str().to_string(),
             sampled,
@@ -752,6 +781,19 @@ mod tests {
     use crate::backprop::BackpropConfig;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn the_neat_core_baseline_is_read_from_the_committed_file() {
+        let baseline = neat_core_baseline();
+        assert_ne!(
+            baseline, "unknown",
+            "the committed file must carry a version"
+        );
+        assert!(
+            !baseline.starts_with('#') && baseline.split('.').count() == 3,
+            "expected a semver baseline, got '{baseline}'"
+        );
+    }
 
     #[test]
     fn identity_chain_output_genes_agree_with_fd() {

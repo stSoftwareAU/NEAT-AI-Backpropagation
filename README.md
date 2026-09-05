@@ -466,12 +466,21 @@ labels every probed gene and aggregates the outcome across every facet
 at once, so scorer-guided local backprop can pick gene classes on
 evidence rather than intuition.
 
-Each sampled gene costs three MSE passes over the record slice — `+ε`,
-`−ε` and the **proposal applied on its own** — so the artifact carries
-the ground truth beside the gradient: whether the move actually lowered
-slice MSE (`improved`), and how far the first-order prediction
-`fdGrad · Δ` was from that outcome (`absError`, `relError`). Run cost is
-`(2 + 3 × sampled genes)` passes; the sample caps are what bounds it.
+The **gradient error** is the proposal judged against the finite
+difference in the finite difference's own units. A descent step is
+`Δ = −lr · step · g`, so inverting it recovers the gradient the proposal
+implies (`proposalGrad`); `gradAbsError` is `|proposalGrad − fdGrad|`
+and `gradRelError` scales it by the larger of the two. A clamped or
+mis-scaled proposal shows up there, which is exactly what the diagnostic
+is asked to measure.
+
+Each sampled gene also costs a third MSE pass — the **proposal applied
+on its own** — so the artefact carries the ground truth beside the
+gradient: whether the move really lowered slice MSE (`improved`), and
+the first-order prediction `fdGrad · Δ` it is compared against
+(`predictedDeltaMse` vs `actualDeltaMse`). Run cost is
+`(2 + 3 × sampled genes)` passes over the slice — `+ε`, `−ε` and `+Δ`
+per gene — and the sample caps are what bounds it.
 
 ```mermaid
 flowchart LR
@@ -493,34 +502,47 @@ flowchart LR
 | `depth` | longest hop count from an input — `0-1`, `2-3`, `4-7`, `8-15`, `16+` |
 | `fanIn` / `fanOut` | `0`, `1`, `2-3`, `4-7`, `8-15`, `16+` |
 | `activity` | `active`, `saturated`, `lowActivity`, `unobserved` |
-| `proposalMagnitude` | `<1e-6`, `1e-6..1e-4`, `1e-4..1e-2`, `>=1e-2` |
+| `proposalMagnitude` | `<1e-6`, `1e-6..1e-4`, `1e-4..1e-2`, `>=1e-2`, `nonFinite` |
 
 A weight takes the facets of the neuron it **targets** — that is the
 unit whose saturation and local topology decide whether the weight's
 proposal is trustworthy. `activity` is read from the accumulate trace:
-`saturated` means the mean activation sits within 2% of an end of the
-squash's own range, `lowActivity` that the neuron barely moves across
-the slice (a spread below `1e-6`, judged only once two or more records
-have been seen), `unobserved` that the forward pass never activated it.
 
-| Artifact | Contents |
+- `saturated` — the mean activation sits at an end of the squash's own
+  range (within 2% of a bounded range, or `1e-3` of a one-sided one such
+  as ReLU's floor), **or** both extremes reached do; a TANH flipping
+  between −1 and +1 has a mean of zero and is still saturated.
+- `lowActivity` — the mean magnitude is below `1e-6`, or the activation
+  spread is (the spread test needs two or more records, since one record
+  has no spread to judge).
+- `unobserved` — the accumulate pass recorded no activation for the
+  neuron. A standard run traces every non-input neuron, so this is the
+  fail-safe rather than the common case.
+- `active` — none of the above.
+
+| Artefact | Contents |
 | -------- | -------- |
-| `gradient-check.json` | `schemaVersion`, `seed`, creature fingerprint, `byClass`, `byFacet`, `bestClasses`, `worstClasses` |
-| `genes.jsonl` | one row per probed gene: value, Δ, FD gradient, facets, predicted vs actual ΔMSE |
+| `gradient-check.json` | `schemaVersion`, `version`, `neatCoreBaseline`, `seed`, creature fingerprint, `byClass`, `byFacet`, `bestClasses`, `worstClasses` |
+| `genes.jsonl` | one row per probed gene: value, Δ, FD gradient, facets, gradient error, predicted vs actual ΔMSE |
 | `summary.txt` | the concise report an unattended run reads back — also printed to stderr |
 
 `bestClasses` / `worstClasses` rank `(facet, bucket)` pairs by sign
 agreement. Only buckets with at least `--facet-min-scored` scored genes
 are ranked, and a facet with a single bucket is skipped because it
-offers no contrast; ties break on relative error then on name, so the
-ranking is stable. With few eligible buckets the two lists overlap —
-that is the honest reading of a small sample, not two findings.
+offers no contrast; ties break on relative gradient error then on name,
+so the ranking is stable. The two lists never overlap — `worstClasses`
+is the tail of the same ranking with everything already named in
+`bestClasses` removed, so a thin sample yields a short worst list rather
+than the same bucket reported as both. When nothing clears the floor
+both lists are empty and `summary.txt` says so.
 
 The run is reproducible from `seed` alone: the same seed over the same
-creature, corpus and caps writes byte-identical artifacts.
-`schemaVersion` plus the creature fingerprint are what let two artifacts
-be compared across NEAT-AI-core / Backpropagation versions — read the
-schema first and refuse one you do not know.
+creature, corpus and caps writes byte-identical artefacts.
+`schemaVersion`, `version`, `neatCoreBaseline` (the declared baseline
+from [`neat-core.expected-version`](./neat-core.expected-version)) and
+the creature fingerprint are what let two artefacts be compared across
+NEAT-AI-core / Backpropagation versions — read the schema first and
+refuse one you do not know.
 
 ```bash
 CREATURE=~/src/GRQ-cluster/network.json \
@@ -532,8 +554,9 @@ That is the documented command for the GRQ integration-testing
 workflow. Every target is an env var (`CREATURE`, `DATA_DIR`, `OUT`,
 `SEED`, `MAX_RECORDS`, `SAMPLE_BIASES`, `SAMPLE_WEIGHTS`,
 `FACET_MIN_SCORED`, `RANK_LIMIT`, `STEP_SCALE`, `LEARNING_RATE`,
-`FD_EPS`) — this public library carries no GRQ paths or stock-market
-logic of its own.
+`FD_EPS`); the defaults are the same locked GRQ paths
+`scripts/run-production-win.sh` already carries, and no stock-market
+logic lives in this public library.
 
 ### Output validation gate (issue #94)
 

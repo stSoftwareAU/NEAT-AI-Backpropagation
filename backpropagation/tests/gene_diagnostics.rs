@@ -3,7 +3,7 @@
 //! One whole-creature sign-agreement percentage cannot say *where* a backprop
 //! proposal is trustworthy. These tests drive `gradient-check` over a
 //! heterogeneous creature — mixed squashes, an aggregate neuron, a deep path,
-//! a dead branch — and assert the artifact carries the facets, the applied
+//! a dead branch — and assert the artefact carries the facets, the applied
 //! ground truth, a deterministic seed contract and a ranked best / worst list.
 
 use neat_ai_backpropagation::backprop::BackpropConfig;
@@ -180,6 +180,35 @@ fn every_gene_carries_its_class_and_squash_facets() {
 }
 
 #[test]
+fn gradient_error_compares_the_proposal_against_the_finite_difference() {
+    let (dir, creature, data) = fixture();
+    let out = dir.path().join("out");
+    let summary = probe(&creature, &data, &out, 7, 16, 16);
+    let scale = summary.learning_rate * summary.step_scale;
+    assert!(scale > 0.0, "the fixture must run with a real step");
+
+    for gene in &summary.genes {
+        let implied = -gene.proposal_delta / scale;
+        assert!(
+            (gene.proposal_grad - implied).abs() < 1e-9,
+            "proposal gradient must invert Δ through lr · step for {}",
+            gene.id
+        );
+        assert!(
+            (gene.grad_abs_error - (gene.proposal_grad - gene.fd_grad).abs()).abs() < 1e-9,
+            "absolute gradient error must be |proposal − fd| for {}",
+            gene.id
+        );
+        let expected_rel = gene.grad_abs_error / gene.proposal_grad.abs().max(gene.fd_grad.abs());
+        assert!(
+            (gene.grad_rel_error.expect("a moved gene has a gradient") - expected_rel).abs() < 1e-9,
+            "relative gradient error must scale by the larger gradient for {}",
+            gene.id
+        );
+    }
+}
+
+#[test]
 fn applied_proposals_are_measured_not_predicted() {
     let (dir, creature, data) = fixture();
     let out = dir.path().join("out");
@@ -192,20 +221,12 @@ fn applied_proposals_are_measured_not_predicted() {
             "predicted ΔMSE must be fd_grad · Δ for {}",
             gene.id
         );
-        assert!(
-            (gene.abs_error - (gene.actual_delta_mse - gene.predicted_delta_mse).abs()) < 1e-12,
-            "absolute error must be |actual − predicted| for {}",
-            gene.id
-        );
         assert_eq!(
             gene.improved,
             gene.actual_delta_mse < 0.0,
             "improved must follow the measured MSE change for {}",
             gene.id
         );
-        if let Some(rel) = gene.rel_error {
-            assert!(rel >= 0.0 && rel.is_finite(), "relative error out of range");
-        }
     }
     assert_eq!(
         summary.improved,
@@ -215,7 +236,7 @@ fn applied_proposals_are_measured_not_predicted() {
 }
 
 #[test]
-fn the_same_seed_reproduces_the_artifact_byte_for_byte() {
+fn the_same_seed_reproduces_the_artefact_byte_for_byte() {
     let (dir, creature, data) = fixture();
     let first = dir.path().join("first");
     let second = dir.path().join("second");
@@ -288,6 +309,88 @@ fn best_and_worst_classes_are_ranked_with_evidence() {
     assert!(
         summary.best_classes.len() <= 3,
         "rank limit must be honoured"
+    );
+    for ranked in &summary.worst_classes {
+        assert!(
+            !summary
+                .best_classes
+                .iter()
+                .any(|b| b.facet == ranked.facet && b.bucket == ranked.bucket),
+            "{}={} was reported as both best and worst",
+            ranked.facet,
+            ranked.bucket
+        );
+    }
+}
+
+#[test]
+fn a_sample_too_thin_to_rank_says_so_rather_than_inventing_a_winner() {
+    let (dir, creature, data) = fixture();
+    let out = dir.path().join("out");
+    let config = BackpropConfig::default();
+    let summary = run_gradient_check(GradientCheckRequest {
+        creature: &creature,
+        training_data: &data,
+        config: &config,
+        max_records: Some(8),
+        seed: 2,
+        sample_biases: 4,
+        sample_weights: 4,
+        fd_eps: 1e-4,
+        step_scale: 1.0,
+        outputs_only: false,
+        hidden_only: false,
+        // No bucket can hold 500 genes, so nothing is rankable.
+        facet_min_scored: 500,
+        rank_limit: 5,
+        output_dir: &out,
+    })
+    .expect("the probe must still run when nothing is rankable");
+
+    assert!(summary.best_classes.is_empty());
+    assert!(summary.worst_classes.is_empty());
+    let text = fs::read_to_string(out.join("summary.txt")).unwrap();
+    assert!(
+        text.contains("no bucket carried enough scored genes to rank"),
+        "an unrankable run must say so:\n{text}"
+    );
+}
+
+/// A synapse pointing at a UUID no neuron owns must fail loudly rather than
+/// quietly shrinking the sample.
+#[test]
+fn a_dangling_synapse_target_fails_loudly() {
+    let (dir, _creature, data) = fixture();
+    let broken_path = dir.path().join("broken.json");
+    fs::write(
+        &broken_path,
+        MIXED.replace(
+            r#"{"fromUUID":"h1","toUUID":"o1","weight":0.9}"#,
+            r#"{"fromUUID":"h1","toUUID":"ghost","weight":0.9}"#,
+        ),
+    )
+    .unwrap();
+    let config = BackpropConfig::default();
+    let err = run_gradient_check(GradientCheckRequest {
+        creature: &broken_path,
+        training_data: &data,
+        config: &config,
+        max_records: Some(8),
+        seed: 1,
+        sample_biases: 4,
+        sample_weights: 4,
+        fd_eps: 1e-4,
+        step_scale: 1.0,
+        outputs_only: false,
+        hidden_only: false,
+        facet_min_scored: 2,
+        rank_limit: 3,
+        output_dir: &dir.path().join("broken-out"),
+    })
+    .expect_err("a dangling synapse target must not be probed silently");
+    assert!(
+        err.contains("ghost"),
+        "the error must name the target: {err}"
     );
 }
 

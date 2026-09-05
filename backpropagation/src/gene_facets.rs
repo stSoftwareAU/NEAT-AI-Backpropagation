@@ -211,6 +211,11 @@ pub fn attributes_for(
 
 /// Classify a neuron's activation health from its accumulate trace.
 ///
+/// A unit counts as saturated when its *mean* activation sits at an end of
+/// the squash's own range, **or** when both extremes it reached are at ends —
+/// a TANH flipping between −1 and +1 is maximally saturated even though its
+/// mean is zero, and judging the mean alone would miss it.
+///
 /// The spread test needs at least two records — with one record every neuron
 /// has a zero spread and would read as flat.
 pub fn activity_bucket(stats: Option<&NeuronTraceStats>, squash: SquashType) -> &'static str {
@@ -218,7 +223,9 @@ pub fn activity_bucket(stats: Option<&NeuronTraceStats>, squash: SquashType) -> 
         return activity::UNOBSERVED;
     };
     let mean = stats.total_activation / stats.records as f64;
-    if is_saturated(mean, squash) {
+    let pinned = at_range_end(stats.minimum_activation, squash)
+        && at_range_end(stats.maximum_activation, squash);
+    if at_range_end(mean, squash) || pinned {
         return activity::SATURATED;
     }
     let spread = stats.maximum_activation - stats.minimum_activation;
@@ -228,18 +235,18 @@ pub fn activity_bucket(stats: Option<&NeuronTraceStats>, squash: SquashType) -> 
     activity::ACTIVE
 }
 
-/// True when `mean` sits at an end of the squash's own output range.
-fn is_saturated(mean: f64, squash: SquashType) -> bool {
+/// True when `activation` sits at an end of the squash's own output range.
+fn at_range_end(activation: f64, squash: SquashType) -> bool {
     let (low, high) = apply_get_range(squash);
     let low = bounded(f64::from(low));
     let high = bounded(f64::from(high));
     match (low, high) {
         (Some(low), Some(high)) if high > low => {
-            let position = (mean - low) / (high - low);
+            let position = (activation - low) / (high - low);
             position <= SATURATION_FRACTION || position >= 1.0 - SATURATION_FRACTION
         }
-        (Some(low), None) => (mean - low).abs() <= SATURATION_ABS,
-        (None, Some(high)) => (high - mean).abs() <= SATURATION_ABS,
+        (Some(low), None) => (activation - low).abs() <= SATURATION_ABS,
+        (None, Some(high)) => (high - activation).abs() <= SATURATION_ABS,
         _ => false,
     }
 }
@@ -310,8 +317,9 @@ pub struct FacetRow<'a> {
     pub improved: bool,
     /// `|proposal| / |fd|`.
     pub magnitude_ratio: Option<f64>,
-    /// Relative error of the first-order MSE prediction.
-    pub rel_error: Option<f64>,
+    /// Relative error between the proposal-implied gradient and the finite
+    /// difference.
+    pub grad_rel_error: Option<f64>,
 }
 
 /// Aggregate outcome for one `(facet, bucket)` pair.
@@ -336,10 +344,10 @@ pub struct FacetStats {
     pub improved_pct: f64,
     /// Median `|proposal| / |fd|`.
     pub magnitude_ratio_p50: Option<f64>,
-    /// Median relative error of the first-order MSE prediction.
-    pub rel_error_p50: Option<f64>,
-    /// 90th percentile of that relative error.
-    pub rel_error_p90: Option<f64>,
+    /// Median relative gradient error.
+    pub grad_rel_error_p50: Option<f64>,
+    /// 90th percentile of that relative gradient error.
+    pub grad_rel_error_p90: Option<f64>,
 }
 
 /// Label every facet bucket `row` belongs to.
@@ -418,7 +426,7 @@ fn bucket_stats(facet: &str, bucket: &str, members: &[usize], rows: &[FacetRow<'
     let sign_agree = scored_rows.iter().filter(|r| r.sign_agree).count();
     let improved = members.iter().filter(|&&i| rows[i].improved).count();
     let ratios = sorted_values(scored_rows.iter().filter_map(|r| r.magnitude_ratio));
-    let errors = sorted_values(members.iter().filter_map(|&i| rows[i].rel_error));
+    let errors = sorted_values(members.iter().filter_map(|&i| rows[i].grad_rel_error));
     FacetStats {
         facet: facet.to_string(),
         bucket: bucket.to_string(),
@@ -429,20 +437,20 @@ fn bucket_stats(facet: &str, bucket: &str, members: &[usize], rows: &[FacetRow<'
         improved,
         improved_pct: percentage(improved, sampled),
         magnitude_ratio_p50: percentile(&ratios, 0.50),
-        rel_error_p50: percentile(&errors, 0.50),
-        rel_error_p90: percentile(&errors, 0.90),
+        grad_rel_error_p50: percentile(&errors, 0.50),
+        grad_rel_error_p90: percentile(&errors, 0.90),
     }
 }
 
 /// Collect finite values in ascending order.
-fn sorted_values(values: impl Iterator<Item = f64>) -> Vec<f64> {
+pub(crate) fn sorted_values(values: impl Iterator<Item = f64>) -> Vec<f64> {
     let mut out: Vec<f64> = values.filter(|v| v.is_finite()).collect();
     out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     out
 }
 
 /// `part / whole` as a percentage, 0 when `whole` is 0.
-fn percentage(part: usize, whole: usize) -> f64 {
+pub(crate) fn percentage(part: usize, whole: usize) -> f64 {
     if whole == 0 {
         0.0
     } else {
@@ -466,9 +474,9 @@ pub fn percentile(sorted: &[f64], p: f64) -> Option<f64> {
 /// entirely because it offers no contrast. Ties break on relative error, then
 /// on facet and bucket name, so the ranking is stable across runs.
 ///
-/// Both lists are views of one ranking: with fewer than `2 × limit` eligible
-/// buckets they overlap, which is the honest reading of a small sample rather
-/// than two independent findings.
+/// The two lists never overlap: `worst` is taken from the tail of the same
+/// ranking with everything already named in `best` removed, so a small sample
+/// yields a short worst list rather than the same bucket reported as both.
 pub fn rank_facets(
     stats: &[FacetStats],
     min_scored: usize,
@@ -493,13 +501,23 @@ pub fn rank_facets(
             .then_with(|| a.bucket.cmp(&b.bucket))
     });
     let best: Vec<FacetStats> = eligible.iter().take(limit).cloned().collect();
-    let worst: Vec<FacetStats> = eligible.iter().rev().take(limit).cloned().collect();
+    let worst: Vec<FacetStats> = eligible
+        .iter()
+        .rev()
+        .filter(|s| {
+            !best
+                .iter()
+                .any(|b| b.facet == s.facet && b.bucket == s.bucket)
+        })
+        .take(limit)
+        .cloned()
+        .collect();
     (best, worst)
 }
 
 /// Sort key for the relative-error tie-break — a missing error sorts last.
 fn error_key(stats: &FacetStats) -> f64 {
-    stats.rel_error_p50.unwrap_or(f64::INFINITY)
+    stats.grad_rel_error_p50.unwrap_or(f64::INFINITY)
 }
 
 #[cfg(test)]
@@ -605,6 +623,20 @@ mod tests {
     }
 
     #[test]
+    fn a_unit_flipping_between_both_extremes_is_saturated() {
+        // TANH alternating −1 / +1: the mean is zero, but every observation
+        // sits at an end of the range.
+        let mut flipping = trace(8, 0.0);
+        flipping.minimum_activation = -0.999;
+        flipping.maximum_activation = 0.999;
+        assert_eq!(
+            activity_bucket(Some(&flipping), SquashType::Tanh),
+            activity::SATURATED,
+            "a mean of zero must not hide two-sided saturation"
+        );
+    }
+
+    #[test]
     fn one_record_is_not_reported_as_flat() {
         let mut single = trace(1, 0.5);
         single.minimum_activation = 0.5;
@@ -642,7 +674,7 @@ mod tests {
             sign_agree,
             improved,
             magnitude_ratio: Some(2.0),
-            rel_error: Some(if sign_agree { 0.1 } else { 0.9 }),
+            grad_rel_error: Some(if sign_agree { 0.1 } else { 0.9 }),
         }
     }
 
@@ -671,7 +703,7 @@ mod tests {
         assert_eq!(ordinary.sign_agree, 2);
         assert!((ordinary.sign_agree_pct - 100.0).abs() < 1e-9);
         assert!((ordinary.improved_pct - 100.0).abs() < 1e-9);
-        assert_eq!(ordinary.rel_error_p50, Some(0.1));
+        assert_eq!(ordinary.grad_rel_error_p50, Some(0.1));
     }
 
     #[test]
@@ -693,6 +725,16 @@ mod tests {
             best.iter().all(|s| s.bucket != "aggregate"),
             "the single-gene aggregate bucket has too little evidence"
         );
+        for entry in &worst {
+            assert!(
+                !best
+                    .iter()
+                    .any(|b| b.facet == entry.facet && b.bucket == entry.bucket),
+                "{}={} was reported as both best and worst",
+                entry.facet,
+                entry.bucket
+            );
+        }
 
         // A floor above every bucket size ranks nothing at all.
         let (best, worst) = rank_facets(&stats, 99, 3);
