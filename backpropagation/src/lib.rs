@@ -8,6 +8,8 @@
 
 pub mod acceptance;
 pub mod backprop;
+pub mod blocks;
+pub mod blockwise;
 pub mod compare;
 pub mod creature_io;
 pub mod ffi;
@@ -26,6 +28,13 @@ pub use backprop::{
     ApplyDeltaCounts, ApplyOptions, BackpropConfig, BiasSignal, FLOAT_ABS_TOL, FLOAT_REL_TOL,
     LearningRateStrategy, LearningSignal, WeightSignal, apply_learnings, apply_learnings_with,
     calculate_learning_rate, count_apply_deltas, nearly_equal,
+};
+pub use blocks::{
+    BlockGraph, BlockPlan, BlockStrategy, GeneBlock, ProposalMagnitudes, plan_blocks,
+    proposal_magnitudes,
+};
+pub use blockwise::{
+    BlockCandidateRecord, BlockSynapseRef, BlocksRequest, BlocksSummary, run_blocks,
 };
 pub use compare::{
     CompareDiffReport, CompareDump, NeuronCompare, SynapseCompare, build_compare_dump,

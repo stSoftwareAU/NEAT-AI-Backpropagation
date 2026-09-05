@@ -72,6 +72,13 @@ cargo run -p neat_ai_backpropagation --release -- sweep \
   --skip-mse --step-scales 0.002,0.01 \
   --output-dir .backprop/sweep
 
+cargo run -p neat_ai_backpropagation --release -- blocks \
+  ~/src/GRQ-cluster/network.json \
+  ~/src/GRQ/.trainData-binary_116 \
+  --strategies neuron,neighbourhood,output-head --skip-mse \
+  --scorer ../NEAT-AI-scorer/target/release/rust_scorer \
+  --output-dir .backprop/blocks
+
 cargo run -p neat_ai_backpropagation --release -- gradient-check \
   ~/src/GRQ-cluster/network.json \
   /tmp/grq-train-slice \
@@ -87,7 +94,9 @@ only when post-apply MSE is strictly lower than the best so far
 (rollback otherwise). `--accept-always` keeps the candidate anyway
 (for a later full-corpus `rust_scorer` check). `--acceptance scorer`
 makes the scorer the judge instead (issue #104, below). `sweep`
-accumulates once and writes one candidate per `--step-scales` entry.
+accumulates once and writes one candidate per `--step-scales` entry;
+`blocks` accumulates once and writes one candidate per *region* of the
+creature (issue #105, below).
 
 ### Scorer-guided acceptance (issue #104)
 
@@ -185,6 +194,72 @@ flowchart LR
     E -- yes --> F[step ÷ 2] --> B
     E -- no --> G[rollback]
 ```
+
+### Blockwise candidates (issue #105)
+
+`--step-scale` shrinks *how far* the whole creature moves. `blocks`
+changes *what moves*: one accumulation pass over the corpus is carved
+into small regions, and each region becomes its own candidate creature
+for `NEAT-AI-scorer` to judge.
+
+```bash
+cargo run -p neat_ai_backpropagation --release -- blocks \
+  ~/src/GRQ-cluster/network.json \
+  ~/src/GRQ/.trainData-binary_116 \
+  --strategies neuron,neighbourhood,output-head,subgraph,top-genes \
+  --blocks-per-strategy 8 --radius 1 --skip-mse \
+  --scorer ../NEAT-AI-scorer/target/release/rust_scorer \
+  --output-dir .backprop/blocks
+```
+
+| Strategy | Genes it moves |
+| -------- | -------------- |
+| `global` | Every gene — the whole-creature apply, kept for parity |
+| `neuron` | One neuron's bias plus every synapse incident to it |
+| `neighbourhood` | One neuron plus its neighbours out to `--radius` hops |
+| `output-head` | Output neurons and the synapses that reach them |
+| `subgraph` | A seeded random connected subgraph of `--subgraph-size` neurons |
+| `top-genes` | The `--top-genes` loudest genes by proposal magnitude |
+
+Focus neurons for `neuron` / `neighbourhood` are the hidden neurons the
+accumulated learning wants to move most — a neuron's rank is its own
+`|Δbias|` plus the `|Δweight|` of every synapse touching it — so the
+blocks land where the signal is. Blocks selecting no gene, and blocks
+selecting genes an earlier block already selected, are dropped rather
+than costing a duplicate scorer run.
+
+- **One pass, many candidates.** The corpus is accumulated **once**; every
+  block is that same signal restricted to its genes, so a block candidate
+  is exactly the whole-creature candidate with the rest of the creature
+  held still. `--skip-mse` keeps it to that one pass — MSE is the only
+  part that would reread the corpus per candidate.
+- **Each candidate is judged on its own.** With `--scorer`, the baseline
+  is scored once and every written candidate is scored independently;
+  `scoreDelta` and `scoreWin` (against `--min-score-improvement`, default
+  `1e-6`) are recorded per candidate, and the CLI prints the winners best
+  first. A win margin without `--scorer` is refused, as it is on `train`.
+- **Metadata names the genes.** `blocks.json` records, per candidate, the
+  `strategy`, the focus neuron, the UUIDs of every selected neuron, the
+  from/to pair of every selected synapse, how many genes actually moved,
+  and the candidate's relative path. A block whose genes all held still
+  writes no candidate and is counted in `unmovedBlocks`.
+
+```mermaid
+flowchart TD
+    A[accumulate once over the corpus] --> B[proposal magnitude per gene]
+    B --> C[plan blocks: neuron / neighbourhood / output head / subgraph / top genes]
+    C --> D[mask the one signal to each block]
+    D --> E[apply at --step-scale → candidate creature]
+    E --> F[rust_scorer scores the candidate on its own]
+    F --> G[blocks.json: strategy, selected genes, scoreDelta, scoreWin]
+```
+
+`scripts/run-blockwise-benchmark.sh <rust_scorer>` runs the same
+creature, corpus and step scale through `--strategies global` and through
+the blockwise strategies, and prints candidates, scorer wins, elapsed
+seconds and **wins/hour** for each. Point it at the production creature
+and corpus with `CREATURE=` / `DATA_DIR=` to measure the comparison
+there.
 
 ### Train record sampling (issue #77)
 

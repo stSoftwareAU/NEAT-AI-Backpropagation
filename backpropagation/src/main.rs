@@ -2,6 +2,8 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig, LearningRateStrategy};
+use neat_ai_backpropagation::blocks::{BlockPlan, BlockStrategy};
+use neat_ai_backpropagation::blockwise::{BlocksRequest, run_blocks};
 use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, run_compare};
 use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
@@ -69,6 +71,40 @@ impl AcceptanceModeArg {
         resolve_acceptance(self == Self::Scorer, min_improvement, mse_pre_screen)
     }
 }
+
+/// Block-selection strategy selectable from the CLI (mirrors [`BlockStrategy`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum BlockStrategyArg {
+    /// Every gene — the whole-creature apply, kept for parity.
+    Global,
+    /// One neuron's bias plus every synapse incident to it.
+    Neuron,
+    /// One neuron plus its neighbours out to `--radius` hops.
+    Neighbourhood,
+    /// Output neurons and the synapses that reach them.
+    OutputHead,
+    /// A seeded random connected subgraph.
+    Subgraph,
+    /// The loudest genes by accumulated proposal magnitude.
+    TopGenes,
+}
+
+impl BlockStrategyArg {
+    /// Map the CLI value onto the library strategy.
+    fn to_config(self) -> BlockStrategy {
+        match self {
+            Self::Global => BlockStrategy::Global,
+            Self::Neuron => BlockStrategy::Neuron,
+            Self::Neighbourhood => BlockStrategy::Neighbourhood,
+            Self::OutputHead => BlockStrategy::OutputHead,
+            Self::Subgraph => BlockStrategy::Subgraph,
+            Self::TopGenes => BlockStrategy::TopGenes,
+        }
+    }
+}
+
+/// Default `blocks --strategies` list — every strategy, global first.
+const BLOCK_DEFAULT_STRATEGIES: &str = "global,neuron,neighbourhood,output-head,subgraph,top-genes";
 
 /// Build the `train` backprop config from its CLI arguments.
 fn train_backprop_config(
@@ -242,6 +278,58 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         skip_mse: bool,
         /// Output directory for `sweep.json` and `candidates/`.
+        #[arg(long, default_value_os_t = default_output_dir())]
+        output_dir: PathBuf,
+    },
+    /// Accumulate once, then apply that learning one region at a time (#105).
+    Blocks {
+        /// Creature JSON (UUID-only export).
+        creature: PathBuf,
+        /// Directory of little-endian f32 `.bin` records.
+        training_data: PathBuf,
+        /// Max records for the accumulation pass and the MSE checks.
+        #[arg(long)]
+        max_records: Option<u64>,
+        /// Sparse-selection and random-subgraph seed.
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        /// Learning rate (fixed strategy).
+        #[arg(long, default_value_t = 0.01)]
+        learning_rate: f64,
+        /// Maximum |Δbias| per apply.
+        #[arg(long, default_value_t = 1.0)]
+        maximum_bias_adjustment_scale: f64,
+        /// Maximum |Δweight| per apply.
+        #[arg(long, default_value_t = 1.0)]
+        maximum_weight_adjustment_scale: f64,
+        /// Multiply (proposed − current) by this factor before writing.
+        #[arg(long, default_value_t = DEFAULT_STEP_SCALE)]
+        step_scale: f64,
+        /// Block strategies to generate, in order.
+        #[arg(long, value_enum, value_delimiter = ',', default_value = BLOCK_DEFAULT_STRATEGIES)]
+        strategies: Vec<BlockStrategyArg>,
+        /// Focus neurons per neuron / neighbourhood / subgraph strategy.
+        #[arg(long, default_value_t = 4)]
+        blocks_per_strategy: usize,
+        /// Hops around the focus neuron for the neighbourhood strategy.
+        #[arg(long, default_value_t = 1)]
+        radius: usize,
+        /// Neurons per random-subgraph walk.
+        #[arg(long, default_value_t = 8)]
+        subgraph_size: usize,
+        /// Genes kept by the top-genes strategy.
+        #[arg(long, default_value_t = 32)]
+        top_genes: usize,
+        /// Skip every MSE pass (write and score candidates only).
+        #[arg(long, default_value_t = false)]
+        skip_mse: bool,
+        /// Optional `rust_scorer` binary — scores the baseline and each block.
+        #[arg(long)]
+        scorer: Option<PathBuf>,
+        /// Minimum scorer gain that counts as a win. Needs `--scorer`.
+        #[arg(long, default_value_t = DEFAULT_MIN_SCORE_IMPROVEMENT)]
+        min_score_improvement: f64,
+        /// Output directory for `blocks.json` and `candidates/`.
         #[arg(long, default_value_os_t = default_output_dir())]
         output_dir: PathBuf,
     },
@@ -465,6 +553,73 @@ fn run() -> Result<(), String> {
                 summary.baseline_train_mse,
                 output_dir.join("sweep.json").display()
             );
+            Ok(())
+        }
+        Commands::Blocks {
+            creature,
+            training_data,
+            max_records,
+            seed,
+            learning_rate,
+            maximum_bias_adjustment_scale,
+            maximum_weight_adjustment_scale,
+            step_scale,
+            strategies,
+            blocks_per_strategy,
+            radius,
+            subgraph_size,
+            top_genes,
+            skip_mse,
+            scorer,
+            min_score_improvement,
+            output_dir,
+        } => {
+            let cfg = BackpropConfig {
+                learning_rate,
+                initial_learning_rate: learning_rate,
+                maximum_bias_adjustment_scale,
+                maximum_weight_adjustment_scale,
+                ..BackpropConfig::default()
+            };
+            let plan = BlockPlan {
+                strategies: strategies
+                    .into_iter()
+                    .map(BlockStrategyArg::to_config)
+                    .collect(),
+                blocks_per_strategy,
+                radius,
+                subgraph_size,
+                top_genes,
+            };
+            let summary = run_blocks(BlocksRequest {
+                creature: &creature,
+                training_data: &training_data,
+                config: &cfg,
+                max_records,
+                seed,
+                step_scale,
+                plan: &plan,
+                skip_mse,
+                scorer: scorer.as_deref(),
+                min_score_improvement,
+                output_dir: &output_dir,
+            })?;
+            eprintln!(
+                "blocks: records={} candidates={} unmoved={} wrote {}",
+                summary.records,
+                summary.candidates.len(),
+                summary.unmoved_blocks,
+                output_dir.join("blocks.json").display()
+            );
+            for winner in summary.winners() {
+                eprintln!(
+                    "  win {} strategy={:?} score_delta={:+.6e} genes={}",
+                    winner.label,
+                    winner.strategy,
+                    winner.score_delta.unwrap_or_default(),
+                    winner.neurons.len() + winner.synapses.len()
+                );
+            }
             Ok(())
         }
         Commands::GradientCheck {
@@ -733,6 +888,112 @@ mod tests {
                 mse_pre_screen: true,
             })
         );
+    }
+
+    /// Parse a bare `blocks` invocation and hand back its arguments.
+    fn parse_blocks(extra: &[&str]) -> Commands {
+        let mut argv = vec!["neat_ai_backpropagation", "blocks", "creature.json", "data"];
+        argv.extend_from_slice(extra);
+        Cli::parse_from(argv).command
+    }
+
+    /// The default plan generates every strategy — including `global`, so a
+    /// blockwise run always carries the whole-creature apply to compare
+    /// against (#105).
+    #[test]
+    fn blocks_defaults_generate_every_strategy_including_global() {
+        let Commands::Blocks {
+            strategies,
+            step_scale,
+            blocks_per_strategy,
+            radius,
+            subgraph_size,
+            top_genes,
+            skip_mse,
+            min_score_improvement,
+            ..
+        } = parse_blocks(&[])
+        else {
+            panic!("expected blocks");
+        };
+        assert_eq!(strategies[0], BlockStrategyArg::Global);
+        assert_eq!(strategies.len(), 6);
+        assert!((step_scale - DEFAULT_STEP_SCALE).abs() < 1e-12);
+        assert_eq!(blocks_per_strategy, 4);
+        assert_eq!(radius, 1);
+        assert_eq!(subgraph_size, 8);
+        assert_eq!(top_genes, 32);
+        assert!(!skip_mse);
+        assert!((min_score_improvement - DEFAULT_MIN_SCORE_IMPROVEMENT).abs() < 1e-18);
+
+        // The parsed list must survive the mapping onto the library plan.
+        let plan = BlockPlan {
+            strategies: strategies
+                .into_iter()
+                .map(BlockStrategyArg::to_config)
+                .collect(),
+            blocks_per_strategy,
+            radius,
+            subgraph_size,
+            top_genes,
+        };
+        plan.validate().unwrap();
+        assert_eq!(plan.strategies, BlockPlan::default().strategies);
+    }
+
+    #[test]
+    fn blocks_accepts_a_narrowed_strategy_list() {
+        let Commands::Blocks {
+            strategies,
+            blocks_per_strategy,
+            radius,
+            ..
+        } = parse_blocks(&[
+            "--strategies",
+            "neuron,neighbourhood",
+            "--blocks-per-strategy",
+            "12",
+            "--radius",
+            "2",
+        ])
+        else {
+            panic!("expected blocks");
+        };
+        assert_eq!(
+            strategies
+                .into_iter()
+                .map(BlockStrategyArg::to_config)
+                .collect::<Vec<_>>(),
+            vec![BlockStrategy::Neuron, BlockStrategy::Neighbourhood]
+        );
+        assert_eq!(blocks_per_strategy, 12);
+        assert_eq!(radius, 2);
+    }
+
+    /// A plan that could only produce nothing is refused, not run empty.
+    #[test]
+    fn blocks_refuses_a_plan_that_generates_nothing() {
+        let Commands::Blocks {
+            strategies,
+            radius,
+            subgraph_size,
+            top_genes,
+            ..
+        } = parse_blocks(&["--blocks-per-strategy", "0"])
+        else {
+            panic!("expected blocks");
+        };
+        let plan = BlockPlan {
+            strategies: strategies
+                .into_iter()
+                .map(BlockStrategyArg::to_config)
+                .collect(),
+            blocks_per_strategy: 0,
+            radius,
+            subgraph_size,
+            top_genes,
+        };
+        assert!(plan.validate().is_err());
     }
 
     #[test]

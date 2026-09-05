@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Blockwise candidate generation: `blocks` accumulates the corpus **once**
+  and applies that one learning signal to a small region at a time instead
+  of moving every gene together. Five block strategies sit beside the
+  whole-creature `global` apply — `neuron` (a neuron's bias plus every
+  incident synapse), `neighbourhood` (a neuron plus its neighbours out to
+  `--radius` hops), `output-head`, `subgraph` (a seeded random connected
+  walk) and `top-genes` (the loudest genes by proposal magnitude) — with
+  focus neurons ranked by how much learning wants to move them. Every
+  candidate is written as a standalone creature, gated by
+  `neat_core::creature_validate`, and scored independently when `--scorer`
+  is supplied; `blocks.json` records the strategy, focus, selected neuron
+  UUIDs and synapse endpoints, moved-gene counts, MSE and scorer deltas,
+  and `scoreWin` against `--min-score-improvement`. Empty and duplicate
+  blocks are dropped rather than costing a duplicate scorer run, and a
+  block whose genes all held still is counted in `unmovedBlocks` instead of
+  writing a candidate identical to the incumbent.
+  `scripts/run-blockwise-benchmark.sh` runs `global` and the blockwise
+  strategies over the same creature, corpus and step scale and prints
+  candidates, scorer wins, elapsed seconds and wins/hour for each
+  (issue #105).
+
 - Scorer-guided acceptance: `train --acceptance scorer` puts `NEAT-AI-scorer`
   in the accept/rollback loop instead of training-slice MSE. The baseline is
   scored before epoch 1, every attempted candidate (each backtracking step
