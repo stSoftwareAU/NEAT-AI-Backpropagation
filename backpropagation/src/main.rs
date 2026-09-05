@@ -5,7 +5,9 @@ use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig, LearningRa
 use neat_ai_backpropagation::blocks::{BlockPlan, BlockStrategy};
 use neat_ai_backpropagation::blockwise::{BlocksRequest, run_blocks};
 use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, run_compare};
-use neat_ai_backpropagation::gradient_check::{GradientCheckRequest, run_gradient_check};
+use neat_ai_backpropagation::gradient_check::{
+    GradientCheckRequest, run_gradient_check, summary_text,
+};
 use neat_ai_backpropagation::ladder::{DEFAULT_STEP_SCALE_LADDER_CSV, parse_step_scale_ladder};
 use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
 use neat_ai_backpropagation::train::{
@@ -382,6 +384,12 @@ enum Commands {
         /// Restrict eligible pool to hidden genes.
         #[arg(long, default_value_t = false)]
         hidden_only: bool,
+        /// Minimum scored genes before a facet bucket is ranked (issue #107).
+        #[arg(long, default_value_t = 5)]
+        facet_min_scored: usize,
+        /// How many buckets the best / worst lists carry (issue #107).
+        #[arg(long, default_value_t = 5)]
+        rank_limit: usize,
         /// Output directory for `gradient-check.json` and `genes.jsonl`.
         #[arg(long, default_value_os_t = default_output_dir())]
         output_dir: PathBuf,
@@ -656,6 +664,8 @@ fn run() -> Result<(), String> {
             fd_eps,
             outputs_only,
             hidden_only,
+            facet_min_scored,
+            rank_limit,
             output_dir,
         } => {
             let cfg = BackpropConfig {
@@ -677,13 +687,15 @@ fn run() -> Result<(), String> {
                 step_scale,
                 outputs_only,
                 hidden_only,
+                facet_min_scored,
+                rank_limit,
                 output_dir: &output_dir,
             })?;
+            // The concise report an unattended run reads back (issue #107);
+            // the same text is written to `<output-dir>/summary.txt`.
+            eprint!("{}", summary_text(&summary));
             eprintln!(
-                "gradient-check: records={} scored={} sign_agree={:.1}% wrote {}",
-                summary.records,
-                summary.scored,
-                summary.sign_agree_pct,
+                "gradient-check: wrote {}",
                 output_dir.join("gradient-check.json").display()
             );
             for c in &summary.by_class {
@@ -728,6 +740,34 @@ mod tests {
         let mut argv = vec!["neat_ai_backpropagation", "train", "creature.json", "data"];
         argv.extend_from_slice(extra);
         Cli::parse_from(argv).command
+    }
+
+    #[test]
+    fn gradient_check_ranking_defaults_are_conservative() {
+        let Commands::GradientCheck {
+            facet_min_scored,
+            rank_limit,
+            sample_biases,
+            sample_weights,
+            ..
+        } = Cli::parse_from([
+            "neat_ai_backpropagation",
+            "gradient-check",
+            "creature.json",
+            "data",
+        ])
+        .command
+        else {
+            panic!("expected gradient-check");
+        };
+        assert_eq!(
+            facet_min_scored, 5,
+            "a bucket needs real evidence before it is ranked"
+        );
+        assert_eq!(rank_limit, 5);
+        // The caps are what bound an unattended production run.
+        assert_eq!(sample_biases, 50);
+        assert_eq!(sample_weights, 50);
     }
 
     #[test]
