@@ -7,12 +7,16 @@ name: Gitleaks
 # Third-party actions are pinned to 40-character commit SHAs so a hijacked tag
 # cannot exfiltrate CI secrets.
 #
-# gitleaks-action@v2 requires an organisation licence (GITLEAKS_LICENSE) on
+# gitleaks-action requires an organisation licence (GITLEAKS_LICENSE) on
 # org-owned repositories. Renovate- and Dependabot-authored pull requests do
 # not receive Actions secrets, so the licence is empty for them and the action
 # exits with ErrLicense. Those licence-less runs fall back to the free,
 # open-source gitleaks CLI, which needs no licence — without the fallback the
 # job would report green while scanning nothing.
+#
+# The action is pinned to v3 (Issue #118). v3 is v2's inputs, outputs and
+# behaviour on the Node 24 runtime; GitHub removes Node 20 from hosted runners
+# on 16 September 2026, after which the v2 pin would stop running at all.
 #
 # scripts/check-gitleaks-workflow.sh enforces the rules above.
 
@@ -60,7 +64,7 @@ jobs:
       # use the upstream action so the licence is applied.
       - name: Gitleaks (licensed action)
         if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

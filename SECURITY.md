@@ -77,6 +77,39 @@ rather than committed files. A repository administrator enables them under
 Once enabled they complement the gates above by raising a PR the moment an
 advisory lands.
 
+### Emergency bypass of the quarantine window
+
+[`renovate.json`](./renovate.json) holds every external bump for
+`minimumReleaseAge: "24 hours"`, so a malicious or broken release has a day to
+be caught upstream before this repository pulls it in. That default is the
+wrong one exactly once: when an advisory lands against a version this
+repository already ships, the fix is published upstream, and waiting out the
+window leaves the exploitable version in `Cargo.lock` for another day.
+
+The fast lane, so it is not improvised under pressure:
+
+1. **Who approves.** A repository administrator (a
+   [`.github/CODEOWNERS`](./.github/CODEOWNERS) owner) decides that an
+   advisory is being actively exploited, or is severe enough, to justify
+   skipping the wait. Record that decision in the pull request — the
+   advisory identifier (GHSA/RUSTSEC/CVE) and why it cannot wait.
+2. **How to raise the bump.** Renovate honours the window when it *creates* a
+   branch, so do not wait for it. Bump the dependency by hand
+   (`cargo update -p <crate> --precise <version>`, or edit the pin and run
+   `cargo update -p <crate>`) on a branch and open a pull request that cites
+   the advisory. A hand-raised bump is subject to the same required checks as
+   any other pull request, so nothing merges unreviewed or untested.
+   Alternatively, scope a `packageRules` entry to the single affected package
+   with `"minimumReleaseAge": null`, merge that, and let Renovate raise the
+   bump immediately.
+3. **Afterwards.** If a `packageRules` carve-out was used, remove it in the
+   same pull request as the bump or the one straight after — a carve-out left
+   behind quietly drops the quarantine for that package for ever. The blanket
+   24-hour default stays untouched for everything else.
+
+Nothing here bypasses a review or a status check: the quarantine window is the
+only thing waived, and only for the named advisory.
+
 ## Branch protection
 
 `Develop` is protected by a repository ruleset requiring a pull request, at

@@ -15,6 +15,12 @@
 # actions are pinned to commit SHAs: a hijacked release must not be able to run
 # unreviewed code in CI.
 #
+# The lint gates the pull request only. A `push:` trigger on `Develop` would
+# re-run, after the merge, the very run that already gated the pull request —
+# a duplicate that spends CI minutes and can leave the default branch showing
+# a red tick for a check that already passed (Issue #117). `workflow_dispatch`
+# stays so the lint can still be run by hand against any branch.
+#
 # scripts/check-markdown-lint-workflow.sh enforces the rules above.
 name: Markdown Lint
 
@@ -24,9 +30,7 @@ on:
     branches:
       - Develop
       - "milestone/**"
-  push:
-    branches:
-      - Develop
+  workflow_dispatch:
 
 permissions:
   contents: read

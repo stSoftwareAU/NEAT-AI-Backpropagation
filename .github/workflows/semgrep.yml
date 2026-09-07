@@ -38,7 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
-      image: semgrep/semgrep@sha256:67319956da3dcb58baf5b322899c15458e3963e7018a86aeeb5cd224e69cb77a  # v1.173.0
+      # Tag + digest: the digest keeps the pin immutable, and the tag is what
+      # Renovate's docker manager resolves a bump from — a bare digest is frozen
+      # for ever because there is nothing for it to compare (Issue #125).
+      image: semgrep/semgrep:1.173.0@sha256:67319956da3dcb58baf5b322899c15458e3963e7018a86aeeb5cd224e69cb77a
 
     steps:
       - name: Checkout code

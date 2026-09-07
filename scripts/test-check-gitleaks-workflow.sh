@@ -69,7 +69,7 @@ jobs:
         run: git fetch origin "$BASE_REF:$BASE_REF" || true
       - name: Gitleaks (licensed action)
         if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - name: Gitleaks (open-source CLI fallback)
         if: env.GITLEAKS_LICENSE == ''
         env:
@@ -103,7 +103,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
@@ -136,7 +136,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
@@ -166,7 +166,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
@@ -215,7 +215,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
 YAML
 )
 expect_exit "rejects a licensed-only scan that skips licence-less pull requests" 1 \
@@ -239,7 +239,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
@@ -270,7 +270,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
@@ -302,7 +302,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
@@ -333,7 +333,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
@@ -363,7 +363,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
@@ -394,7 +394,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" -o g.tar.gz
@@ -422,7 +422,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - if: env.GITLEAKS_LICENSE != ''
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
       - if: env.GITLEAKS_LICENSE == ''
         run: |
           set -euo pipefail
