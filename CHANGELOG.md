@@ -330,6 +330,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- CodeQL analyses this repository's own code only.
+  `.github/codeql/codeql-config.yml` excludes `NEAT-AI-core/**`: the
+  `setup-rust-workspace` composite checks the sibling out so the `neat-core`
+  path dependency resolves, and Rust extraction (`build-mode: none`) then read
+  it as source and filed NEAT-AI-core's findings against this repository's
+  Security tab, where nobody can fix them. NEAT-AI-core runs its own CodeQL.
+
 - GitHub Actions audit follow-ups (issues #117, #118, #125, #126, #128):
   - `.github/actions/setup-rust-workspace` replaces `setup-neat-core` and now
     installs the pinned Rust toolchain as well as the NEAT-AI-core sibling,
