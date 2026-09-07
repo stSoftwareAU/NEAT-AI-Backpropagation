@@ -54,6 +54,9 @@ jobs:
           # Rust extraction resolves the workspace from source; no build step.
           build-mode: none
           queries: security-and-quality
+          # Scopes the analysis to this repository's own code — the NEAT-AI-core
+          # sibling checkout is a dependency, not code this repo can fix.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef  # v4 (codeql-bundle-v2.26.3)
