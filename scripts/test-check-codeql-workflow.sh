@@ -64,7 +64,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
-      - uses: ./.github/actions/setup-neat-core
+      - uses: ./.github/actions/setup-rust-workspace
       - name: Initialise CodeQL
         uses: github/codeql-action/init@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef  # v4
         with:

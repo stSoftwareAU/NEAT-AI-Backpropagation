@@ -330,6 +330,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- GitHub Actions audit follow-ups (issues #117, #118, #125, #126, #128):
+  - `.github/actions/setup-rust-workspace` replaces `setup-neat-core` and now
+    installs the pinned Rust toolchain as well as the NEAT-AI-core sibling,
+    taking the rustup `components` list as an input. The
+    `dtolnay/rust-toolchain` pin lived in five call sites across `ci.yml`
+    (two jobs), `codeql.yml`, `security.yml` and `auto-format.yml`; it lives
+    in one now. Each workflow keeps its own `actions/checkout`, because
+    GitHub has to find a local composite action in the workspace before it
+    can run any step in it (issue #126).
+  - `gitleaks/gitleaks-action` moves from v2.3.9 to v3.0.0 — the same inputs,
+    outputs and behaviour on the Node 24 runtime, which GitHub makes
+    mandatory when Node 20 leaves the hosted runners (issue #118).
+  - The Markdown Lint workflow gates pull requests only; its `push:` trigger
+    on `Develop` re-ran, after every merge, the run that had already gated
+    the pull request. `workflow_dispatch` replaces it for manual runs
+    (issue #117).
+  - The Semgrep container image carries an explicit `:1.173.0` tag beside its
+    digest. The digest still pins it, but Renovate's docker manager resolves
+    bumps from the tag, so a bare digest never received one (issue #125).
+  - `SECURITY.md` documents the fast lane past Renovate's 24-hour
+    `minimumReleaseAge` quarantine for an actively exploited advisory — who
+    approves it, how to raise the bump, and how to remove the carve-out
+    afterwards (issue #128).
+
 - `TrainEpochRecord` requires the new `acceptReason` field, so a `journal.jsonl`
   line written before 0.1.26 no longer deserialises into it. An epoch's verdict
   cannot be inferred after the fact, and inventing a default would report a
