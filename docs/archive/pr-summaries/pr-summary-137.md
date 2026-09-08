@@ -82,23 +82,39 @@ classDiagram
     GradientCheck --> GeneScopeArgs : flatten
 ```
 
-**Quality gate.** `./quality.sh` stops at the `check-neat-core-version.sh`
-stage, which fails for a pre-existing reason unrelated to this diff: the
-recorded baseline in `neat-core.expected-version` is `0.10.0` while sibling
-`NEAT-AI-core` is `0.11.2` on its `Develop`. That stage reads only those two
-files and never looks at the PR diff, so it fails on every PR until the bump is
-handled in its own deliberate PR — filed as
-[#141](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/issues/141).
-Every other stage was then run individually and passed: bash syntax,
-shellcheck, the workflow validators, `actionlint`, the version-increment and
-crate-version-no-downgrade gates, codespell, `cargo deny check`,
-`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
---all-features -- -D warnings`, `cargo test --workspace --all-features --
---test-threads=2` (all suites green, 21 in the CLI binary) and
-`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`.
+**Quality gate.** `./quality.sh` was run in the foreground and stops at the
+`check-neat-core-version.sh` stage, which fails for a pre-existing reason that
+has nothing to do with this diff:
+
+```console
+FAIL: breaking neat-core bump: 0.11.1 exceeds handled baseline 0.10.0 (pre-1.0 minor increased)
+```
+
+That stage compares only `neat-core.expected-version` (`0.10.0`) against the
+sibling `NEAT-AI-core` manifest, and never reads the PR diff. Both inputs are
+byte-identical on `origin/Develop` and on this branch — `git diff --name-only
+origin/Develop HEAD` does not list `neat-core.expected-version` — so the stage
+fails on the base branch too. Clearing it means handling the breaking
+`neat-core` bump in its own deliberate PR, which is
+[#141](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/issues/141), not
+this one.
+
+Every other stage was then run individually and **all passed**: bash syntax,
+shellcheck (39 scripts), the auto-format / version-increment / CodeQL /
+Gitleaks / Semgrep / Markdown-Lint workflow validators plus their own test
+scripts, `actionlint` and its gate check, the build-affecting-version-bump and
+crate-version-no-downgrade gates, the Renovate and dependency-review
+validators, the live branch-protection policy check (all five rules OK),
+codespell, `cargo deny check`, `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings
+-D clippy::filter_next -D clippy::collapsible_if`,
+`cargo test --workspace --all-features -- --test-threads=2` (every suite
+green — 159 in the library, 21 in the CLI binary, plus the integration suites,
+0 failures) and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`.
 
 The crate version is bumped `0.1.31` → `0.1.32` (`backpropagation/src/**` is a
-build-affecting path, issue #95) and `Cargo.lock` re-synced.
+build-affecting path, issue #95) and `Cargo.lock` re-synced to the sibling
+`neat-core` checked out beside this worktree.
 
 ## Test Plan
 
