@@ -25,8 +25,12 @@ Closes #137.
 
 ## Evidence
 
-Backend/CLI change — no web interface to screenshot. The evidence is the CLI
-surface itself plus the test suite.
+Backend/CLI change — there is no web interface, so the rendered evidence below
+is the CLI surface itself, captured with the headless browser from the
+before/after `--help` capture. The test suite is the second half of the
+evidence.
+
+![Before/after flag and default counts for train, sweep, blocks and gradient-check are identical, with sweep's full flag list shown side by side](docs/evidence/issue-137-help-parity.png)
 
 **The flag/default surface is byte-identical before and after.** Every
 subcommand's `--help` was captured from the pre-change binary and again after
