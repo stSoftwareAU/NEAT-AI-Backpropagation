@@ -21,6 +21,19 @@ flattened into every variant that carries it:
 by hand, and `train_backprop_config` now takes the group rather than five loose
 scalars. Mechanical refactor: **flag names and defaults are unchanged**.
 
+`--output-dir` is deliberately left inline in all four variants. The issue lists
+it as a smaller clump, but it is a single field, and a clump is a *group* of
+fields that travel together — wrapping one field in its own `Args` struct buys
+no single point of change and only adds a level of indirection. The four
+declarations already share their type and default
+(`default_value_os_t = default_output_dir()`), so the only thing left to share
+is the doc comment — and that is the part which legitimately differs, because
+each names its own artefacts (`best.json` / `journal.jsonl` for `train`,
+`sweep.json` / `candidates/` for `sweep`, `blocks.json` for `blocks`,
+`gradient-check.json` / `genes.jsonl` for `gradient-check`). Flattening it would
+trade four accurate help strings for one vague one, which is the reverse of the
+win the three shared groups deliver.
+
 Closes #137.
 
 ## Evidence
