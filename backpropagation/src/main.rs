@@ -1,6 +1,6 @@
 //! Experimental standalone backpropagation CLI.
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig, LearningRateStrategy};
 use neat_ai_backpropagation::blocks::{BlockPlan, BlockStrategy};
 use neat_ai_backpropagation::blockwise::{BlocksRequest, run_blocks};
@@ -131,24 +131,76 @@ impl TargetStrategyArg {
 /// Default `blocks --strategies` list — every strategy, global first.
 const BLOCK_DEFAULT_STRATEGIES: &str = "global,neuron,neighbourhood,output-head,subgraph,top-genes";
 
+/// Corpus slice shared by `train`, `sweep`, `blocks` and `gradient-check`
+/// (issue #137) — declared once and flattened into each variant.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+struct CorpusArgs {
+    /// Max records to consume (omit for the full directory).
+    ///
+    /// `train` honours it as a rate over the whole corpus: every `.bin` file
+    /// contributes ceil(file_records × max_records / total_records)
+    /// seeded-random records, matching NEAT-AI trainingSampleRate. The other
+    /// subcommands read each file's leading records.
+    #[arg(long)]
+    max_records: Option<u64>,
+    /// Seed for sparse selection, record sampling and random subgraph draws.
+    #[arg(long, default_value_t = 1)]
+    seed: u64,
+}
+
+/// Learning rate and per-gene clamps shared by `train`, `sweep`, `blocks` and
+/// `gradient-check` (issue #137).
+#[derive(Debug, Clone, Args)]
+struct RateArgs {
+    /// Learning rate — the initial rate under `train
+    /// --learning-rate-strategy`, fixed everywhere else.
+    #[arg(long, default_value_t = 0.01)]
+    learning_rate: f64,
+    /// Maximum |Δbias| per apply / propose (TS trainDir default is 1).
+    #[arg(long, default_value_t = 1.0)]
+    maximum_bias_adjustment_scale: f64,
+    /// Maximum |Δweight| per apply / propose.
+    #[arg(long, default_value_t = 1.0)]
+    maximum_weight_adjustment_scale: f64,
+}
+
+impl RateArgs {
+    /// Fixed-strategy config used by `sweep`, `blocks` and `gradient-check`.
+    fn to_config(&self) -> BackpropConfig {
+        BackpropConfig {
+            learning_rate: self.learning_rate,
+            initial_learning_rate: self.learning_rate,
+            maximum_bias_adjustment_scale: self.maximum_bias_adjustment_scale,
+            maximum_weight_adjustment_scale: self.maximum_weight_adjustment_scale,
+            ..BackpropConfig::default()
+        }
+    }
+}
+
+/// Which genes an apply / propose may touch — shared by `train`, `sweep` and
+/// `gradient-check` (issue #137).
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+struct GeneScopeArgs {
+    /// Restrict to output neurons and the synapses that target them.
+    #[arg(long, default_value_t = false)]
+    outputs_only: bool,
+    /// Restrict to hidden / constant genes (skip output).
+    #[arg(long, default_value_t = false)]
+    hidden_only: bool,
+}
+
 /// Build the `train` backprop config from its CLI arguments.
 fn train_backprop_config(
-    learning_rate: f64,
+    rate: &RateArgs,
     strategy: LearningRateStrategyArg,
     learning_rate_decay: f64,
-    maximum_bias_adjustment_scale: f64,
-    maximum_weight_adjustment_scale: f64,
     normalise_gradients: bool,
 ) -> BackpropConfig {
     BackpropConfig {
-        learning_rate,
-        initial_learning_rate: learning_rate,
         learning_rate_strategy: strategy.to_config(),
         learning_rate_decay,
-        maximum_bias_adjustment_scale,
-        maximum_weight_adjustment_scale,
         normalise_gradients,
-        ..BackpropConfig::default()
+        ..rate.to_config()
     }
 }
 
@@ -212,23 +264,14 @@ enum Commands {
         /// Epochs to run.
         #[arg(long, default_value_t = 1)]
         epochs: u64,
-        /// Max records per epoch / eval (omit for the full directory).
-        ///
-        /// Honoured as a rate over the whole corpus: every `.bin` file
-        /// contributes ceil(file_records × max_records / total_records)
-        /// seeded-random records, matching NEAT-AI trainingSampleRate.
-        #[arg(long)]
-        max_records: Option<u64>,
-        /// Sparse-selection and record-sampling seed.
-        #[arg(long, default_value_t = 1)]
-        seed: u64,
+        #[command(flatten)]
+        corpus: CorpusArgs,
         /// Take each file's leading records for --max-records instead of a
         /// seeded random draw (NEAT-AI disableRandomSamples).
         #[arg(long, default_value_t = false)]
         disable_random_samples: bool,
-        /// Initial learning rate (see --learning-rate-strategy).
-        #[arg(long, default_value_t = 0.01)]
-        learning_rate: f64,
+        #[command(flatten)]
+        rate: RateArgs,
         /// Learning-rate schedule across epochs.
         #[arg(long, value_enum, default_value = "fixed")]
         learning_rate_strategy: LearningRateStrategyArg,
@@ -238,12 +281,6 @@ enum Commands {
         /// Divide multi-path gradients by sqrt(path count) (NEAT-AI #1872).
         #[arg(long, default_value_t = false)]
         normalise_gradients: bool,
-        /// Maximum |Δbias| per apply (TS trainDir default is 1).
-        #[arg(long, default_value_t = 1.0)]
-        maximum_bias_adjustment_scale: f64,
-        /// Maximum |Δweight| per apply.
-        #[arg(long, default_value_t = 1.0)]
-        maximum_weight_adjustment_scale: f64,
         /// Multiply (proposed − current) by this factor before writing.
         #[arg(long, default_value_t = DEFAULT_STEP_SCALE)]
         step_scale: f64,
@@ -280,12 +317,8 @@ enum Commands {
         /// without a value for the default grid.
         #[arg(long, num_args = 0..=1, default_missing_value = DEFAULT_STEP_SCALE_LADDER_CSV)]
         step_scale_ladder: Option<String>,
-        /// Apply only output neurons and synapses that target them.
-        #[arg(long, default_value_t = false)]
-        outputs_only: bool,
-        /// Apply only hidden / constant genes (skip output).
-        #[arg(long, default_value_t = false)]
-        hidden_only: bool,
+        #[command(flatten)]
+        scope: GeneScopeArgs,
         /// What decides accept / rollback: slice MSE, or the scorer (#104).
         ///
         /// `scorer` requires `--scorer` and makes `NEAT-AI-scorer` the judge
@@ -330,30 +363,15 @@ enum Commands {
         /// Optional holdout directory.
         #[arg(long)]
         eval_dir: Option<PathBuf>,
-        /// Max records for accumulate / train MSE.
-        #[arg(long)]
-        max_records: Option<u64>,
-        /// Sparse-selection seed.
-        #[arg(long, default_value_t = 1)]
-        seed: u64,
-        /// Learning rate (fixed strategy).
-        #[arg(long, default_value_t = 0.01)]
-        learning_rate: f64,
-        /// Maximum |Δbias| per apply.
-        #[arg(long, default_value_t = 1.0)]
-        maximum_bias_adjustment_scale: f64,
-        /// Maximum |Δweight| per apply.
-        #[arg(long, default_value_t = 1.0)]
-        maximum_weight_adjustment_scale: f64,
+        #[command(flatten)]
+        corpus: CorpusArgs,
+        #[command(flatten)]
+        rate: RateArgs,
         /// Comma-separated step scales.
         #[arg(long, default_value = SWEEP_DEFAULT_STEP_SCALES)]
         step_scales: String,
-        /// Apply only output neurons and synapses that target them.
-        #[arg(long, default_value_t = false)]
-        outputs_only: bool,
-        /// Apply only hidden / constant genes (skip output).
-        #[arg(long, default_value_t = false)]
-        hidden_only: bool,
+        #[command(flatten)]
+        scope: GeneScopeArgs,
         /// Skip train/eval MSE and only write candidates.
         #[arg(long, default_value_t = false)]
         skip_mse: bool,
@@ -367,21 +385,10 @@ enum Commands {
         creature: PathBuf,
         /// Directory of little-endian f32 `.bin` records.
         training_data: PathBuf,
-        /// Max records for the accumulation pass and the MSE checks.
-        #[arg(long)]
-        max_records: Option<u64>,
-        /// Sparse-selection and random-subgraph seed.
-        #[arg(long, default_value_t = 1)]
-        seed: u64,
-        /// Learning rate (fixed strategy).
-        #[arg(long, default_value_t = 0.01)]
-        learning_rate: f64,
-        /// Maximum |Δbias| per apply.
-        #[arg(long, default_value_t = 1.0)]
-        maximum_bias_adjustment_scale: f64,
-        /// Maximum |Δweight| per apply.
-        #[arg(long, default_value_t = 1.0)]
-        maximum_weight_adjustment_scale: f64,
+        #[command(flatten)]
+        corpus: CorpusArgs,
+        #[command(flatten)]
+        rate: RateArgs,
         /// Multiply (proposed − current) by this factor before writing.
         #[arg(long, default_value_t = DEFAULT_STEP_SCALE)]
         step_scale: f64,
@@ -427,21 +434,10 @@ enum Commands {
         creature: PathBuf,
         /// Directory of little-endian f32 `.bin` records.
         training_data: PathBuf,
-        /// Max records for accumulate and FD MSE.
-        #[arg(long)]
-        max_records: Option<u64>,
-        /// Sparse-selection / sampling seed.
-        #[arg(long, default_value_t = 1)]
-        seed: u64,
-        /// Learning rate (fixed strategy).
-        #[arg(long, default_value_t = 0.01)]
-        learning_rate: f64,
-        /// Maximum |Δbias| per propose.
-        #[arg(long, default_value_t = 1.0)]
-        maximum_bias_adjustment_scale: f64,
-        /// Maximum |Δweight| per propose.
-        #[arg(long, default_value_t = 1.0)]
-        maximum_weight_adjustment_scale: f64,
+        #[command(flatten)]
+        corpus: CorpusArgs,
+        #[command(flatten)]
+        rate: RateArgs,
         /// Step scale applied to (proposed − current).
         #[arg(long, default_value_t = 1.0)]
         step_scale: f64,
@@ -454,12 +450,8 @@ enum Commands {
         /// Central finite-difference ε.
         #[arg(long, default_value_t = 1e-4)]
         fd_eps: f64,
-        /// Restrict eligible pool to output genes.
-        #[arg(long, default_value_t = false)]
-        outputs_only: bool,
-        /// Restrict eligible pool to hidden genes.
-        #[arg(long, default_value_t = false)]
-        hidden_only: bool,
+        #[command(flatten)]
+        scope: GeneScopeArgs,
         /// Minimum scored genes before a facet bucket is ranked (issue #107).
         #[arg(long, default_value_t = 5)]
         facet_min_scored: usize,
@@ -542,15 +534,12 @@ fn run() -> Result<(), String> {
             creature,
             training_data,
             epochs,
-            max_records,
-            seed,
+            corpus,
             disable_random_samples,
-            learning_rate,
+            rate,
             learning_rate_strategy,
             learning_rate_decay,
             normalise_gradients,
-            maximum_bias_adjustment_scale,
-            maximum_weight_adjustment_scale,
             step_scale,
             trust_region_l2,
             trust_region_rms,
@@ -559,8 +548,7 @@ fn run() -> Result<(), String> {
             trust_region_weight_l2,
             trust_region_max_genes,
             step_scale_ladder,
-            outputs_only,
-            hidden_only,
+            scope,
             acceptance,
             min_score_improvement,
             mse_pre_screen,
@@ -571,11 +559,9 @@ fn run() -> Result<(), String> {
             trace_store,
         } => {
             let cfg = train_backprop_config(
-                learning_rate,
+                &rate,
                 learning_rate_strategy,
                 learning_rate_decay,
-                maximum_bias_adjustment_scale,
-                maximum_weight_adjustment_scale,
                 normalise_gradients,
             );
             // Parsed here, validated by the library — one gate every caller
@@ -597,15 +583,15 @@ fn run() -> Result<(), String> {
                 training_data: &training_data,
                 config: &cfg,
                 epochs,
-                max_records,
-                seed,
+                max_records: corpus.max_records,
+                seed: corpus.seed,
                 disable_random_samples,
                 output_dir: &output_dir,
                 scorer: scorer.as_deref(),
                 apply: ApplyOptions {
                     step_scale,
-                    outputs_only,
-                    hidden_only,
+                    outputs_only: scope.outputs_only,
+                    hidden_only: scope.hidden_only,
                 },
                 trust_region,
                 acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen)?,
@@ -632,35 +618,25 @@ fn run() -> Result<(), String> {
             creature,
             training_data,
             eval_dir,
-            max_records,
-            seed,
-            learning_rate,
-            maximum_bias_adjustment_scale,
-            maximum_weight_adjustment_scale,
+            corpus,
+            rate,
             step_scales,
-            outputs_only,
-            hidden_only,
+            scope,
             skip_mse,
             output_dir,
         } => {
             let scales = parse_step_scales(&step_scales)?;
-            let cfg = BackpropConfig {
-                learning_rate,
-                initial_learning_rate: learning_rate,
-                maximum_bias_adjustment_scale,
-                maximum_weight_adjustment_scale,
-                ..BackpropConfig::default()
-            };
+            let cfg = rate.to_config();
             let summary = run_sweep(SweepRequest {
                 creature: &creature,
                 training_data: &training_data,
                 eval_data: eval_dir.as_deref(),
                 config: &cfg,
-                max_records,
-                seed,
+                max_records: corpus.max_records,
+                seed: corpus.seed,
                 step_scales: &scales,
-                outputs_only,
-                hidden_only,
+                outputs_only: scope.outputs_only,
+                hidden_only: scope.hidden_only,
                 skip_mse,
                 output_dir: &output_dir,
             })?;
@@ -675,11 +651,8 @@ fn run() -> Result<(), String> {
         Commands::Blocks {
             creature,
             training_data,
-            max_records,
-            seed,
-            learning_rate,
-            maximum_bias_adjustment_scale,
-            maximum_weight_adjustment_scale,
+            corpus,
+            rate,
             step_scale,
             strategies,
             blocks_per_strategy,
@@ -693,13 +666,7 @@ fn run() -> Result<(), String> {
             min_score_improvement,
             output_dir,
         } => {
-            let cfg = BackpropConfig {
-                learning_rate,
-                initial_learning_rate: learning_rate,
-                maximum_bias_adjustment_scale,
-                maximum_weight_adjustment_scale,
-                ..BackpropConfig::default()
-            };
+            let cfg = rate.to_config();
             let plan = BlockPlan {
                 strategies: strategies
                     .into_iter()
@@ -718,8 +685,8 @@ fn run() -> Result<(), String> {
                 creature: &creature,
                 training_data: &training_data,
                 config: &cfg,
-                max_records,
-                seed,
+                max_records: corpus.max_records,
+                seed: corpus.seed,
                 step_scale,
                 plan: &plan,
                 skip_mse,
@@ -765,40 +732,30 @@ fn run() -> Result<(), String> {
         Commands::GradientCheck {
             creature,
             training_data,
-            max_records,
-            seed,
-            learning_rate,
-            maximum_bias_adjustment_scale,
-            maximum_weight_adjustment_scale,
+            corpus,
+            rate,
             step_scale,
             sample_biases,
             sample_weights,
             fd_eps,
-            outputs_only,
-            hidden_only,
+            scope,
             facet_min_scored,
             rank_limit,
             output_dir,
         } => {
-            let cfg = BackpropConfig {
-                learning_rate,
-                initial_learning_rate: learning_rate,
-                maximum_bias_adjustment_scale,
-                maximum_weight_adjustment_scale,
-                ..BackpropConfig::default()
-            };
+            let cfg = rate.to_config();
             let summary = run_gradient_check(GradientCheckRequest {
                 creature: &creature,
                 training_data: &training_data,
                 config: &cfg,
-                max_records,
-                seed,
+                max_records: corpus.max_records,
+                seed: corpus.seed,
                 sample_biases,
                 sample_weights,
                 fd_eps,
                 step_scale,
-                outputs_only,
-                hidden_only,
+                outputs_only: scope.outputs_only,
+                hidden_only: scope.hidden_only,
                 facet_min_scored,
                 rank_limit,
                 output_dir: &output_dir,
@@ -899,18 +856,13 @@ mod tests {
 
     #[test]
     fn train_clamps_default_to_one_not_ten() {
-        let Commands::Train {
-            maximum_bias_adjustment_scale,
-            maximum_weight_adjustment_scale,
-            ..
-        } = parse_train(&[])
-        else {
+        let Commands::Train { rate, .. } = parse_train(&[]) else {
             panic!("expected train");
         };
         // The ±10 library default mirrors the TS compare harness; the trainer
         // must not inherit it (#39).
-        assert!((maximum_bias_adjustment_scale - 1.0).abs() < 1e-12);
-        assert!((maximum_weight_adjustment_scale - 1.0).abs() < 1e-12);
+        assert!((rate.maximum_bias_adjustment_scale - 1.0).abs() < 1e-12);
+        assert!((rate.maximum_weight_adjustment_scale - 1.0).abs() < 1e-12);
         assert!(
             (BackpropConfig::default().maximum_bias_adjustment_scale - 10.0).abs() < 1e-12,
             "compare parity default must stay at the TS value"
@@ -920,7 +872,7 @@ mod tests {
     #[test]
     fn train_learning_rate_defaults_to_fixed_schedule() {
         let Commands::Train {
-            learning_rate,
+            rate,
             learning_rate_strategy,
             normalise_gradients,
             ..
@@ -928,7 +880,7 @@ mod tests {
         else {
             panic!("expected train");
         };
-        assert!((learning_rate - 0.01).abs() < 1e-12);
+        assert!((rate.learning_rate - 0.01).abs() < 1e-12);
         assert_eq!(learning_rate_strategy, LearningRateStrategyArg::Fixed);
         assert!(!normalise_gradients);
     }
@@ -957,7 +909,12 @@ mod tests {
 
     #[test]
     fn train_config_carries_schedule_and_normalisation() {
-        let cfg = train_backprop_config(0.2, LearningRateStrategyArg::Decay, 0.5, 1.0, 2.0, true);
+        let rate = RateArgs {
+            learning_rate: 0.2,
+            maximum_bias_adjustment_scale: 1.0,
+            maximum_weight_adjustment_scale: 2.0,
+        };
+        let cfg = train_backprop_config(&rate, LearningRateStrategyArg::Decay, 0.5, true);
         assert_eq!(cfg.learning_rate_strategy, LearningRateStrategy::Decay);
         assert!((cfg.initial_learning_rate - 0.2).abs() < 1e-12);
         assert!((cfg.learning_rate_decay - 0.5).abs() < 1e-12);
@@ -972,25 +929,25 @@ mod tests {
     fn record_sampling_is_random_unless_disabled() {
         let Commands::Train {
             disable_random_samples,
-            seed,
+            corpus,
             ..
         } = parse_train(&[])
         else {
             panic!("expected train");
         };
         assert!(!disable_random_samples);
-        assert_eq!(seed, 1);
+        assert_eq!(corpus.seed, 1);
 
         let Commands::Train {
             disable_random_samples,
-            seed,
+            corpus,
             ..
         } = parse_train(&["--disable-random-samples", "--seed", "42"])
         else {
             panic!("expected train");
         };
         assert!(disable_random_samples);
-        assert_eq!(seed, 42);
+        assert_eq!(corpus.seed, 42);
     }
 
     /// MSE acceptance stays the default, so an existing `train` invocation is
@@ -1292,6 +1249,178 @@ mod tests {
             }
         );
         region.validate().expect("a positive budget is usable");
+    }
+
+    /// Every subcommand that carries the corpus slice, the rate group or the
+    /// gene scope (issue #137) — the flags must behave identically in each.
+    const CORPUS_SUBCOMMANDS: [&str; 4] = ["train", "sweep", "blocks", "gradient-check"];
+    const GENE_SCOPE_SUBCOMMANDS: [&str; 3] = ["train", "sweep", "gradient-check"];
+
+    /// Parse `<subcommand> creature.json data <extra...>`.
+    fn parse_subcommand(subcommand: &str, extra: &[&str]) -> Commands {
+        let mut argv = vec![
+            "neat_ai_backpropagation",
+            subcommand,
+            "creature.json",
+            "data",
+        ];
+        argv.extend_from_slice(extra);
+        Cli::parse_from(argv).command
+    }
+
+    /// The corpus slice of whichever subcommand carries one.
+    fn corpus_of(command: &Commands) -> &CorpusArgs {
+        match command {
+            Commands::Train { corpus, .. }
+            | Commands::Sweep { corpus, .. }
+            | Commands::Blocks { corpus, .. }
+            | Commands::GradientCheck { corpus, .. } => corpus,
+            other => panic!("subcommand carries no corpus group: {other:?}"),
+        }
+    }
+
+    /// The rate group of whichever subcommand carries one.
+    fn rate_of(command: &Commands) -> &RateArgs {
+        match command {
+            Commands::Train { rate, .. }
+            | Commands::Sweep { rate, .. }
+            | Commands::Blocks { rate, .. }
+            | Commands::GradientCheck { rate, .. } => rate,
+            other => panic!("subcommand carries no rate group: {other:?}"),
+        }
+    }
+
+    /// The gene scope of whichever subcommand carries one.
+    fn gene_scope_of(command: &Commands) -> &GeneScopeArgs {
+        match command {
+            Commands::Train { scope, .. }
+            | Commands::Sweep { scope, .. }
+            | Commands::GradientCheck { scope, .. } => scope,
+            other => panic!("subcommand carries no gene scope: {other:?}"),
+        }
+    }
+
+    /// Sharing one declaration must leave every flag name and default exactly
+    /// where it was (issue #137).
+    #[test]
+    fn the_corpus_group_parses_identically_in_every_subcommand() {
+        for subcommand in CORPUS_SUBCOMMANDS {
+            assert_eq!(
+                corpus_of(&parse_subcommand(subcommand, &[])),
+                &CorpusArgs {
+                    max_records: None,
+                    seed: 1,
+                },
+                "{subcommand} corpus defaults"
+            );
+            assert_eq!(
+                corpus_of(&parse_subcommand(
+                    subcommand,
+                    &["--max-records", "7", "--seed", "42"]
+                )),
+                &CorpusArgs {
+                    max_records: Some(7),
+                    seed: 42,
+                },
+                "{subcommand} corpus flags"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rate_group_parses_identically_in_every_subcommand() {
+        for subcommand in CORPUS_SUBCOMMANDS {
+            let defaults = parse_subcommand(subcommand, &[]);
+            let rate = rate_of(&defaults);
+            assert!(
+                (rate.learning_rate - 0.01).abs() < 1e-12,
+                "{subcommand} learning-rate default"
+            );
+            assert!(
+                (rate.maximum_bias_adjustment_scale - 1.0).abs() < 1e-12,
+                "{subcommand} bias clamp default"
+            );
+            assert!(
+                (rate.maximum_weight_adjustment_scale - 1.0).abs() < 1e-12,
+                "{subcommand} weight clamp default"
+            );
+
+            let explicit = parse_subcommand(
+                subcommand,
+                &[
+                    "--learning-rate",
+                    "0.25",
+                    "--maximum-bias-adjustment-scale",
+                    "2",
+                    "--maximum-weight-adjustment-scale",
+                    "3",
+                ],
+            );
+            let rate = rate_of(&explicit);
+            assert!((rate.learning_rate - 0.25).abs() < 1e-12, "{subcommand}");
+            assert!(
+                (rate.maximum_bias_adjustment_scale - 2.0).abs() < 1e-12,
+                "{subcommand}"
+            );
+            assert!(
+                (rate.maximum_weight_adjustment_scale - 3.0).abs() < 1e-12,
+                "{subcommand}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gene_scope_group_parses_identically_in_every_subcommand() {
+        for subcommand in GENE_SCOPE_SUBCOMMANDS {
+            assert_eq!(
+                gene_scope_of(&parse_subcommand(subcommand, &[])),
+                &GeneScopeArgs {
+                    outputs_only: false,
+                    hidden_only: false,
+                },
+                "{subcommand} scope defaults"
+            );
+            assert_eq!(
+                gene_scope_of(&parse_subcommand(subcommand, &["--outputs-only"])),
+                &GeneScopeArgs {
+                    outputs_only: true,
+                    hidden_only: false,
+                },
+                "{subcommand} --outputs-only"
+            );
+            assert_eq!(
+                gene_scope_of(&parse_subcommand(subcommand, &["--hidden-only"])),
+                &GeneScopeArgs {
+                    outputs_only: false,
+                    hidden_only: true,
+                },
+                "{subcommand} --hidden-only"
+            );
+        }
+    }
+
+    /// `sweep`, `blocks` and `gradient-check` all build the same fixed-strategy
+    /// config from the rate group — the mapping must carry every field.
+    #[test]
+    fn the_rate_group_builds_the_fixed_strategy_config() {
+        let parsed = parse_subcommand(
+            "sweep",
+            &[
+                "--learning-rate",
+                "0.25",
+                "--maximum-bias-adjustment-scale",
+                "2",
+                "--maximum-weight-adjustment-scale",
+                "3",
+            ],
+        );
+        let cfg = rate_of(&parsed).to_config();
+        assert!((cfg.learning_rate - 0.25).abs() < 1e-12);
+        assert!((cfg.initial_learning_rate - 0.25).abs() < 1e-12);
+        assert!((cfg.maximum_bias_adjustment_scale - 2.0).abs() < 1e-12);
+        assert!((cfg.maximum_weight_adjustment_scale - 3.0).abs() < 1e-12);
+        assert_eq!(cfg.learning_rate_strategy, LearningRateStrategy::Fixed);
+        assert!(!cfg.normalise_gradients);
     }
 
     #[test]

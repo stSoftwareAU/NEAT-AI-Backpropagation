@@ -14,4 +14,19 @@
 # or any memetic weight type — it hands creature JSON straight to neat-core —
 # so no code change is required. Verified by a clean `cargo build --release`
 # and the full test suite passing against sibling neat-core 0.10.0.
-0.10.0
+#
+# 0.10.0 -> 0.11.2: acknowledge two neat-core bumps.
+#   * 0.11.0 (neat-core #619, "Milestone: Pruning") is additive — new
+#     `prune_*` modules and parity fixtures; nothing this crate names changed.
+#   * 0.11.2 (neat-core #626, Issue #613) split every kernel re-exported from
+#     `neat_core::simd` in two: the existing safe name now validates the span
+#     and falls back to the checked scalar path, and a new `*_unchecked`
+#     `unsafe fn` twin carries the out-of-bounds precondition as a `# Safety`
+#     contract. That is the breaking half, and `backpropagation` never names
+#     `neat_core::simd` or any kernel — it reaches neat-core only through
+#     `CreatureExport`, `compile_creature`, `creature_validate`, the propagate
+#     and MSE entry points and the gene-facet helpers — so no code change is
+#     required. Verified against sibling neat-core 0.11.2 by a clean
+#     `cargo build --all-targets`, `cargo clippy --all-targets -- -D warnings`
+#     and the full test suite (17 test binaries, 0 failures).
+0.11.2

@@ -330,6 +330,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The CLI argument groups repeated across `train`, `sweep`, `blocks` and
+  `gradient-check` are declared once and flattened into each subcommand
+  (issue #137): `CorpusArgs` (`--max-records`, `--seed`), `RateArgs`
+  (`--learning-rate`, `--maximum-bias-adjustment-scale`,
+  `--maximum-weight-adjustment-scale`) and `GeneScopeArgs` (`--outputs-only`,
+  `--hidden-only`). Flag names and defaults are unchanged; only the `--help`
+  descriptions were reworded to cover every subcommand that carries the flag.
+
 - CodeQL analyses this repository's own code only.
   `.github/codeql/codeql-config.yml` excludes `NEAT-AI-core/**`: the
   `setup-rust-workspace` composite checks the sibling out so the `neat-core`
