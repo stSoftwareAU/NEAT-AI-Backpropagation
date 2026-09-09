@@ -575,7 +575,7 @@ pub fn accumulate_creature_learning_selected(
 
         if !layout.aggregates.is_empty() {
             layout.linearise_aggregates(
-                &network.activations,
+                network.activations(),
                 &mut inward_counts,
                 &mut inward_indices,
             );
@@ -583,13 +583,13 @@ pub fn accumulate_creature_learning_selected(
 
         let mut neurons: Vec<NeuronInput> = Vec::with_capacity(layout.neuron_count);
         for (prop_idx, tmpl) in layout.neuron_templates.iter().enumerate() {
-            let activation = network.activations.get(prop_idx).copied().unwrap_or(0.0);
+            let activation = network.activations().get(prop_idx).copied().unwrap_or(0.0);
             let hint = if prop_idx < layout.input_count {
                 activation
             } else {
                 let rel = prop_idx - layout.input_count;
                 network
-                    .hint_values_buffer
+                    .hint_values()
                     .get(rel)
                     .copied()
                     .unwrap_or(activation)
