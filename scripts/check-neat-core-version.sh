@@ -9,8 +9,17 @@
 # Mechanism — version-baseline check:
 #   * this crate records the last-handled neat-core version in the checked-in
 #     `neat-core.expected-version` file.
-#   * CI reads neat-core's actual version from the cloned sibling
-#     `../NEAT-AI-core/Cargo.toml` ([workspace.package] version).
+#   * the gate reads neat-core's actual version from the sibling checkout at
+#     `../NEAT-AI-core` ([workspace.package] version in its Cargo.toml).
+#   * That version is taken from the branch that GOVERNS neat-core — its
+#     default branch, `Develop` (`--core-ref`) — not from whatever branch the
+#     sibling working tree happens to be parked on (issue #141). CI clones
+#     neat-core at `Develop`, so the two agree there; locally the sibling is a
+#     shared developer checkout that may sit on any unmerged branch, and an
+#     unmerged bump is not a bump neat-core has presented. When the ref cannot
+#     be resolved (a shallow, detached CI checkout carries no branch of that
+#     name) the working-tree manifest is read instead, and the gate says which
+#     source it used.
 #   * The "breaking component" is the major for >= 1.0 releases and the minor
 #     for pre-1.0 (0.x) releases, per SemVer. The gate FAILS when neat-core's
 #     breaking component is greater than the recorded baseline; it PASSES on
@@ -21,7 +30,8 @@
 # neat-core version.
 #
 # Usage:
-#   check-neat-core-version.sh [--baseline PATH] [--core-manifest PATH]
+#   check-neat-core-version.sh [--baseline PATH] [--core-manifest PATH] \
+#                              [--core-ref REF]
 #
 # Defaults resolve the same paths Cargo uses: the baseline at the repo root and
 # the neat-core workspace manifest at the sibling `../NEAT-AI-core/Cargo.toml`
@@ -37,6 +47,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: check-neat-core-version.sh [--baseline PATH] [--core-manifest PATH]
+                                  [--core-ref REF]
 
 Options:
   --baseline PATH        File recording the last-handled neat-core version
@@ -44,6 +55,10 @@ Options:
   --core-manifest PATH   neat-core workspace Cargo.toml carrying
                          [workspace.package] version (default: the sibling
                          ../NEAT-AI-core/Cargo.toml).
+  --core-ref REF         Branch of the neat-core checkout that governs the
+                         comparison (default: Develop). "origin/REF" wins over
+                         a local "REF". Pass an empty value to read the
+                         sibling working tree as it stands instead.
   -h, --help             Show this message.
 
 Exits 0 when compatible, 1 on an unhandled breaking bump, 2 on a usage error.
@@ -52,6 +67,7 @@ EOF
 
 BASELINE=""
 CORE_MANIFEST=""
+CORE_REF="Develop"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --baseline)
@@ -62,6 +78,11 @@ while [[ $# -gt 0 ]]; do
     --core-manifest)
       [[ $# -ge 2 ]] || { echo "Missing value for --core-manifest" >&2; usage >&2; exit 2; }
       CORE_MANIFEST="$2"
+      shift 2
+      ;;
+    --core-ref)
+      [[ $# -ge 2 ]] || { echo "Missing value for --core-ref" >&2; usage >&2; exit 2; }
+      CORE_REF="$2"
       shift 2
       ;;
     -h|--help)
@@ -105,6 +126,56 @@ read_baseline_version() {
   ' "$BASELINE"
 }
 
+# Resolve which copy of the neat-core manifest the comparison reads.
+#
+# Default: the copy on the governing branch ($CORE_REF) of the sibling
+# checkout, so a shared working tree parked on an unmerged branch cannot fail
+# this repo's gate (issue #141). Falls back to the working-tree file when the
+# sibling is not a git checkout or carries no such ref — the shape of CI's
+# shallow detached clone. Either way the source is announced, so a fallback is
+# visible rather than silent.
+CORE_SOURCE="working tree at $CORE_MANIFEST"
+RESOLVED_MANIFEST="$CORE_MANIFEST"
+TEMP_MANIFEST=""
+# Invoked indirectly by the EXIT trap below.
+# shellcheck disable=SC2329
+cleanup() {
+  if [[ -n "$TEMP_MANIFEST" ]]; then
+    rm -f "$TEMP_MANIFEST"
+  fi
+}
+trap cleanup EXIT
+
+resolve_governing_manifest() {
+  local core_dir base candidate ref prefix
+  [[ -n "$CORE_REF" ]] || return 0
+
+  core_dir="$(cd "$(dirname "$CORE_MANIFEST")" && pwd -P)"
+  base="$(basename "$CORE_MANIFEST")"
+
+  git -C "$core_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+
+  ref=""
+  for candidate in "origin/$CORE_REF" "$CORE_REF"; do
+    if git -C "$core_dir" rev-parse --verify --quiet "$candidate^{commit}" >/dev/null 2>&1; then
+      ref="$candidate"
+      break
+    fi
+  done
+  [[ -n "$ref" ]] || return 0
+
+  prefix="$(git -C "$core_dir" rev-parse --show-prefix)"
+  TEMP_MANIFEST="$(mktemp)"
+  # The ref resolves, so the manifest must be readable at it. A failure here is
+  # a real fault (the file does not exist on that branch), not a fallback.
+  if ! git -C "$core_dir" show "$ref:$prefix$base" >"$TEMP_MANIFEST" 2>/dev/null; then
+    echo "FAIL: cannot read '$prefix$base' at ref '$ref' in $core_dir" >&2
+    exit 2
+  fi
+  RESOLVED_MANIFEST="$TEMP_MANIFEST"
+  CORE_SOURCE="ref '$ref' in $core_dir"
+}
+
 # Extract [workspace.package] version from the neat-core manifest. Only the
 # version key that lives under the [workspace.package] table counts — a bare
 # scan would also match dependency versions.
@@ -118,7 +189,7 @@ read_core_version() {
         exit
       }
     }
-  ' "$CORE_MANIFEST"
+  ' "$RESOLVED_MANIFEST"
 }
 
 # Validate X.Y.Z (optionally with a -prerelease/+build suffix we ignore) and
@@ -141,9 +212,12 @@ if [[ -z "$baseline_raw" ]]; then
   exit 2
 fi
 
+resolve_governing_manifest
+echo "INFO neat-core version read from $CORE_SOURCE"
+
 core_raw="$(read_core_version)"
 if [[ -z "$core_raw" ]]; then
-  echo "FAIL: no [workspace.package] version found in $CORE_MANIFEST" >&2
+  echo "FAIL: no [workspace.package] version found in $CORE_SOURCE" >&2
   exit 2
 fi
 
@@ -152,7 +226,7 @@ if ! baseline_parts="$(parse_semver "$baseline_raw")"; then
   exit 2
 fi
 if ! core_parts="$(parse_semver "$core_raw")"; then
-  echo "FAIL: malformed neat-core version '$core_raw' in $CORE_MANIFEST (expected X.Y.Z)" >&2
+  echo "FAIL: malformed neat-core version '$core_raw' in $CORE_SOURCE (expected X.Y.Z)" >&2
   exit 2
 fi
 
