@@ -6,21 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
-
-- **Builds against neat-core 0.13.0 — `CompiledNetwork`'s fields went private
-  (neat-core #625 / #633; GRQ #4724).** neat-core 0.12.0 made every
-  `CompiledNetwork` field private behind borrow-only accessors (neat-core #625 /
-  #633) and 0.13.0 followed the same day. Every GRQ host builds the Rust
-  consumers from the sibling neat-core at head, so `rust_scorer` failed to
-  compile fleet-wide within minutes and, with no fallback engine, the fleet
-  stopped scoring ([GRQ
-  #4724](https://github.com/stSoftwareAU/GRQ/issues/4724)).
-  `propagate_layout.rs` read `activations` and `hint_values_buffer` directly;
-  those reads now go through `activations()` and `hint_values()`.
-  `neat-core.expected-version` acknowledges 0.13.0 (the earlier deliberate hold
-  on 0.12.0 is lifted now that it has merged).
-
 ### Added
 
 - Trust-region update budget for the whole-creature apply: `--step-scale` is a
@@ -435,6 +420,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `🌀 · 2 accepts / 4 epochs · score: … improved by …` (issue #31).
 
 ### Fixed
+
+- **Builds against neat-core 0.13.0 — `CompiledNetwork`'s fields went private
+  (neat-core #625 / #633; GRQ #4724).** neat-core 0.12.0 made every
+  `CompiledNetwork` field private behind borrow-only accessors (neat-core #625 /
+  #633) and 0.13.0 followed the same day. Every GRQ host builds the Rust
+  consumers from the sibling neat-core at head, so `rust_scorer` failed to
+  compile fleet-wide within minutes and, with no fallback engine, the fleet
+  stopped scoring ([GRQ
+  #4724](https://github.com/stSoftwareAU/GRQ/issues/4724)).
+  `propagate_layout.rs` read `activations` and `hint_values_buffer` directly;
+  those reads now go through `activations()` and `hint_values()`.
+  `neat-core.expected-version` acknowledges 0.13.0 (the earlier deliberate hold
+  on 0.12.0 is lifted now that it has merged).
 
 - The neat-core breaking-bump gate
   ([`scripts/check-neat-core-version.sh`](./scripts/check-neat-core-version.sh))
