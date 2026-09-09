@@ -153,7 +153,10 @@ jobs:
         run: cargo metadata --no-deps --format-version 1 > /dev/null
 
       - name: Gate on unhandled breaking neat-core bump
-        run: ./scripts/check-neat-core-version.sh
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-neat-core-version.sh
+          ./scripts/check-neat-core-version.sh
 
       - name: Validate CodeQL code-scanning workflow
         run: |

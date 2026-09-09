@@ -29,4 +29,19 @@
 #     required. Verified against sibling neat-core 0.11.2 by a clean
 #     `cargo build --all-targets`, `cargo clippy --all-targets -- -D warnings`
 #     and the full test suite (17 test binaries, 0 failures).
-0.11.2
+#
+# 0.11.2 -> 0.11.3: acknowledge neat-core #628 (Issue #614), which reworked
+# `bump-deps.sh` so a per-crate `cargo update` cannot drag a quarantined crate
+# past the release-age window. The bump touches no Rust source at all — the
+# diff `0.11.2..0.11.3` is `bump-deps.sh`, its bats tests, `SECURITY.md`, a PR
+# summary and the version line itself — so there is no API surface for
+# `backpropagation` to name and no code change is required. A patch bump would
+# have cleared the gate on drift alone; it is recorded here so the baseline
+# states the version actually reviewed. Verified against neat-core `Develop`
+# at 0.11.3 by a full `./quality.sh` run (issue #141).
+#
+# Deliberately NOT bumped to 0.12.0: that version exists only on an unmerged
+# neat-core branch. Acknowledging it here would pre-silence this gate for a
+# breaking change that has not landed — the gate compares against neat-core's
+# `Develop`, which is what CI builds (issue #141).
+0.11.3

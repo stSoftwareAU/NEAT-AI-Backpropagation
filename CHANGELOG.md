@@ -421,6 +421,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The neat-core breaking-bump gate
+  ([`scripts/check-neat-core-version.sh`](./scripts/check-neat-core-version.sh))
+  no longer fails every local `./quality.sh` run because of a branch nobody in
+  this repo chose. It compared `neat-core.expected-version` against the sibling
+  `../NEAT-AI-core` **working tree** — a shared developer checkout that may sit
+  on any unmerged branch — so a local branch carrying `0.12.0` failed the gate
+  while neat-core's `Develop` was `0.11.3`, inside the recorded baseline. The
+  version is now read from the branch that *governs* neat-core (`--core-ref`,
+  default `Develop`; `origin/REF` wins over a local `REF`), which is also what
+  CI clones and builds. Divergence is never silent: the gate warns when the
+  working tree carries a different version from the governing branch (the
+  unpinned `path` dependency compiles the working tree, so a local build
+  against an unmerged neat-core is reported), and warns again when it falls
+  back to the working tree because no such branch resolves. `--core-ref ''`
+  restores the previous working-tree comparison. Adds
+  `scripts/test-check-neat-core-version.sh` — the gate had no test companion —
+  and wires it into `quality.sh` and CI beside the checker, as every other gate
+  already is. The recorded baseline moves `0.11.2 -> 0.11.3` with the review of
+  that (source-free) bump written into the file; it is deliberately **not**
+  moved to `0.12.0`, which exists only on an unmerged neat-core branch
+  (issue #141).
+
 - `best.json` — and the identical bytes returned over the C ABI as
   `bestCreatureJson` — no longer re-attach the **source** creature's
   `uuid`. That uuid is a content-derived v5 hash over the creature's

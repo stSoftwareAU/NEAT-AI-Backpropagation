@@ -133,6 +133,22 @@ tracked-tree changes back to the PR branch. It does **not** bump
 `neat-core.expected-version` — acknowledge breaking neat-core bumps
 deliberately in the same PR that updates this crate for them.
 
+The gate ([`scripts/check-neat-core-version.sh`](./scripts/check-neat-core-version.sh))
+compares that baseline against neat-core's **`Develop`** branch, not against
+whatever branch your sibling `../NEAT-AI-core` checkout is parked on — an
+unmerged branch is not a bump neat-core has presented, so it must not fail
+your PR (issue #141). Pass `--core-ref ''` to compare against the sibling
+working tree as it stands when you are deliberately building against a local
+neat-core branch.
+
+Because the `path` dependency compiles the working tree rather than the branch,
+the gate **warns** whenever the two versions differ — a local build against an
+unmerged neat-core is reported, it just does not fail the gate. It also warns
+and falls back to the working tree when the sibling is not a git checkout or
+carries no `Develop` (a `--single-branch` clone, say). `origin/Develop` is read
+as of your last fetch; the gate does no network I/O, and CI clones neat-core
+fresh, so CI is the copy that enforces.
+
 ## Version bumping
 
 **Every binary-affecting change must bump the patch version in
