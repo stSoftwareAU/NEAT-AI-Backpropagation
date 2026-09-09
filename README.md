@@ -28,7 +28,8 @@ parent/
 (`../../NEAT-AI-core/neat-core`). Breaking SemVer bumps are gated by
 [`neat-core.expected-version`](./neat-core.expected-version), compared against
 neat-core's `Develop` branch rather than whatever branch the sibling checkout
-sits on (issue #141).
+sits on — falling back to the working tree, with a warning, when no such branch
+resolves (issue #141).
 
 Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.98.0`).
 

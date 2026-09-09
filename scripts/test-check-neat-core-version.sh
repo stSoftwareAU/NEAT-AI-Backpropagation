@@ -127,6 +127,10 @@ expect_exit "malformed baseline version is a usage error" 2 \
 expect_exit "empty baseline is a usage error" 2 \
   check "$(: >"$WORK_DIR/baseline-empty"; printf '%s\n' "$WORK_DIR/baseline-empty")" "$MANIFESTS/equal/Cargo.toml" || true
 expect_exit "unknown argument is a usage error" 2 "$CHECKER" --nope || true
+expect_exit "--core-ref without a value is a usage error" 2 "$CHECKER" --core-ref || true
+expect_exit "--baseline without a value is a usage error" 2 "$CHECKER" --baseline || true
+expect_exit "--core-manifest without a value is a usage error" 2 "$CHECKER" --core-manifest || true
+expect_exit "--help succeeds" 0 "$CHECKER" --help || true
 
 # ---------------------------------------------------------------------------
 # Ref resolution (Issue #141). A shared sibling checkout parked on an unmerged
@@ -157,8 +161,17 @@ expect_exit "parked feature branch does not fail the gate" 0 \
 expect_output "gate reports the governing ref it read" 'origin/Develop' || true
 expect_output "gate reports the governing branch version" '0\.11\.3' || true
 
+expect_output "divergence between the ref and the working tree is announced" \
+  'working tree is at 0\.12\.0, not 0\.11\.3' || true
+
 expect_exit "--core-ref '' still reads the parked working tree" 1 \
   "$CHECKER" --core-ref "" --baseline "$BASE_0_11_2" --core-manifest "$SIBLING/Cargo.toml" || true
+
+# A non-default --core-ref selects that branch instead.
+expect_exit "a non-default --core-ref selects that branch" 1 \
+  "$CHECKER" --core-ref milestone/breaking --baseline "$BASE_0_11_2" \
+  --core-manifest "$SIBLING/Cargo.toml" || true
+expect_output "non-default ref is named in the output" "milestone/breaking" || true
 
 # A real breaking bump on the governing branch must still fail.
 write_manifest "$UPSTREAM/Cargo.toml" 0.13.0
@@ -212,6 +225,24 @@ write_manifest "$DETACHED/Cargo.toml" 0.11.3
 expect_exit "unresolvable ref falls back to the working tree" 0 \
   "$CHECKER" --baseline "$BASE_0_11_2" --core-manifest "$DETACHED/Cargo.toml" || true
 expect_output "fallback announces the working-tree source" 'working tree' || true
+expect_output "fallback warns rather than passing itself off as normal" \
+  'WARN neither .origin/Develop. nor .Develop. resolves' || true
+
+# A manifest that exists in the working tree but not on the governing branch is
+# a real fault, not another fallback: the ref resolved, the file did not.
+ABSENT_ON_REF="$WORK_DIR/core-absent-on-ref"
+mkdir -p "$ABSENT_ON_REF"
+printf 'placeholder\n' >"$ABSENT_ON_REF/README.md"
+git -C "$ABSENT_ON_REF" init -q -b Develop
+git -C "$ABSENT_ON_REF" config user.name test
+git -C "$ABSENT_ON_REF" config user.email test@example.com
+git -C "$ABSENT_ON_REF" add README.md
+git -C "$ABSENT_ON_REF" commit -q -m "Develop without a manifest"
+write_manifest "$ABSENT_ON_REF/Cargo.toml" 0.12.0
+expect_exit "manifest missing on the governing branch fails loudly" 2 \
+  "$CHECKER" --baseline "$BASE_0_11_2" --core-manifest "$ABSENT_ON_REF/Cargo.toml" || true
+expect_output "the loud failure names the ref it could not read" \
+  "cannot read 'Cargo.toml' at ref 'Develop'" || true
 
 # Not a git checkout at all: the manifest on disk is all there is.
 expect_exit "non-git manifest falls back to the working tree" 1 \

@@ -141,6 +141,14 @@ your PR (issue #141). Pass `--core-ref ''` to compare against the sibling
 working tree as it stands when you are deliberately building against a local
 neat-core branch.
 
+Because the `path` dependency compiles the working tree rather than the branch,
+the gate **warns** whenever the two versions differ — a local build against an
+unmerged neat-core is reported, it just does not fail the gate. It also warns
+and falls back to the working tree when the sibling is not a git checkout or
+carries no `Develop` (a `--single-branch` clone, say). `origin/Develop` is read
+as of your last fetch; the gate does no network I/O, and CI clones neat-core
+fresh, so CI is the copy that enforces.
+
 ## Version bumping
 
 **Every binary-affecting change must bump the patch version in

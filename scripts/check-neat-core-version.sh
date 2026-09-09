@@ -16,10 +16,21 @@
 #     sibling working tree happens to be parked on (issue #141). CI clones
 #     neat-core at `Develop`, so the two agree there; locally the sibling is a
 #     shared developer checkout that may sit on any unmerged branch, and an
-#     unmerged bump is not a bump neat-core has presented. When the ref cannot
-#     be resolved (a shallow, detached CI checkout carries no branch of that
-#     name) the working-tree manifest is read instead, and the gate says which
-#     source it used.
+#     unmerged bump is not a bump neat-core has presented.
+#   * Divergence is never silent. When the working tree carries a DIFFERENT
+#     version from the governing branch the gate WARNs, naming both — the
+#     unpinned `path` dependency compiles the working tree, so a developer
+#     building locally against an unmerged neat-core is told so even though
+#     that unmerged bump does not fail the gate. Likewise, when the ref cannot
+#     be resolved (the sibling is not a git checkout, or was cloned
+#     `--single-branch` off another branch) the gate WARNs that it fell back to
+#     the working tree rather than passing the fallback off as the ordinary
+#     path. Either way it says which source it read.
+#   * Known limitation: `origin/REF` is read as of the last fetch — this gate
+#     does no network I/O. A sibling checkout that has not fetched for a while
+#     is compared against a stale `Develop`. CI clones neat-core fresh on every
+#     run, so the enforcing copy of this gate is never stale; a local pass is
+#     advisory to that extent.
 #   * The "breaking component" is the major for >= 1.0 releases and the minor
 #     for pre-1.0 (0.x) releases, per SemVer. The gate FAILS when neat-core's
 #     breaking component is greater than the recorded baseline; it PASSES on
@@ -131,9 +142,9 @@ read_baseline_version() {
 # Default: the copy on the governing branch ($CORE_REF) of the sibling
 # checkout, so a shared working tree parked on an unmerged branch cannot fail
 # this repo's gate (issue #141). Falls back to the working-tree file when the
-# sibling is not a git checkout or carries no such ref — the shape of CI's
-# shallow detached clone. Either way the source is announced, so a fallback is
-# visible rather than silent.
+# sibling is not a git checkout or carries no branch of that name, and WARNs
+# when it does, so the fallback is loud rather than passed off as the ordinary
+# path.
 CORE_SOURCE="working tree at $CORE_MANIFEST"
 RESOLVED_MANIFEST="$CORE_MANIFEST"
 TEMP_MANIFEST=""
@@ -162,10 +173,14 @@ resolve_governing_manifest() {
       break
     fi
   done
-  [[ -n "$ref" ]] || return 0
+  if [[ -z "$ref" ]]; then
+    echo "WARN neither 'origin/$CORE_REF' nor '$CORE_REF' resolves in $core_dir;" >&2
+    echo "     falling back to the working tree, which may sit on an unmerged branch." >&2
+    return 0
+  fi
 
   prefix="$(git -C "$core_dir" rev-parse --show-prefix)"
-  TEMP_MANIFEST="$(mktemp)"
+  TEMP_MANIFEST="$(mktemp "${TMPDIR:-/tmp}/neat-core-manifest.XXXXXX")"
   # The ref resolves, so the manifest must be readable at it. A failure here is
   # a real fault (the file does not exist on that branch), not a fallback.
   if ! git -C "$core_dir" show "$ref:$prefix$base" >"$TEMP_MANIFEST" 2>/dev/null; then
@@ -189,7 +204,7 @@ read_core_version() {
         exit
       }
     }
-  ' "$RESOLVED_MANIFEST"
+  ' "$1"
 }
 
 # Validate X.Y.Z (optionally with a -prerelease/+build suffix we ignore) and
@@ -215,10 +230,23 @@ fi
 resolve_governing_manifest
 echo "INFO neat-core version read from $CORE_SOURCE"
 
-core_raw="$(read_core_version)"
+core_raw="$(read_core_version "$RESOLVED_MANIFEST")"
 if [[ -z "$core_raw" ]]; then
   echo "FAIL: no [workspace.package] version found in $CORE_SOURCE" >&2
   exit 2
+fi
+
+# The `path` dependency compiles the WORKING TREE, not the governing branch.
+# When the two differ, say so: the gate deliberately does not fail on an
+# unmerged bump, but it must not let a local build against one look like a
+# build against the version it just reported OK.
+if [[ -n "$TEMP_MANIFEST" ]]; then
+  worktree_raw="$(read_core_version "$CORE_MANIFEST")"
+  if [[ -n "$worktree_raw" && "$worktree_raw" != "$core_raw" ]]; then
+    echo "WARN the sibling working tree is at $worktree_raw, not $core_raw." >&2
+    echo "     The unpinned path dependency compiles the working tree, so a local" >&2
+    echo "     build here does NOT match the version this gate just checked." >&2
+  fi
 fi
 
 if ! baseline_parts="$(parse_semver "$baseline_raw")"; then
