@@ -192,6 +192,12 @@ jobs:
           ./scripts/test-check-markdown-lint-workflow.sh
           ./scripts/check-markdown-lint-workflow.sh
 
+      - name: Validate confirmed cross-repo defects stay durably recorded
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-cross-repo-defect-record.sh
+          ./scripts/check-cross-repo-defect-record.sh
+
       - name: Validate Renovate dependency-update config
         run: |
           set -euo pipefail

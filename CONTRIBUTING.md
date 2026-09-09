@@ -110,6 +110,17 @@ Every pull request's Markdown is linted against
 [`.github/workflows/markdown-lint.yml`](./.github/workflows/markdown-lint.yml)
 must keep `./scripts/check-markdown-lint-workflow.sh` green.
 
+A defect this repository confirms in a **sibling** repo cannot be filed from
+here — the agent write allowlist refuses `gh issue create` against any other
+repo — so it must be recorded in
+[`docs/audit/issue-35-neat-ai-core-duplication.md`](./docs/audit/issue-35-neat-ai-core-duplication.md)
+rather than only in an archived PR summary, which nothing links to and which can
+be pruned. `./scripts/check-cross-repo-defect-record.sh` keeps every "Confirmed
+cross-repo defect" section complete enough to re-file upstream from the record
+alone: two or more source citations, how the defect was confirmed, the PR it was
+folded in from, its upstream filing status, and a Filing status row for every
+sibling repo it names.
+
 External crate bumps arrive as Renovate PRs under a 24-hour quarantine — see
 [Dependency updates](./README.md#dependency-updates). Changing
 [`renovate.json`](./renovate.json) must keep

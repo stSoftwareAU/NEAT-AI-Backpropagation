@@ -81,6 +81,10 @@ echo "Validating Markdown Lint workflow..."
 ./scripts/test-check-markdown-lint-workflow.sh
 ./scripts/check-markdown-lint-workflow.sh
 
+echo "Validating confirmed cross-repo defects stay durably recorded (issue #140)..."
+./scripts/test-check-cross-repo-defect-record.sh
+./scripts/check-cross-repo-defect-record.sh
+
 echo "Validating Renovate dependency-update config..."
 ./scripts/test-check-renovate-config.sh
 ./scripts/check-renovate-config.sh

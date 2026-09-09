@@ -135,6 +135,12 @@ own gate. Filing the issue there was refused by this run's `gh` guard
 `stsoftwareau/neat-ai-backpropagation`), so the finding is recorded here
 and on issue #101 instead.
 
+**Durably captured since:** this finding now also lives in
+`docs/audit/issue-35-neat-ai-core-duplication.md` under Finding 3 ("Confirmed
+cross-repo defect — Lamarck's copy is live and test-asserted"), with a
+`NEAT-AI-Lamarck` row in that document's Filing status table (issue #140), so it
+no longer depends on this PR summary surviving.
+
 ## Test Plan
 
 Added `backpropagation/tests/creature_identity.rs` — trains a tagged
