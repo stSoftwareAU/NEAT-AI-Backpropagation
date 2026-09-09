@@ -232,6 +232,41 @@ not as a separate finding.
 
 Home: **`neat-core`**.
 
+#### Confirmed cross-repo defect — Lamarck's copy is live and test-asserted (PR #101)
+
+Folded in from `docs/archive/pr-summaries/pr-summary-101.md` (PR
+[#101](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/pull/101), issue
+[#140](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/issues/140)), which
+was the only record of it. This finding predates that PR and rated the
+duplication a **structural** risk; PR #101 fixed the defect *here* and confirmed
+by reading the sibling clone that it is still live *there*, so the risk has
+already manifested:
+
+- `NEAT-AI-Lamarck/lamarck/src/tags.rs:300-302` re-attaches the source
+  creature's content-derived `uuid` to a trained creature — the same defect this
+  repo fixed in PR #101 — fed by `CreatureMeta.uuid`
+  (`NEAT-AI-Lamarck/lamarck/src/tags.rs:58`) and its extraction
+  (`NEAT-AI-Lamarck/lamarck/src/tags.rs:77-80`).
+- `NEAT-AI-Lamarck/lamarck/src/tags.rs:432` and
+  `NEAT-AI-Lamarck/lamarck/candidates.rs:2712` **assert the buggy behaviour** in
+  Lamarck's own test suite, so the defect is pinned in place: fixing it there
+  means changing those tests, not just the writer.
+
+**Why it is a scoring-integrity defect, not a maintenance hazard.** NEAT-AI's
+`Fitness.calculate` deduplicates its evaluation queue by `uuid`. A
+Lamarck-trained creature carrying its parent's inherited `uuid` can therefore be
+handed a score it never earned, without ever being evaluated.
+
+**Not a copy-paste of this repo's patch.** The two files have since diverged —
+Lamarck added `neuron_tags`, and its `candidates.rs` batch writer is a third
+write surface this repo has no equivalent of — so the fix belongs in that repo's
+own PR against its own gate.
+
+**Upstream filing status: blocked.** Filing it against `NEAT-AI-Lamarck` was
+refused by the agent write allowlist (`[SECURITY] [WRITE_REPO_BLOCKED]`, see
+[Filing status](#filing-status)), and still is. It needs a human with write
+access to `stSoftwareAU/NEAT-AI-Lamarck`.
+
 ### Finding 4 — `rust_scorer` stdout contract re-implemented by both consumers (severity: medium)
 
 `rust_scorer` prints a JSON map of `stem → { score, error, complexityPenalty }`.
@@ -325,6 +360,7 @@ which is how this audit was carried out.
 | 2 | `neat-core` | **Blocked** — needs a human to file |
 | 3 | `neat-core` | **Blocked** — needs a human to file |
 | 4 | `NEAT-AI-scorer` | **Blocked** — needs a human to file |
+| 3 (confirmed Lamarck defect) | `NEAT-AI-Lamarck` | **Blocked** — needs a human to file |
 | 5 | — | Rejected, reason above |
 | 6 | `neat-core` | **Blocked** — needs a human to file |
 

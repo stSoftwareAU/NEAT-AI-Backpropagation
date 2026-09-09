@@ -327,6 +327,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   overfit and are not a win (see `docs/production-win.json`).
 - Train refuses re-entrant creatures (`forwardOnly: false`). Optional
   `--hidden-only`, `--accept-always`, and `sweep --skip-mse`.
+- The confirmed `uuid`-dedup defect in the sibling `NEAT-AI-Lamarck` copy of
+  `tags.rs`, found while fixing this repo's own copy in PR #101, is recorded in
+  `docs/audit/issue-35-neat-ai-core-duplication.md` beside Finding 3 instead of
+  only in that PR's summary, with a `NEAT-AI-Lamarck` row in the audit's Filing
+  status table (issue #140). `scripts/check-cross-repo-defect-record.sh` keeps
+  every such record complete enough to re-file upstream — source citations, how
+  it was confirmed, its provenance and its upstream filing status — and
+  `quality.sh` runs it on every PR.
 
 ### Changed
 
