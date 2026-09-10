@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Lockfile integrity gate (`scripts/check-lockfile-integrity.sh`,
+  `scripts/lockfile_integrity.py`), wired into `quality.sh` and CI. It fetches
+  the crates.io sparse index for every registry package in `Cargo.lock` and
+  fails unless the recorded sha256 matches the registry's `cksum` for that
+  exact version and every recorded dependency is genuinely declared by that
+  version's published manifest — the comparison nothing else reports on, since
+  `cargo` answers a substituted entry by silently re-resolving the lockfile
+  back, or under `--locked` by an error that names no crate. Dangling
+  dependency references, sources outside the one registry `deny.toml` allows,
+  and registry packages with no checksum fail too; an unreachable index exits 2
+  rather than passing. Raised by issue #148, which reported `serde_json`
+  1.0.151 depending on `zmij` instead of `ryu`: `zmij` is `ryu`'s legitimate
+  successor from the same author and the lockfile is correct — see
+  [`docs/audit/issue-148-serde-json-zmij-dependency.md`](./docs/audit/issue-148-serde-json-zmij-dependency.md)
+  for the registry evidence.
 - Trust-region update budget for the whole-creature apply: `--step-scale` is a
   *per-gene* factor, so the aggregate move grows with the number and magnitude
   of the genes that move — the `0.01` default was justified against a
@@ -337,6 +352,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `quality.sh` runs it on every PR.
 
 ### Changed
+
+- Recorded neat-core 0.15.7 as the handled baseline in
+  `neat-core.expected-version` (was 0.13.0), clearing the unhandled-breaking-bump
+  gate. The range carries two breaking minors — 0.14.0 bounds the declared
+  observation width before it is walked (neat-core #640) and 0.15.0 adds an
+  underflow guard to `CompiledNetwork::new` (neat-core #653) — neither of which
+  alters a signature this crate names, so no code change was required. See the
+  note in `neat-core.expected-version` for the review and verification.
 
 - The CLI argument groups repeated across `train`, `sweep`, `blocks` and
   `gradient-check` are declared once and flattened into each subcommand

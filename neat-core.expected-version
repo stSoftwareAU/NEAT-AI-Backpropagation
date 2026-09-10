@@ -57,4 +57,37 @@
 # because GRQ builds it from the same sibling neat-core at head. Verified by
 # `cargo clippy --all-targets -- -D warnings` and the full test suite against
 # the sibling clone at 0.13.0 (59eb6e6).
-0.13.0
+#
+# 0.13.0 -> 0.15.7: acknowledge two breaking neat-core minors and the patches
+# between them.
+#   * 0.14.0 (neat-core #640, Issue #622) bounds the DECLARED observation width
+#     before it is walked. `CreatureExport::input` is a declared count with no
+#     backing data, and `compile_creature`, `validate_creature_topology` and
+#     `cleanup_creature_with` each built one owned String UUID per declared
+#     input before anything bounded it, so a sub-100-byte creature declaring
+#     `"input": 100000000` allocated a hundred million map entries. The ceiling
+#     now lives in `validate_creature_width`, and a declared input above
+#     MAX_NODE_COUNT is refused as `CreatureError::TooManyNodes` before any
+#     allocation is sized by it.
+#   * 0.15.0 (neat-core #653, Issue #601) adds an underflow guard to
+#     `CompiledNetwork::new` so a malformed buffer header can no longer abort
+#     the WASM module.
+#   * The patches in between are additive or internal: 0.15.x adds the
+#     `propagate_codec` size-check overflow fix (#654, Issue #602),
+#     `MemeticExport::prune_to` width bounding (#652, Issue #650), length
+#     validation on the WASM-exported parallel-array batch functions (#666,
+#     Issue #658), a CI exit-status fix (#649, Issue #634) and Deno workflow
+#     plus documentation work.
+#
+# Neither breaking change alters a signature `backpropagation` names. Both are
+# refusals on input this crate never constructs: it reaches neat-core through
+# `parse_creature_json`, `compile_creature`, `creature_validate`,
+# `propagate_topological_loop`, the MSE entry points and the
+# `calculate_weight`/`calculate_bias` helpers, and it feeds them creature JSON
+# whose declared width matches its own node data, never a raw compiled buffer.
+# The tightened paths therefore only add error cases for malformed input that
+# previously over-allocated or underflowed, so no code change is required.
+# Verified against the sibling clone at 0.15.7 (de4b81b) by a clean
+# `cargo build --all-targets`, `cargo clippy --all-targets -- -D warnings` and
+# the full test suite (18 test binaries, 0 failures).
+0.15.7

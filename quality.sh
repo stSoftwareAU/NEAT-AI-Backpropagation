@@ -122,6 +122,10 @@ if ! command -v cargo-deny &>/dev/null; then
 fi
 cargo deny check
 
+echo "Verifying Cargo.lock against the published crates.io index (issue #148)..."
+./scripts/test-check-lockfile-integrity.sh
+./scripts/check-lockfile-integrity.sh
+
 echo "Checking formatting..."
 cargo fmt --all -- --check
 
