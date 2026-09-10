@@ -949,6 +949,37 @@ flowchart LR
 it fails if the quarantine is missing, shorter than 24 hours, unparsable,
 shortened for an external crate, or if the `cargo` manager is switched off.
 
+## Lockfile integrity
+
+Renovate's quarantine governs which *versions* arrive; it says nothing about
+whether `Cargo.lock` still describes what crates.io published. A lockfile's
+`dependencies = [...]` list is never re-checked against the resolved crate's
+own manifest during a build, so a substituted sub-dependency — a plausible
+name swapped into a widely-used crate's dependency list — compiles on every
+`cargo build`, `cargo test` and CI run, and a build script or proc-macro in it
+executes arbitrary code at compile time (issue #148).
+
+`scripts/check-lockfile-integrity.sh` closes that gap. It fetches the crates.io
+sparse index for every registry package in the lockfile and fails unless, for
+each one, the recorded sha256 matches the registry's `cksum` for that exact
+version and every recorded dependency is genuinely declared (normal or build
+kind, honouring `package` renames) by that version's published manifest.
+Dangling references, non-crates.io sources and missing checksums fail too.
+
+```mermaid
+flowchart LR
+    A[Cargo.lock] --> B["check-lockfile-integrity.sh"]
+    C["index.crates.io<br/>cksum + declared deps"] --> B
+    B -->|match| D[verified]
+    B -->|"substituted, altered or unpublished"| E["exit 1 — quality.sh and CI fail"]
+    B -->|index unreachable| F["exit 2 — unverified, never a pass"]
+```
+
+An unreachable index is exit 2, not a pass: an unverified lockfile must never
+look like a verified one. `scripts/test-check-lockfile-integrity.sh` drives the
+gate offline against fixture lockfiles and index snapshots, so the rules
+themselves are tested without the network.
+
 ## Dependency review
 
 [`security.yml`](./.github/workflows/security.yml) runs two complementary

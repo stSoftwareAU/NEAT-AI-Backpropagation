@@ -121,6 +121,15 @@ alone: two or more source citations, how the defect was confirmed, the PR it was
 folded in from, its upstream filing status, and a Filing status row for every
 sibling repo it names.
 
+`Cargo.lock` records what each resolved crate depends on, and nothing in an
+ordinary build re-checks that list against the manifest the crate actually
+published — so a substituted sub-dependency compiles silently on every build
+(issue #148). `./scripts/check-lockfile-integrity.sh` fetches the crates.io
+sparse index for every registry package in the lockfile and fails when a
+checksum or a recorded dependency name disagrees with the published record. It
+needs network access to `index.crates.io`; an unreachable index exits 2 rather
+than passing, because an unverified lockfile must not look like a verified one.
+
 External crate bumps arrive as Renovate PRs under a 24-hour quarantine — see
 [Dependency updates](./README.md#dependency-updates). Changing
 [`renovate.json`](./renovate.json) must keep

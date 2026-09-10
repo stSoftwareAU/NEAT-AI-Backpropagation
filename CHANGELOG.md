@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Lockfile integrity gate (`scripts/check-lockfile-integrity.sh`,
+  `scripts/lockfile_integrity.py`), wired into `quality.sh` and CI. It fetches
+  the crates.io sparse index for every registry package in `Cargo.lock` and
+  fails unless the recorded sha256 matches the registry's `cksum` for that
+  exact version and every recorded dependency is genuinely declared by that
+  version's published manifest — the comparison `cargo` never makes, so a
+  substituted sub-dependency can no longer compile silently. Dangling
+  dependency references, sources outside the one registry `deny.toml` allows,
+  and registry packages with no checksum fail too; an unreachable index exits 2
+  rather than passing. Raised by issue #148, which reported `serde_json`
+  1.0.151 depending on `zmij` instead of `ryu`: `zmij` is `ryu`'s legitimate
+  successor from the same author and the lockfile is correct — see
+  [`docs/audit/issue-148-serde-json-zmij-dependency.md`](./docs/audit/issue-148-serde-json-zmij-dependency.md)
+  for the registry evidence.
 - Trust-region update budget for the whole-creature apply: `--step-scale` is a
   *per-gene* factor, so the aggregate move grows with the number and magnitude
   of the genes that move — the `0.01` default was justified against a

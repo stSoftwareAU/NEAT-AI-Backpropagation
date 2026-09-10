@@ -158,6 +158,12 @@ jobs:
           ./scripts/test-check-neat-core-version.sh
           ./scripts/check-neat-core-version.sh
 
+      - name: Verify Cargo.lock against the published crates.io index
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-lockfile-integrity.sh
+          ./scripts/check-lockfile-integrity.sh
+
       - name: Validate CodeQL code-scanning workflow
         run: |
           set -euo pipefail
