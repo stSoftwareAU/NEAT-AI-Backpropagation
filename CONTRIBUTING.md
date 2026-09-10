@@ -121,9 +121,11 @@ alone: two or more source citations, how the defect was confirmed, the PR it was
 folded in from, its upstream filing status, and a Filing status row for every
 sibling repo it names.
 
-`Cargo.lock` records what each resolved crate depends on, and nothing in an
-ordinary build re-checks that list against the manifest the crate actually
-published — so a substituted sub-dependency compiles silently on every build
+`Cargo.lock` records what each resolved crate depends on, and nothing reports
+it when that list stops matching the manifest the crate actually published:
+`cargo` silently re-resolves and rewrites the lockfile back, or refuses under
+`--locked` with an error that names no crate. A substituted sub-dependency and
+a legitimate upstream rename therefore read the same to a reviewer
 (issue #148). `./scripts/check-lockfile-integrity.sh` fetches the crates.io
 sparse index for every registry package in the lockfile and fails when a
 checksum or a recorded dependency name disagrees with the published record. It

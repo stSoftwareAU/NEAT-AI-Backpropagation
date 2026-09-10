@@ -2,11 +2,12 @@
 # Verify Cargo.lock against what crates.io actually published (Issue #148).
 #
 # A lockfile's `dependencies = [...]` list is meant to mirror the resolved
-# crate's own manifest, but nothing in a normal build re-checks it: cargo
-# compiles whatever the lockfile names. A substituted sub-dependency with a
-# plausible-looking name therefore reaches every `cargo build`, `cargo test`
-# and CI run silently, and a Rust build script or proc-macro runs arbitrary
-# code at compile time.
+# crate's own manifest, and nothing reports it when the two diverge. `cargo`
+# does not compile a substituted entry — it re-resolves and silently rewrites
+# the lockfile back, or under `--locked` refuses with a generic "cannot update
+# the lock file" error naming no crate. So a substituted sub-dependency and a
+# legitimate upstream rename look identical to a reviewer, which is how issue
+# #148 spent a triage cycle on `serde_json` swapping `ryu` for `zmij`.
 #
 # This gate fetches the crates.io sparse index for every registry package in
 # the lockfile and hands the snapshot to `scripts/lockfile_integrity.py`, which

@@ -32,9 +32,12 @@ banning it would ban `serde_json`.
 ## What did change
 
 The finding was undecidable from the lockfile alone, which is the real gap: a
-lockfile's `dependencies = [...]` list is *never* re-checked against the
-published manifest during a build, so a genuine substitution and a legitimate
-upstream rename look identical to a reader and to `cargo`. That comparison is
+genuine substitution and a legitimate upstream rename read identically. `cargo`
+does not compile a substituted entry — measured on this repository, it
+re-resolves against the crate's real manifest and silently rewrites the
+lockfile back (with the network and with `--offline`), and under `--locked` it
+refuses with a generic "cannot update the lock file" error that names no crate.
+Neither response tells a reviewer which it was looking at. That comparison is
 now a gate — `scripts/check-lockfile-integrity.sh`, run by `quality.sh` and CI
 — which fetches the crates.io sparse index for every registry package in
 `Cargo.lock` and fails loudly when a checksum or a recorded dependency name
@@ -46,7 +49,7 @@ flowchart TD
     A["Cargo.lock<br/>serde_json → zmij"] --> B{"scripts/check-lockfile-integrity.sh"}
     C["index.crates.io<br/>published manifest + cksum"] --> B
     B -->|"checksum and every dependency name match"| D["verified — build proceeds"]
-    B -->|"substituted or altered entry"| E["exit 1 — quality.sh and CI fail loudly"]
+    B -->|"substituted or altered entry"| E["exit 1, naming the crate<br/>quality.sh and CI fail loudly"]
 ```
 
 ## Provenance

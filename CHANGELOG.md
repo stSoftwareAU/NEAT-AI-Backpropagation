@@ -13,8 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the crates.io sparse index for every registry package in `Cargo.lock` and
   fails unless the recorded sha256 matches the registry's `cksum` for that
   exact version and every recorded dependency is genuinely declared by that
-  version's published manifest — the comparison `cargo` never makes, so a
-  substituted sub-dependency can no longer compile silently. Dangling
+  version's published manifest — the comparison nothing else reports on, since
+  `cargo` answers a substituted entry by silently re-resolving the lockfile
+  back, or under `--locked` by an error that names no crate. Dangling
   dependency references, sources outside the one registry `deny.toml` allows,
   and registry packages with no checksum fail too; an unreachable index exits 2
   rather than passing. Raised by issue #148, which reported `serde_json`

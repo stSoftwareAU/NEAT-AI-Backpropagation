@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Verify `Cargo.lock` against a snapshot of the crates.io sparse index (Issue #148).
 
-`cargo` trusts the `dependencies = [...]` list a lockfile records for a
-registry package; nothing in an ordinary build cross-checks that list against
-what the published crate's own manifest declares. A supply-chain actor who can
-edit the lockfile can therefore point a widely-used crate at a substituted
-sub-dependency, and every `cargo build` compiles it silently.
+A lockfile's `dependencies = [...]` list is meant to mirror what the resolved
+crate's own manifest declares, and nothing reports it when the two diverge.
+`cargo` itself does not compile a substituted entry — it re-resolves against
+the real manifest and silently rewrites the lockfile back, or under `--locked`
+refuses with a generic "cannot update the lock file" error that names no crate.
+Neither response distinguishes tampering from ordinary drift, so a reviewer
+reading a lockfile has no way to tell a substituted sub-dependency from a
+legitimate upstream rename (issue #148, where `serde_json` swapping `ryu` for
+`zmij` read as a compromise indicator).
 
-This module closes that gap by comparing each `[[package]]` block against the
-crates.io index entry for that exact version:
+This module makes that comparison explicit, checking each `[[package]]` block
+against the crates.io index entry for that exact version:
 
 1. Every registry package is sourced from the one registry `deny.toml` allows
    and carries a 64-hex sha256 checksum.
@@ -229,8 +233,8 @@ def verify(packages: list[Package], index_dir: str) -> tuple[list[str], list[str
             failures.append(
                 f"{package.label}: records dependencies "
                 f"{sorted(phantoms)} that the published manifest never "
-                f"declares (it declares {sorted(declared)}) — a substituted "
-                f"sub-dependency would be compiled on every build"
+                f"declares (it declares {sorted(declared)}) — the lockfile "
+                f"does not describe the crate crates.io published"
             )
             continue
 

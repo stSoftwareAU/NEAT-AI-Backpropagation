@@ -952,14 +952,15 @@ shortened for an external crate, or if the `cargo` manager is switched off.
 ## Lockfile integrity
 
 Renovate's quarantine governs which *versions* arrive; it says nothing about
-whether `Cargo.lock` still describes what crates.io published. A lockfile's
-`dependencies = [...]` list is never re-checked against the resolved crate's
-own manifest during a build, so a substituted sub-dependency — a plausible
-name swapped into a widely-used crate's dependency list — compiles on every
-`cargo build`, `cargo test` and CI run, and a build script or proc-macro in it
-executes arbitrary code at compile time (issue #148).
+whether `Cargo.lock` still describes what crates.io published. Nothing reports
+that divergence. `cargo` does not compile a substituted entry — it re-resolves
+against the crate's real manifest and silently rewrites the lockfile back, and
+under `--locked` it refuses with a generic "cannot update the lock file" error
+that names no crate. So a substituted sub-dependency and a legitimate upstream
+rename look identical to a reviewer, which is how issue #148 spent a triage
+cycle on `serde_json` swapping `ryu` for `zmij` (a real, same-author rename).
 
-`scripts/check-lockfile-integrity.sh` closes that gap. It fetches the crates.io
+`scripts/check-lockfile-integrity.sh` makes the comparison explicit. It fetches the crates.io
 sparse index for every registry package in the lockfile and fails unless, for
 each one, the recorded sha256 matches the registry's `cksum` for that exact
 version and every recorded dependency is genuinely declared (normal or build
