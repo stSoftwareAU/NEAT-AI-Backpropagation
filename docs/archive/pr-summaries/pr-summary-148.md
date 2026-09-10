@@ -69,8 +69,13 @@ What changed:
 - **`scripts/check-lockfile-integrity.sh`** — fetches the index snapshot and
   runs the verification. An unreachable index is exit 2, never a pass: an
   unverified lockfile must not look like a verified one.
+- **`backpropagation/tests/lockfile_integrity_test.rs`** — the regression tests,
+  5 `#[test]` cases that drive the real gate against fixture lockfiles and a
+  fixture index snapshot, offline via `--index-dir`, and run with
+  `cargo test --workspace --all-features`.
 - **`scripts/test-check-lockfile-integrity.sh`** — 11 fixture-driven cases, one
-  `test_*` function each, all offline via `--index-dir`.
+  `test_*` function each, also offline via `--index-dir`, covering the rules and
+  exit codes the Rust tests do not repeat.
 - **`quality.sh`, `.github/workflows/ci.yml`** — the gate wired into the local
   gate and the CI `validation` job, test first, as every other check pair here
   is.
@@ -147,7 +152,8 @@ Develop head is 0.15.4 against a recorded baseline of 0.13.0. That gate blocks
 every PR in this repository and its own message says it must be cleared in a
 single deliberate PR, so it is filed as
 [#149](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/issues/149) rather
-than folded in here. This PR touches no Rust source and no `Cargo.*`. Every other
+than folded in here. This PR touches no Rust source outside
+`backpropagation/tests/` and no `Cargo.*`. Every other
 stage was re-run individually after the blocked gate and passes:
 `shellcheck`, `actionlint`, `codespell`,
 `markdownlint-cli2`, every check/test script pair including the new one,
@@ -156,24 +162,47 @@ stage was re-run individually after the blocked gate and passes:
 
 ## Test Plan
 
-Added `scripts/test-check-lockfile-integrity.sh` — 11 cases, each declared as a
-`test_*` function that writes a fixture lockfile and a fixture crates.io index
-snapshot to a temp directory and runs the real checker against them offline:
+Added `backpropagation/tests/lockfile_integrity_test.rs` — 5 `#[test]` cases,
+each writing a fixture lockfile and a fixture crates.io index snapshot to a temp
+directory and running the real gate against them offline:
 
-- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_dependency_the_published_manifest_never_declares`
+- `backpropagation/tests/lockfile_integrity_test.rs::test_rejects_a_dependency_the_published_manifest_never_declares`
   — **the regression test for this issue.** It builds the exact attack the issue
-  describes: a real, published, correctly-checksummed crate substituted into
-  `serde_json`'s dependency list, with a valid `[[package]]` block of its own so
-  every other signal looks normal. Against the unfixed code the substituted
+  describes: a real, published, correctly-checksummed crate (`wit-bindgen`)
+  substituted into `serde_json`'s dependency list, with a valid `[[package]]`
+  block of its own so every other signal looks normal, and asserts exit 1
+  naming the substituted crate. Against the unfixed code the substituted
   lockfile is reported as *fine*: there is no `check-lockfile-integrity.sh` for
   the test to invoke before this branch, and nothing else in `quality.sh` or CI
   compares a lockfile against upstream manifests — `cargo metadata` on the same
   substitution exits 0 and quietly rewrites it away. With the fix the test goes
-  red on the substituted fixture (exit 1, naming the substituted crate) and
-  green on the unmodified one; both were observed, in that order.
-- `scripts/test-check-lockfile-integrity.sh::test_accepts_a_lockfile_matching_the_published_index`
+  red on the substituted fixture and green on the unmodified one; both were
+  observed, in that order.
+- `backpropagation/tests/lockfile_integrity_test.rs::test_accepts_a_lockfile_matching_the_published_index`
   — the happy path, and the assertion that `serde_json` → `zmij` verifies clean.
-- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_checksum_that_disagrees_with_the_registry`
+- `backpropagation/tests/lockfile_integrity_test.rs::test_rejects_a_dependency_the_published_manifest_declares_only_for_dev`
+  — an upstream crate's dev-dependency is never compiled for a consumer, so its
+  presence in the consumer's lockfile is a substitution, not resolution.
+- `backpropagation/tests/lockfile_integrity_test.rs::test_rejects_a_checksum_that_disagrees_with_the_registry`
+- `backpropagation/tests/lockfile_integrity_test.rs::test_reports_a_missing_index_snapshot_with_exit_2`
+  — an index that cannot be read is exit 2, never a pass.
+
+```text
+running 5 tests
+test test_rejects_a_dependency_the_published_manifest_declares_only_for_dev ... ok
+test test_accepts_a_lockfile_matching_the_published_index ... ok
+test test_rejects_a_dependency_the_published_manifest_never_declares ... ok
+test test_reports_a_missing_index_snapshot_with_exit_2 ... ok
+test test_rejects_a_checksum_that_disagrees_with_the_registry ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+Added `scripts/test-check-lockfile-integrity.sh` alongside them — the shell
+check/test script pair this repository uses for every other gate — 11 cases,
+each declared as a `test_*` function. It repeats the cases above and covers the
+rules the Rust tests do not, all offline:
+
 - `scripts/test-check-lockfile-integrity.sh::test_rejects_a_dependency_with_no_package_entry`
 - `scripts/test-check-lockfile-integrity.sh::test_rejects_a_version_absent_from_the_crates_io_index`
 - `scripts/test-check-lockfile-integrity.sh::test_rejects_a_package_sourced_outside_the_allowed_registry`
