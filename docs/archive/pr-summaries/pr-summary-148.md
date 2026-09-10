@@ -17,6 +17,18 @@ crates.io serves byte for byte:
 | `serde_json` 1.0.151 `cksum` | `c841b55e…3f14` — identical to `Cargo.lock:339` |
 | `serde_json` 1.0.151 built deps, per its published manifest | `indexmap` (optional), `itoa`, `memchr`, `serde`, `serde_core`, **`zmij`** — no `ryu` |
 
+The issue's exploit sketch turned on what the crate *contains* — "a `build.rs`
+or proc-macro that runs arbitrary code at compile time" — which it could not
+check without registry access. Checked here, on the artefact this container
+actually compiled: the cached `zmij-1.0.23.crate` hashes to
+`29666d0a…fc1b`, matching the registry `cksum` and the lockfile; the crate
+declares no proc-macro target and no `links` key; and its `build.rs` is
+dtolnay's ordinary rustc-version probe — it runs `$RUSTC --version` and emits
+`cargo:rustc-cfg` lines to gate `std::hint::select_unpredictable` on
+rustc < 1.88 and a size-optimised path at `OPT_LEVEL=s|z`. No network, no file
+reads, nothing outside cargo's own directives. Nothing needed clearing from the
+build cache, because what is cached is what crates.io published.
+
 So `Cargo.lock` is **unchanged**, and `zmij` was **not** added to `deny.toml`'s
 ban list — banning it would ban `serde_json`. Regenerating the lockfile, as the
 issue suggested, would reproduce it exactly.
@@ -136,7 +148,8 @@ every PR in this repository and its own message says it must be cleared in a
 single deliberate PR, so it is filed as
 [#149](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/issues/149) rather
 than folded in here. This PR touches no Rust source and no `Cargo.*`. Every other
-stage was run and passes: `shellcheck`, `actionlint`, `codespell`,
+stage was re-run individually after the blocked gate and passes:
+`shellcheck`, `actionlint`, `codespell`,
 `markdownlint-cli2`, every check/test script pair including the new one,
 `cargo deny check`, `cargo fmt --check`, `cargo clippy -D warnings`,
 `cargo test --workspace --all-features` and `cargo doc`.

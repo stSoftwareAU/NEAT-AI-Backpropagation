@@ -29,6 +29,28 @@ coincidence to be read as camouflage. No change to `Cargo.lock` was warranted,
 and none was made; `zmij` was **not** added to `deny.toml`'s ban list, because
 banning it would ban `serde_json`.
 
+## The artefact actually compiled
+
+The table above resolves the *published record*. The issue also asked what the
+downloaded crate contains — its exploit sketch turned on `zmij` carrying "a
+`build.rs` or proc-macro that runs arbitrary code at compile time", which the
+static scan could not check. Inspected on disk, in this container's
+`CARGO_HOME` after a full build:
+
+| Check | Result |
+| --- | --- |
+| `sha256sum` of the cached `zmij-1.0.23.crate` | `29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b` — identical to the registry `cksum` and to `Cargo.lock` |
+| Is it a proc-macro crate? | No — its manifest declares no `proc-macro` target and no `links` key |
+| Does it have a `build.rs`? | Yes, and it is the ordinary rustc-version probe |
+
+The build script runs `$RUSTC --version`, parses the minor version, and emits
+`cargo:rustc-check-cfg` / `cargo:rustc-cfg` lines to gate two things: the
+`std::hint::select_unpredictable` intrinsic on rustc < 1.88, and a
+size-optimised code path when `OPT_LEVEL` is `s` or `z`. It opens no network
+connection, reads no file, and writes nothing outside cargo's own directives —
+it is the same probe dtolnay ships in `serde` and `ryu`. Nothing was cleared
+from the cache, because the cached artefact is the published one.
+
 ## What did change
 
 The finding was undecidable from the lockfile alone, which is the real gap: a
