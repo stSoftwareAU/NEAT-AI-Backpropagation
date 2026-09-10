@@ -6,16 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- Recorded neat-core 0.15.7 as the handled baseline in
-  `neat-core.expected-version` (was 0.13.0), clearing the unhandled-breaking-bump
-  gate. The range carries two breaking minors — 0.14.0 bounds the declared
-  observation width before it is walked (neat-core #640) and 0.15.0 adds an
-  underflow guard to `CompiledNetwork::new` (neat-core #653) — neither of which
-  alters a signature this crate names, so no code change was required. See the
-  note in `neat-core.expected-version` for the review and verification.
-
 ### Added
 
 - Lockfile integrity gate (`scripts/check-lockfile-integrity.sh`,
@@ -362,6 +352,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `quality.sh` runs it on every PR.
 
 ### Changed
+
+- Recorded neat-core 0.15.7 as the handled baseline in
+  `neat-core.expected-version` (was 0.13.0), clearing the unhandled-breaking-bump
+  gate. The range carries two breaking minors — 0.14.0 bounds the declared
+  observation width before it is walked (neat-core #640) and 0.15.0 adds an
+  underflow guard to `CompiledNetwork::new` (neat-core #653) — neither of which
+  alters a signature this crate names, so no code change was required. See the
+  note in `neat-core.expected-version` for the review and verification.
 
 - The CLI argument groups repeated across `train`, `sweep`, `blocks` and
   `gradient-check` are declared once and flattened into each subcommand
