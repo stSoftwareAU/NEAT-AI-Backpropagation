@@ -20,6 +20,11 @@ if [[ ! -x "$CHECKER" ]]; then
   exit 2
 fi
 
+# The crates.io `source` line the fixtures use. It is held in a variable so no
+# line of this script starts with the word `source`, which would otherwise read
+# as a shell `source` of a nonexistent file to tooling that scans for them.
+REGISTRY_SOURCE='source = "registry+https://github.com/rust-lang/crates.io-index"'
+
 # Checksums are only ever compared, never computed, so any 64-hex value serves.
 CKSUM_SERDE_JSON="c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 CKSUM_ZMIJ="29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
@@ -72,7 +77,7 @@ version = 4
 [[package]]
 name = "itoa"
 version = "1.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+${REGISTRY_SOURCE}
 checksum = "$CKSUM_ITOA"
 
 [[package]]
@@ -85,7 +90,7 @@ dependencies = [
 [[package]]
 name = "serde_json"
 version = "1.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+${REGISTRY_SOURCE}
 checksum = "$CKSUM_SERDE_JSON"
 dependencies = [
  "itoa",
@@ -96,19 +101,19 @@ dependencies = [
 [[package]]
 name = "syn"
 version = "2.0.119"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+${REGISTRY_SOURCE}
 checksum = "$CKSUM_SYN2"
 
 [[package]]
 name = "syn"
 version = "3.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+${REGISTRY_SOURCE}
 checksum = "$CKSUM_SYN3"
 
 [[package]]
 name = "zmij"
 version = "1.0.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+${REGISTRY_SOURCE}
 checksum = "$CKSUM_ZMIJ"
 
 [metadata]
@@ -144,121 +149,172 @@ expect_exit() {
   PASSED=$((PASSED + 1))
 }
 
-# 1. The happy path — and the direct answer to the finding in issue #148:
-#    serde_json depending on `zmij` rather than `ryu` matches what crates.io
-#    published, so it must verify clean.
-valid="$(new_case valid)"
-write_baseline_index "$valid"
-write_baseline_lock "$valid"
-expect_exit "accepts a lockfile matching the published crates.io index" 0 \
-  "$valid" "serde_json 1.0.151: checksum and 3 dependencies match"
+# Each case below is a `test_*` function: the declaration is the test's name,
+# and the runner at the foot of the file invokes them in order.
 
-# 2. The attack the issue describes: a real, published crate substituted into
-#    another crate's dependency list. Everything else about it is consistent —
-#    the package block exists, the checksum is right — so only a comparison
-#    against the upstream manifest can catch it.
-substituted="$(new_case substituted)"
-write_baseline_index "$substituted"
-write_index "$substituted" evil_json <<JSON
+# The happy path — and the direct answer to the finding in issue #148:
+# serde_json depending on `zmij` rather than `ryu` matches what crates.io
+# published, so it must verify clean.
+test_accepts_a_lockfile_matching_the_published_index() {
+  local valid
+  valid="$(new_case valid)"
+  write_baseline_index "$valid"
+  write_baseline_lock "$valid"
+  expect_exit "accepts a lockfile matching the published crates.io index" 0 \
+    "$valid" "serde_json 1.0.151: checksum and 3 dependencies match"
+}
+
+# The attack the issue describes: a real, published crate substituted into
+# another crate's dependency list. Everything else about it is consistent —
+# the package block exists, the checksum is right — so only a comparison
+# against the upstream manifest can catch it.
+test_rejects_a_dependency_the_published_manifest_never_declares() {
+  local substituted
+  substituted="$(new_case substituted)"
+  write_baseline_index "$substituted"
+  write_index "$substituted" evil_json <<JSON
 {"name":"evil_json","vers":"1.0.23","deps":[],"cksum":"$CKSUM_EVIL","yanked":false}
 JSON
-write_baseline_lock "$substituted"
-cat >>"$substituted/Cargo.lock" <<LOCK
+  write_baseline_lock "$substituted"
+  cat >>"$substituted/Cargo.lock" <<LOCK
 
 [[package]]
 name = "evil_json"
 version = "1.0.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+${REGISTRY_SOURCE}
 checksum = "$CKSUM_EVIL"
 LOCK
-edit_lock "$substituted" 's/^ "zmij",$/ "evil_json",/'
-expect_exit "rejects a dependency the published manifest never declares" 1 \
-  "$substituted" "'evil_json'] that the published manifest never declares"
+  edit_lock "$substituted" 's/^ "zmij",$/ "evil_json",/'
+  expect_exit "rejects a dependency the published manifest never declares" 1 \
+    "$substituted" "'evil_json'] that the published manifest never declares"
+}
 
-# 3. A tampered checksum — the lockfile points at content the registry did not
-#    publish under that version.
-tampered="$(new_case tampered)"
-write_baseline_index "$tampered"
-write_baseline_lock "$tampered"
-edit_lock "$tampered" "s/$CKSUM_ZMIJ/$CKSUM_EVIL/"
-expect_exit "rejects a checksum that disagrees with the registry" 1 \
-  "$tampered" "does not match"
+# A tampered checksum — the lockfile points at content the registry did not
+# publish under that version.
+test_rejects_a_checksum_that_disagrees_with_the_registry() {
+  local tampered
+  tampered="$(new_case tampered)"
+  write_baseline_index "$tampered"
+  write_baseline_lock "$tampered"
+  edit_lock "$tampered" "s/$CKSUM_ZMIJ/$CKSUM_EVIL/"
+  expect_exit "rejects a checksum that disagrees with the registry" 1 \
+    "$tampered" "does not match"
+}
 
-# 4. A dependency name with no [[package]] block at all.
-dangling="$(new_case dangling)"
-write_baseline_index "$dangling"
-write_baseline_lock "$dangling"
-edit_lock "$dangling" 's/^ "itoa",$/ "ryu",/'
-expect_exit "rejects a dependency with no [[package]] entry" 1 \
-  "$dangling" "no [[package]] entry"
+# A dependency name with no [[package]] block at all.
+test_rejects_a_dependency_with_no_package_entry() {
+  local dangling
+  dangling="$(new_case dangling)"
+  write_baseline_index "$dangling"
+  write_baseline_lock "$dangling"
+  edit_lock "$dangling" 's/^ "itoa",$/ "ryu",/'
+  expect_exit "rejects a dependency with no [[package]] entry" 1 \
+    "$dangling" "no [[package]] entry"
+}
 
-# 5. A version the registry has never published.
-unpublished="$(new_case unpublished)"
-write_baseline_index "$unpublished"
-write_baseline_lock "$unpublished"
-edit_lock "$unpublished" 's/^version = "1.0.23"$/version = "9.9.9"/'
-expect_exit "rejects a version absent from the crates.io index" 1 \
-  "$unpublished" "never published"
+# A version the registry has never published.
+test_rejects_a_version_absent_from_the_crates_io_index() {
+  local unpublished
+  unpublished="$(new_case unpublished)"
+  write_baseline_index "$unpublished"
+  write_baseline_lock "$unpublished"
+  edit_lock "$unpublished" 's/^version = "1.0.23"$/version = "9.9.9"/'
+  expect_exit "rejects a version absent from the crates.io index" 1 \
+    "$unpublished" "never published"
+}
 
-# 6. A source outside the single registry deny.toml allows.
-foreign="$(new_case foreign)"
-write_baseline_index "$foreign"
-write_baseline_lock "$foreign"
-edit_lock "$foreign" \
-  's|^source = "registry+https://github.com/rust-lang/crates.io-index"$|source = "git+https://example.invalid/zmij"|'
-expect_exit "rejects a package sourced outside the allowed registry" 1 \
-  "$foreign" "not the crates.io registry"
+# A source outside the single registry deny.toml allows.
+test_rejects_a_package_sourced_outside_the_allowed_registry() {
+  local foreign
+  foreign="$(new_case foreign)"
+  write_baseline_index "$foreign"
+  write_baseline_lock "$foreign"
+  edit_lock "$foreign" \
+    's|^source = "registry+https://github.com/rust-lang/crates.io-index"$|source = "git+https://example.invalid/zmij"|'
+  expect_exit "rejects a package sourced outside the allowed registry" 1 \
+    "$foreign" "not the crates.io registry"
+}
 
-# 7. A registry package cargo could not checksum-verify on download.
-unchecked="$(new_case unchecked)"
-write_baseline_index "$unchecked"
-write_baseline_lock "$unchecked"
-edit_lock "$unchecked" "/^checksum = \"$CKSUM_ZMIJ\"$/d"
-expect_exit "rejects a registry package with no sha256 checksum" 1 \
-  "$unchecked" "no valid sha256 checksum"
+# A registry package cargo could not checksum-verify on download.
+test_rejects_a_registry_package_with_no_sha256_checksum() {
+  local unchecked
+  unchecked="$(new_case unchecked)"
+  write_baseline_index "$unchecked"
+  write_baseline_lock "$unchecked"
+  edit_lock "$unchecked" "/^checksum = \"$CKSUM_ZMIJ\"$/d"
+  expect_exit "rejects a registry package with no sha256 checksum" 1 \
+    "$unchecked" "no valid sha256 checksum"
+}
 
-# 8. A renamed dependency: the manifest declares the alias in `name` and the
-#    real crate in `package`, and the lockfile records the real crate. This
-#    must pass — the rule compares crate identity, not the alias.
-renamed="$(new_case renamed)"
-write_baseline_index "$renamed"
-write_baseline_lock "$renamed"
-write_index "$renamed" serde_json <<JSON
+# A renamed dependency: the manifest declares the alias in `name` and the
+# real crate in `package`, and the lockfile records the real crate. This
+# must pass — the rule compares crate identity, not the alias.
+test_accepts_a_dependency_the_manifest_declares_under_a_rename() {
+  local renamed
+  renamed="$(new_case renamed)"
+  write_baseline_index "$renamed"
+  write_baseline_lock "$renamed"
+  write_index "$renamed" serde_json <<JSON
 {"name":"serde_json","vers":"1.0.151","deps":[{"name":"itoa","req":"^1.0","kind":"normal","optional":false},{"name":"fast_float","package":"zmij","req":"^1.0","kind":"normal","optional":false},{"name":"syn","req":"^3","kind":"normal","optional":false}],"cksum":"$CKSUM_SERDE_JSON","yanked":false}
 JSON
-expect_exit "accepts a dependency the manifest declares under a rename" 0 \
-  "$renamed" "3 dependencies match"
+  expect_exit "accepts a dependency the manifest declares under a rename" 0 \
+    "$renamed" "3 dependencies match"
+}
 
-# 9. A dev-dependency of an upstream crate is never compiled for a consumer, so
-#    its presence in the consumer's lockfile is a substitution, not resolution.
-dev_only="$(new_case dev-only)"
-write_baseline_index "$dev_only"
-write_baseline_lock "$dev_only"
-edit_lock "$dev_only" 's/^ "zmij",$/ "trybuild",/'
-cat >>"$dev_only/Cargo.lock" <<LOCK
+# A dev-dependency of an upstream crate is never compiled for a consumer, so
+# its presence in the consumer's lockfile is a substitution, not resolution.
+test_rejects_a_dependency_the_manifest_declares_only_for_dev() {
+  local dev_only
+  dev_only="$(new_case dev-only)"
+  write_baseline_index "$dev_only"
+  write_baseline_lock "$dev_only"
+  edit_lock "$dev_only" 's/^ "zmij",$/ "trybuild",/'
+  cat >>"$dev_only/Cargo.lock" <<LOCK
 
 [[package]]
 name = "trybuild"
 version = "1.0.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+${REGISTRY_SOURCE}
 checksum = "$CKSUM_EVIL"
 LOCK
-write_index "$dev_only" trybuild <<JSON
+  write_index "$dev_only" trybuild <<JSON
 {"name":"trybuild","vers":"1.0.23","deps":[],"cksum":"$CKSUM_EVIL","yanked":false}
 JSON
-expect_exit "rejects a dependency the manifest declares only for dev" 1 \
-  "$dev_only" "never declares"
+  expect_exit "rejects a dependency the manifest declares only for dev" 1 \
+    "$dev_only" "never declares"
+}
 
-# 10. Unusable inputs report exit 2 rather than a pass.
-missing="$(new_case missing)"
-write_baseline_index "$missing"
-expect_exit "reports a missing lockfile with exit 2" 2 "$missing" "lockfile not found"
+# Unusable inputs report exit 2 rather than a pass.
+test_reports_a_missing_lockfile_with_exit_2() {
+  local missing
+  missing="$(new_case missing)"
+  write_baseline_index "$missing"
+  expect_exit "reports a missing lockfile with exit 2" 2 "$missing" "lockfile not found"
+}
 
-no_index="$(new_case no-index)"
-write_baseline_lock "$no_index"
-rmdir "$no_index/index"
-expect_exit "reports a missing index snapshot with exit 2" 2 \
-  "$no_index" "index snapshot not found"
+test_reports_a_missing_index_snapshot_with_exit_2() {
+  local no_index
+  no_index="$(new_case no-index)"
+  write_baseline_lock "$no_index"
+  rmdir "$no_index/index"
+  expect_exit "reports a missing index snapshot with exit 2" 2 \
+    "$no_index" "index snapshot not found"
+}
+
+for test_case in \
+  test_accepts_a_lockfile_matching_the_published_index \
+  test_rejects_a_dependency_the_published_manifest_never_declares \
+  test_rejects_a_checksum_that_disagrees_with_the_registry \
+  test_rejects_a_dependency_with_no_package_entry \
+  test_rejects_a_version_absent_from_the_crates_io_index \
+  test_rejects_a_package_sourced_outside_the_allowed_registry \
+  test_rejects_a_registry_package_with_no_sha256_checksum \
+  test_accepts_a_dependency_the_manifest_declares_under_a_rename \
+  test_rejects_a_dependency_the_manifest_declares_only_for_dev \
+  test_reports_a_missing_lockfile_with_exit_2 \
+  test_reports_a_missing_index_snapshot_with_exit_2; do
+  "$test_case"
+done
 
 echo "check-lockfile-integrity tests: $PASSED passed, $FAILED failed"
 if [[ "$FAILED" -ne 0 ]]; then

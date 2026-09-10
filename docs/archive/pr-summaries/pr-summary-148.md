@@ -57,8 +57,8 @@ What changed:
 - **`scripts/check-lockfile-integrity.sh`** — fetches the index snapshot and
   runs the verification. An unreachable index is exit 2, never a pass: an
   unverified lockfile must not look like a verified one.
-- **`scripts/test-check-lockfile-integrity.sh`** — 11 fixture-driven cases, all
-  offline via `--index-dir`.
+- **`scripts/test-check-lockfile-integrity.sh`** — 11 fixture-driven cases, one
+  `test_*` function each, all offline via `--index-dir`.
 - **`quality.sh`, `.github/workflows/ci.yml`** — the gate wired into the local
   gate and the CI `validation` job, test first, as every other check pair here
   is.
@@ -143,11 +143,11 @@ stage was run and passes: `shellcheck`, `actionlint`, `codespell`,
 
 ## Test Plan
 
-Added `scripts/test-check-lockfile-integrity.sh` — 11 cases, each writing a
-fixture lockfile and a fixture crates.io index snapshot to a temp directory and
-running the real checker against them offline:
+Added `scripts/test-check-lockfile-integrity.sh` — 11 cases, each declared as a
+`test_*` function that writes a fixture lockfile and a fixture crates.io index
+snapshot to a temp directory and runs the real checker against them offline:
 
-- `scripts/test-check-lockfile-integrity.sh::rejects a dependency the published manifest never declares`
+- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_dependency_the_published_manifest_never_declares`
   — **the regression test for this issue.** It builds the exact attack the issue
   describes: a real, published, correctly-checksummed crate substituted into
   `serde_json`'s dependency list, with a valid `[[package]]` block of its own so
@@ -158,19 +158,20 @@ running the real checker against them offline:
   substitution exits 0 and quietly rewrites it away. With the fix the test goes
   red on the substituted fixture (exit 1, naming the substituted crate) and
   green on the unmodified one; both were observed, in that order.
-- `accepts a lockfile matching the published crates.io index` — the happy path,
-  and the assertion that `serde_json` → `zmij` verifies clean.
-- `rejects a checksum that disagrees with the registry`
-- `rejects a dependency with no [[package]] entry`
-- `rejects a version absent from the crates.io index`
-- `rejects a package sourced outside the allowed registry`
-- `rejects a registry package with no sha256 checksum`
-- `accepts a dependency the manifest declares under a rename` — the rule
-  compares crate identity, not the alias, so a `package` rename is not a
-  false positive.
-- `rejects a dependency the manifest declares only for dev`
-- `reports a missing lockfile with exit 2`, `reports a missing index snapshot
-  with exit 2` — unusable input is never a pass.
+- `scripts/test-check-lockfile-integrity.sh::test_accepts_a_lockfile_matching_the_published_index`
+  — the happy path, and the assertion that `serde_json` → `zmij` verifies clean.
+- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_checksum_that_disagrees_with_the_registry`
+- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_dependency_with_no_package_entry`
+- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_version_absent_from_the_crates_io_index`
+- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_package_sourced_outside_the_allowed_registry`
+- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_registry_package_with_no_sha256_checksum`
+- `scripts/test-check-lockfile-integrity.sh::test_accepts_a_dependency_the_manifest_declares_under_a_rename`
+  — the rule compares crate identity, not the alias, so a `package` rename is
+  not a false positive.
+- `scripts/test-check-lockfile-integrity.sh::test_rejects_a_dependency_the_manifest_declares_only_for_dev`
+- `scripts/test-check-lockfile-integrity.sh::test_reports_a_missing_lockfile_with_exit_2`,
+  `scripts/test-check-lockfile-integrity.sh::test_reports_a_missing_index_snapshot_with_exit_2`
+  — unusable input is never a pass.
 
 Run as part of the gate:
 
