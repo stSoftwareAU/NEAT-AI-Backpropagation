@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `scripts/runlib.sh` installs both artefacts this crate ships —
+  `~/.cargo/bin/neat_ai_backpropagation` and
+  `~/.cargo/lib/libneat_ai_backpropagation.{dylib,so}` — each stamped with
+  `.neat_ai_backpropagation.version`. stdout is the CLI path; a second run
+  whose stamps match prints `[neat_ai_backpropagation] already installed v<x>`
+  and runs no `cargo build`; `target/` is removed after a successful install.
+  GRQ `#4757` / `#4774` call this script on every trainDir stage (issue #152).
+  Family-sync from NEAT-AI-core waits on core `#680`.
 - Lockfile integrity gate (`scripts/check-lockfile-integrity.sh`,
   `scripts/lockfile_integrity.py`), wired into `quality.sh` and CI. It fetches
   the crates.io sparse index for every registry package in `Cargo.lock` and
@@ -352,6 +360,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `quality.sh` runs it on every PR.
 
 ### Changed
+
+- Recorded neat-core 0.17.0 as the handled baseline in
+  `neat-core.expected-version` (was 0.15.7), so the unhandled-breaking-bump
+  gate can pass and `scripts/runlib.sh` can land. The range is two pruning
+  minors (0.16.0 field additions on `PruneResult`, 0.17.0 `prune_neuron` `IF`
+  rewrite) that this crate does not name, so no code change was required.
 
 - Recorded neat-core 0.15.7 as the handled baseline in
   `neat-core.expected-version` (was 0.13.0), clearing the unhandled-breaking-bump

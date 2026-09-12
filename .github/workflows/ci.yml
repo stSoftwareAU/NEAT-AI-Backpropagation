@@ -176,6 +176,11 @@ jobs:
           ./scripts/test-check-actionlint-gate.sh
           ./scripts/check-actionlint-gate.sh
 
+      - name: Validate scripts/runlib.sh already-installed contract
+        run: |
+          set -euo pipefail
+          ./scripts/test-runlib.sh
+
       - name: Validate the auto version bump covers every build-affecting path
         run: |
           set -euo pipefail
