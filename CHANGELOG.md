@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `scripts/runlib.sh` installs both artefacts this crate ships —
+  `~/.cargo/bin/neat_ai_backpropagation` and
+  `~/.cargo/lib/libneat_ai_backpropagation.{dylib,so}` — each stamped with
+  `.neat_ai_backpropagation.version`. stdout is the CLI path; a second run
+  whose stamps match prints `[neat_ai_backpropagation] already installed v<x>`
+  and runs no `cargo build`; `target/` is removed after a successful install.
+  GRQ `#4757` / `#4774` call this script on every trainDir stage (issue #152).
+  Family-sync from NEAT-AI-core waits on core `#680`.
 - Lockfile integrity gate (`scripts/check-lockfile-integrity.sh`,
   `scripts/lockfile_integrity.py`), wired into `quality.sh` and CI. It fetches
   the crates.io sparse index for every registry package in `Cargo.lock` and

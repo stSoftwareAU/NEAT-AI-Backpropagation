@@ -33,6 +33,24 @@ resolves (issue #141).
 
 Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.98.0`).
 
+### Installed artefacts (`scripts/runlib.sh`)
+
+GRQ builds this crate through [`scripts/runlib.sh`](./scripts/runlib.sh)
+(sibling #152 / GRQ#4774). The script installs both artefacts under
+`~/.cargo` and prints the CLI path on stdout:
+
+| Artefact | Path |
+| -------- | ---- |
+| CLI binary | `~/.cargo/bin/neat_ai_backpropagation` |
+| FFI cdylib | `~/.cargo/lib/libneat_ai_backpropagation.{dylib,so}` |
+| Version stamps | `~/.cargo/bin/.neat_ai_backpropagation.version` and `~/.cargo/lib/.neat_ai_backpropagation.version` |
+
+A second run whose stamps match the crate version prints
+`[neat_ai_backpropagation] already installed v<x>` and runs no `cargo`
+command. `target/` is removed after a successful build. Refreshing this
+script is not a source change — it is not in
+[`scripts/build-affecting-paths.sh`](./scripts/build-affecting-paths.sh).
+
 ### Build profiles
 
 Workspace root [`Cargo.toml`](./Cargo.toml) follows the fleet rule

@@ -126,6 +126,9 @@ echo "Verifying Cargo.lock against the published crates.io index (issue #148)...
 ./scripts/test-check-lockfile-integrity.sh
 ./scripts/check-lockfile-integrity.sh
 
+echo "Validating scripts/runlib.sh already-installed contract (issue #152)..."
+./scripts/test-runlib.sh
+
 echo "Checking formatting..."
 cargo fmt --all -- --check
 
