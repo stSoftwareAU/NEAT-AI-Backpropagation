@@ -90,4 +90,25 @@
 # Verified against the sibling clone at 0.15.7 (de4b81b) by a clean
 # `cargo build --all-targets`, `cargo clippy --all-targets -- -D warnings` and
 # the full test suite (18 test binaries, 0 failures).
-0.15.7
+#
+# 0.15.7 -> 0.17.0: acknowledge two breaking neat-core minors, both confined
+# to the pruning surface this crate does not name.
+#   * 0.16.0 (neat-core #675, Ockham #197) adds public fields on `PruneResult`
+#     (`converted_neurons`) and `UncompensatedTarget` (`dropped_mean`) — none
+#     of those types is `#[non_exhaustive]`, so a struct literal or exhaustive
+#     destructure stops compiling — and rewrites a non-`IF` aggregate the cut
+#     leaves with one inward edge to the point-wise squash that computes the
+#     same number.
+#   * 0.17.0 (neat-core #678, Ockham #198) changes documented `prune_neuron`
+#     runtime: an `IF` left short a role is rewritten with `IfRepair::Rewrite`
+#     instead of the TypeScript-parity `Downgrade`, so `downgraded_if_neurons`
+#     is empty on both entry points.
+#
+# `backpropagation` never names `PruneResult`, `prune_neuron`, `prune_synapse`
+# or any prune JSON/WASM type — it reaches neat-core through
+# `parse_creature_json`, `compile_creature`, `creature_validate`, the
+# propagate and MSE entry points and the gene-facet helpers — so no code
+# change is required. Verified by a repo-wide grep for those symbols (zero
+# hits) and `./scripts/check-neat-core-version.sh` against neat-core
+# `origin/Develop` at 0.17.0 (282bc18).
+0.17.0

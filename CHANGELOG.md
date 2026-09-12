@@ -361,6 +361,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Recorded neat-core 0.17.0 as the handled baseline in
+  `neat-core.expected-version` (was 0.15.7), so the unhandled-breaking-bump
+  gate can pass and `scripts/runlib.sh` can land. The range is two pruning
+  minors (0.16.0 field additions on `PruneResult`, 0.17.0 `prune_neuron` `IF`
+  rewrite) that this crate does not name, so no code change was required.
+
 - Recorded neat-core 0.15.7 as the handled baseline in
   `neat-core.expected-version` (was 0.13.0), clearing the unhandled-breaking-bump
   gate. The range carries two breaking minors — 0.14.0 bounds the declared
