@@ -82,6 +82,28 @@ flowchart LR
     job -->|fetch error| red["job fails non-zero"]
 ```
 
+### CI on this PR
+
+The new job ran for real: **"Sync scripts/runlib.sh from NEAT-AI-core" passed in
+4s** on run `34787814...`, alongside Shell Script Quality, Workflow Lint, SAST
+Scan, Secrets Detection, Lint Markdown, Spell Check, Auto-format and
+Auto-increment — all green.
+
+`Project Validation` is **red for a pre-existing reason** (#156): its
+`Gate on unhandled breaking neat-core bump` step fails with
+`0.20.0 exceeds handled baseline 0.17.0` and aborts the job, so the two new
+validation steps this PR adds never execute in CI. Both were proven locally
+(see below). That gate fails on every PR in this repo until #156 lands; nothing
+in this diff touches `neat-core.expected-version`, `Cargo.lock` or any Rust
+source.
+
+Two commits on this branch were pushed by the repository's own automation, not
+by hand: `chore(fmt): apply rustfmt and sync neat-core lock` (auto-format.yml
+runs `cargo update -p neat-core`) and the patch bump that followed it
+(version-increment.yml, because `Cargo.lock` is a build-affecting path). The
+copy itself bumps no version, as the issue requires — `scripts/runlib.sh` is
+absent from `scripts/build-affecting-paths.sh`.
+
 ### Quality gate
 
 `./quality.sh` stops early on a **pre-existing** failure unrelated to this
