@@ -15,7 +15,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   whose stamps match prints `[neat_ai_backpropagation] already installed v<x>`
   and runs no `cargo build`; `target/` is removed after a successful install.
   GRQ `#4757` / `#4774` call this script on every trainDir stage (issue #152).
-  Family-sync from NEAT-AI-core waits on core `#680`.
+- `scripts/runlib.sh` is now the **canonical NEAT-AI-core copy** — byte-identical
+  to `scripts/runlib.sh` on NEAT-AI-core `Develop` (core `#680`) and never
+  edited here. `.github/workflows/family-sync.yml` keeps it that way: every PR
+  fetches core's `Develop` copy and commits the refreshed file onto the branch
+  when it differs, rebasing before the push and failing non-zero on a fetch
+  error. `scripts/check-family-sync-workflow.sh` (with
+  `scripts/test-check-family-sync-workflow.sh`) fails CI when the job is
+  misdeclared, and both run from `quality.sh` and `ci.yml`. While core `#690`
+  is open the already-installed run still costs one `cargo metadata` call on
+  this crate's explicit `[[bin]]` shape — it compiles nothing either way, and
+  the family sync brings the fix in once `#690` lands (issue #152).
 - Lockfile integrity gate (`scripts/check-lockfile-integrity.sh`,
   `scripts/lockfile_integrity.py`), wired into `quality.sh` and CI. It fetches
   the crates.io sparse index for every registry package in `Cargo.lock` and

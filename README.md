@@ -46,10 +46,42 @@ GRQ builds this crate through [`scripts/runlib.sh`](./scripts/runlib.sh)
 | Version stamps | `~/.cargo/bin/.neat_ai_backpropagation.version` and `~/.cargo/lib/.neat_ai_backpropagation.version` |
 
 A second run whose stamps match the crate version prints
-`[neat_ai_backpropagation] already installed v<x>` and runs no `cargo`
-command. `target/` is removed after a successful build. Refreshing this
-script is not a source change — it is not in
-[`scripts/build-affecting-paths.sh`](./scripts/build-affecting-paths.sh).
+`[neat_ai_backpropagation] already installed v<x>`, compiles nothing and
+prints the same CLI path. `target/` is removed after a successful build.
+
+#### Canonical copy and family sync
+
+`scripts/runlib.sh` has **one home** — `scripts/runlib.sh` on
+[NEAT-AI-core](https://github.com/stSoftwareAU/NEAT-AI-core) `Develop`
+(core `#680`). The copy here is byte-identical and is never edited:
+behaviour changes are made in NEAT-AI-core and re-copied outward.
+[`.github/workflows/family-sync.yml`](./.github/workflows/family-sync.yml)
+is the copy — on every PR it fetches core's `Develop` copy and commits the
+refreshed file onto the branch when it differs, and a fetch error fails the
+job rather than passing a stale copy off as synced.
+[`scripts/check-family-sync-workflow.sh`](./scripts/check-family-sync-workflow.sh)
+fails CI when that job is misdeclared.
+
+```mermaid
+flowchart LR
+    core["NEAT-AI-core Develop<br/>scripts/runlib.sh"] -->|curl --fail| job["family-sync job<br/>(pull_request)"]
+    branch["PR branch copy"] --> job
+    job -->|byte-identical| same["no commit"]
+    job -->|differs| push["commit + rebase + push<br/>refreshed copy"]
+    job -->|fetch error| red["job fails"]
+```
+
+Refreshing the script is not a source change — it is not in
+[`scripts/build-affecting-paths.sh`](./scripts/build-affecting-paths.sh),
+so the sync commit bumps no version.
+
+One caveat while
+[core `#690`](https://github.com/stSoftwareAU/NEAT-AI-core/pull/690) is
+open: today's canonical copy declines its no-cargo fast path on a manifest
+carrying an explicit `[[bin]]` table — this crate's shape — so the
+already-installed run still costs a single `cargo metadata` call before it
+skips. It builds nothing either way, and the family sync brings the fix in
+automatically once `#690` lands on core `Develop`.
 
 ### Build profiles
 
