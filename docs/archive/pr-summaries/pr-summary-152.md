@@ -88,11 +88,16 @@ flowchart LR
 change: the neat-core breaking-bump gate reads baseline `0.17.0` from
 `neat-core.expected-version` while NEAT-AI-core `Develop` is `0.20.0`. That
 baseline is `0.17.0` on `Develop` too, so every PR in this repo hits it; filed
-as #156. Every other gate step was run individually and passed — shellcheck,
-all `check-*` workflow validators (including the new one), actionlint,
-codespell, `cargo deny`, the lockfile-integrity gate, `scripts/test-runlib.sh`,
-`cargo fmt --check`, clippy with `-D warnings`, `cargo test --workspace
---all-features`, and `cargo doc` with `RUSTDOCFLAGS="-D warnings"`.
+as #156. To prove nothing else in the gate is red, `./quality.sh` was re-run
+with that baseline temporarily raised to `0.20.0` — it reached
+`All quality checks passed!` and exited 0, covering shellcheck, every
+`check-*` validator (including both new ones), actionlint, codespell,
+`cargo deny`, the lockfile-integrity gate, `scripts/test-runlib.sh`,
+`cargo fmt --check`, clippy with `-D warnings`,
+`cargo test --workspace --all-features` and `cargo doc` with
+`RUSTDOCFLAGS="-D warnings"`. The temporary edit was reverted immediately;
+`neat-core.expected-version` is unchanged in this diff, and the working tree
+was verified clean afterwards.
 
 ## Acceptance Criteria
 
