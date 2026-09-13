@@ -181,6 +181,12 @@ jobs:
           set -euo pipefail
           ./scripts/test-runlib.sh
 
+      - name: Validate the family-sync workflow keeps scripts/runlib.sh canonical
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-family-sync-workflow.sh
+          ./scripts/check-family-sync-workflow.sh
+
       - name: Validate the auto version bump covers every build-affecting path
         run: |
           set -euo pipefail

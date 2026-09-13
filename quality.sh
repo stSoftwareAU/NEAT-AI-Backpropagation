@@ -50,6 +50,10 @@ echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
 ./scripts/test-check-version-increment-workflow.sh
 ./scripts/check-version-increment-workflow.sh
 
+echo "Validating the family-sync workflow that keeps scripts/runlib.sh canonical..."
+./scripts/test-check-family-sync-workflow.sh
+./scripts/check-family-sync-workflow.sh
+
 echo "Validating every build-affecting change bumps the crate version (issue #95)..."
 ./scripts/test-bump-backpropagation-version.sh
 

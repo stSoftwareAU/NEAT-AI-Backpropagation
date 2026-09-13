@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Tests for scripts/check-family-sync-workflow.sh (issue #152).
+#
+# Every case writes a fixture workflow, runs the real checker against it and
+# asserts the exit code — and, where it matters, that the failure names the
+# rule that broke. The fixture below is a valid family-sync workflow; each
+# failing case starts from it and breaks exactly one rule, so a case that goes
+# green for the wrong reason is visible.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CHECKER="$SCRIPT_DIR/check-family-sync-workflow.sh"
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+PASSED=0
+FAILED=0
+
+if [[ ! -x "$CHECKER" ]]; then
+  echo "FAIL: checker not found or not executable: $CHECKER" >&2
+  exit 2
+fi
+
+# A workflow satisfying every rule in the checker's header.
+write_valid() {
+  local path="$WORK_DIR/$1.yml"
+  cat >"$path" <<'YAML'
+name: Family Sync
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - Develop
+      - "milestone/**"
+permissions:
+  contents: read
+jobs:
+  family-sync:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+    env:
+      CANONICAL_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/runlib.sh
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: false
+      - name: Fetch the canonical copy
+        id: sync
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --output fetched "$CANONICAL_URL"
+          if cmp -s fetched scripts/runlib.sh; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+          else
+            cp fetched scripts/runlib.sh
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Commit and push the refreshed copy
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GH_PAT: ${{ steps.push-token.outputs.token || secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git commit -m "chore: sync scripts/runlib.sh from NEAT-AI-core Develop"
+          git fetch origin "$PR_HEAD_REF"
+          git rebase FETCH_HEAD
+          git push origin "HEAD:$PR_HEAD_REF"
+YAML
+  printf '%s' "$path"
+}
+
+# break_rule NAME SED_EXPRESSION → path to a fixture with one rule broken.
+break_rule() {
+  local name="$1" expression="$2" path
+  path="$(write_valid "$name")"
+  sed -i "$expression" "$path"
+  printf '%s' "$path"
+}
+
+# expect_exit DESCRIPTION EXPECTED_CODE WORKFLOW_PATH [EXPECTED_OUTPUT_SUBSTRING]
+expect_exit() {
+  local description="$1" expected="$2" workflow="$3" needle="${4:-}"
+  local output status=0
+  output="$("$CHECKER" "$workflow" 2>&1)" || status=$?
+  if [[ "$status" -ne "$expected" ]]; then
+    echo "FAIL $description: expected exit $expected, got $status" >&2
+    printf '%s\n' "$output" >&2
+    FAILED=$((FAILED + 1))
+    return
+  fi
+  if [[ -n "$needle" && "$output" != *"$needle"* ]]; then
+    echo "FAIL $description: output did not mention '$needle'" >&2
+    printf '%s\n' "$output" >&2
+    FAILED=$((FAILED + 1))
+    return
+  fi
+  echo "OK   $description"
+  PASSED=$((PASSED + 1))
+}
+
+expect_exit "accepts the committed family-sync workflow" 0 \
+  "$REPO_ROOT/.github/workflows/family-sync.yml"
+
+expect_exit "accepts a workflow satisfying every rule" 0 "$(write_valid valid)"
+
+expect_exit "rejects a workflow with no pull_request trigger" 1 \
+  "$(break_rule no-pr 's/^  pull_request:/  workflow_dispatch:/')" \
+  "no pull_request trigger"
+
+expect_exit "rejects a push trigger" 1 \
+  "$(break_rule push-trigger 's/^on:/on:\n  push:\n    branches: [Develop]/')" \
+  "push trigger present"
+
+expect_exit "rejects a branch filter that skips milestone branches" 1 \
+  "$(break_rule no-milestone '/milestone/d')" \
+  "milestone"
+
+expect_exit "rejects permissions: write-all" 1 \
+  "$(break_rule write-all 's/^      contents: write/      write-all/;s/^permissions:/permissions: write-all\nunused:/')" \
+  "write-all"
+
+expect_exit "rejects a canonical URL that is not core Develop runlib.sh" 1 \
+  "$(break_rule wrong-source 's#NEAT-AI-core/Develop/scripts/runlib.sh#NEAT-AI-core/Develop/scripts/other.sh#')" \
+  "nothing to sync from"
+
+expect_exit "rejects a fetch that ignores HTTP errors" 1 \
+  "$(break_rule no-curl-fail 's/curl --fail/curl/')" \
+  "curl --fail"
+
+expect_exit "rejects an unconditional commit/push" 1 \
+  "$(break_rule no-guard "/if: steps.sync.outputs.changed/d")" \
+  "no conditional"
+
+expect_exit "rejects a push with no rebase" 1 \
+  "$(break_rule no-rebase '/git rebase FETCH_HEAD/d')" \
+  "rebase"
+
+expect_exit "rejects a missing fork guard" 1 \
+  "$(break_rule no-fork-guard '/head.repo.full_name/d')" \
+  "head.repo"
+
+expect_exit "rejects a checkout that persists credentials" 1 \
+  "$(break_rule persists-credentials 's/persist-credentials: false/persist-credentials: true/')" \
+  "persist-credentials"
+
+expect_exit "rejects an action pinned to a tag" 1 \
+  "$(break_rule tag-pinned 's|actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5|actions/checkout@v5|')" \
+  "commit SHA"
+
+expect_exit "rejects a push with no ACTIONS_PUSH fallback" 1 \
+  "$(break_rule no-push-token 's/secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN/secrets.GITHUB_TOKEN/')" \
+  "ACTIONS_PUSH"
+
+expect_exit "rejects run blocks without strict bash" 1 \
+  "$(break_rule no-strict-bash '/set -euo pipefail/d')" \
+  "set -euo pipefail"
+
+expect_exit "reports a missing workflow with exit 2" 2 \
+  "$WORK_DIR/does-not-exist.yml" "not found"
+
+echo "check-family-sync-workflow tests: $PASSED passed, $FAILED failed"
+if [[ "$FAILED" -ne 0 ]]; then
+  exit 1
+fi
