@@ -374,6 +374,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Recorded neat-core 0.20.0 as the handled baseline in
+  `neat-core.expected-version` (was 0.17.0), clearing the
+  unhandled-breaking-bump gate (issue #156). The range is one pruning minor
+  (0.18.0) this crate does not name, `compile_creature`'s new
+  `CreatureError::UnknownTargetUuid` refusal for a synapse whose `toUUID` names
+  no listed neuron (0.19.0, core `#685`), and two versions with no Rust change
+  (0.19.1, 0.20.0). This crate never matches on `CreatureError` and never
+  synthesises a synapse destination — it rewrites weights and biases on
+  creatures it parsed — so no code change was required.
 - Recorded neat-core 0.17.0 as the handled baseline in
   `neat-core.expected-version` (was 0.15.7), so the unhandled-breaking-bump
   gate can pass and `scripts/runlib.sh` can land. The range is two pruning

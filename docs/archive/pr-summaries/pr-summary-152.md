@@ -89,13 +89,19 @@ The new job ran for real: **"Sync scripts/runlib.sh from NEAT-AI-core" passed in
 Scan, Secrets Detection, Lint Markdown, Spell Check, Auto-format and
 Auto-increment — all green.
 
-`Project Validation` is **red for a pre-existing reason** (#156): its
-`Gate on unhandled breaking neat-core bump` step fails with
-`0.20.0 exceeds handled baseline 0.17.0` and aborts the job, so the two new
-validation steps this PR adds never execute in CI. Both were proven locally
-(see below). That gate fails on every PR in this repo until #156 lands; nothing
-in this diff touches `neat-core.expected-version`, `Cargo.lock` or any Rust
-source.
+`Project Validation` was **red for a pre-existing reason** (#156): its
+`Gate on unhandled breaking neat-core bump` step failed with
+`0.20.0 exceeds handled baseline 0.17.0` and aborted the job, so the two new
+validation steps this PR adds never executed in CI. Both were proven locally
+(see below). That gate failed on every PR in this repo, so it is cleared here:
+`neat-core.expected-version` now records `0.20.0` with the acknowledgement of
+the 0.17.0 -> 0.20.0 range (one pruning minor this crate does not name,
+`compile_creature`'s new `CreatureError::UnknownTargetUuid` refusal, and two
+versions with no Rust change). No Rust source changed — the crate never matches
+on `CreatureError` and never synthesises a synapse destination — and it was
+verified against the sibling clone at 0.20.0 (`ae71f44`) by
+`cargo build --all-targets`, `cargo clippy --all-targets -- -D warnings` and the
+full test suite.
 
 Two commits on this branch were pushed by the repository's own automation, not
 by hand: `chore(fmt): apply rustfmt and sync neat-core lock` (auto-format.yml
@@ -106,20 +112,15 @@ absent from `scripts/build-affecting-paths.sh`.
 
 ### Quality gate
 
-`./quality.sh` stops early on a **pre-existing** failure unrelated to this
-change: the neat-core breaking-bump gate reads baseline `0.17.0` from
-`neat-core.expected-version` while NEAT-AI-core `Develop` is `0.20.0`. That
-baseline is `0.17.0` on `Develop` too, so every PR in this repo hits it; filed
-as #156. To prove nothing else in the gate is red, `./quality.sh` was re-run
-with that baseline temporarily raised to `0.20.0` — it reached
-`All quality checks passed!` and exited 0, covering shellcheck, every
+`./quality.sh` reaches `All quality checks passed!` and exits 0 with the
+baseline recorded at `0.20.0`, covering shellcheck, every
 `check-*` validator (including both new ones), actionlint, codespell,
 `cargo deny`, the lockfile-integrity gate, `scripts/test-runlib.sh`,
 `cargo fmt --check`, clippy with `-D warnings`,
 `cargo test --workspace --all-features` and `cargo doc` with
-`RUSTDOCFLAGS="-D warnings"`. The temporary edit was reverted immediately;
-`neat-core.expected-version` is unchanged in this diff, and the working tree
-was verified clean afterwards.
+`RUSTDOCFLAGS="-D warnings"`. Before the baseline was recorded it stopped
+early on the #156 failure described above, which is why the earlier evidence in
+this summary was gathered with that gate raised by hand.
 
 ## Acceptance Criteria
 
@@ -127,7 +128,7 @@ was verified clean afterwards.
 
 - **met** — Byte-identical copy; a stale copy on a PR branch is refreshed by CI — evidence: `scripts/check-runlib-canonical.sh` passes against the sibling (`scripts/test-check-runlib-canonical.sh::the committed scripts/runlib.sh matches the NEAT-AI-core sibling`), sha256 match above, and `.github/workflows/family-sync.yml:54-90` refreshes the branch copy — reviewer: met
 - **partial** — Both artefacts installed and stamped; `target/` removed after success; a second run prints `[neat_ai_backpropagation] already installed v<x>` and runs no cargo command — evidence: `scripts/test-runlib.sh::a cold run installs both artefacts, stamps them and removes target/` plus the end-to-end transcript above — reviewer: partial — reason: install, stamping, `target/` removal and the already-installed line are all met, but the warm run still costs one `cargo metadata` call because the canonical copy declines its fast path on this crate's explicit `[[bin]]` table (`scripts/runlib.sh:251-254` vs `backpropagation/Cargo.toml:21`); the fix is the open NEAT-AI-core#690, which family-sync will copy in automatically — tracked as #157
-- **met** — Tests and quality checks pass — evidence: `scripts/test-runlib.sh` (22), `scripts/test-check-family-sync-workflow.sh` (17), `scripts/test-check-runlib-canonical.sh` (7), plus shellcheck, actionlint, codespell, markdownlint, `cargo deny`, `cargo fmt --check`, clippy `-D warnings`, `cargo test --workspace --all-features` and `cargo doc` — reviewer: met — reason: the reviewer could not run `cargo test` in its worktree (absent `../../NEAT-AI-core` path dependency); it was run here and passed. `./quality.sh` itself stops earlier on the pre-existing neat-core baseline failure filed as #156
+- **met** — Tests and quality checks pass — evidence: `scripts/test-runlib.sh` (22), `scripts/test-check-family-sync-workflow.sh` (17), `scripts/test-check-runlib-canonical.sh` (7), plus shellcheck, actionlint, codespell, markdownlint, `cargo deny`, `cargo fmt --check`, clippy `-D warnings`, `cargo test --workspace --all-features` and `cargo doc` — reviewer: met — reason: the reviewer could not run `cargo test` in its worktree (absent `../../NEAT-AI-core` path dependency); it was run here and passed. `./quality.sh` now passes end to end; it previously stopped on the neat-core baseline failure filed as #156, cleared here
 - **unrequested** — `scripts/check-family-sync-workflow.sh` and its test suite — reviewer: unrequested — reason: the issue asked to "register the job in whichever `scripts/check-*-workflow.sh` enumerates workflows", but no script in this repo enumerates workflows — each hard-codes one `WORKFLOW=` default — so a dedicated checker is the repo's actual convention
 - **unrequested** — `scripts/check-runlib-canonical.sh`, its test suite and the CI step that runs it — reviewer: unrequested — reason: added after the review round to close the Standards reviewer's violation 4 (nothing verified the copy's content, and the sync job is skipped on fork PRs); the Spec reviewer did not see it
 - **unrequested** — README's mermaid sync flow, the "Canonical copy and family sync" subsection and the `#690` caveat — reviewer: unrequested — reason: the issue asked only that "README notes the install paths", but a code change owes a docs change: the copy contract, the cwd requirement and the residual `cargo metadata` call are all new facts a reader needs
