@@ -99,10 +99,12 @@ else
   fail "no conditional 'if: steps.*.outputs.*' guard — an identical copy would be committed on every run"
 fi
 
-if grep -qE '(^|[[:space:]])rebase([[:space:]]|$)' "$WORKFLOW"; then
+# Comment lines are stripped first: the rule has to be satisfied by a real
+# `git ... rebase` command, never by the workflow's own prose about rebasing.
+if grep -vE '^[[:space:]]*#' "$WORKFLOW" | grep -qE '(^|[[:space:]])rebase([[:space:]]|$)'; then
   ok "rebases before pushing"
 else
-  fail "no rebase before the push — a branch that moved meanwhile is rejected as non-fast-forward"
+  fail "no rebase command before the push — a branch that moved meanwhile is rejected as non-fast-forward (a comment mentioning rebase does not count)"
 fi
 
 if grep -qE 'github\.event\.pull_request\.head\.repo\.full_name[[:space:]]*==' "$WORKFLOW" \

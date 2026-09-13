@@ -187,6 +187,15 @@ jobs:
           ./scripts/test-check-family-sync-workflow.sh
           ./scripts/check-family-sync-workflow.sh
 
+      # Content, not workflow shape: family-sync is skipped on fork PRs, so a
+      # downstream edit to the copy would otherwise merge unnoticed. The
+      # NEAT-AI-core Develop checkout is already on the runner (setup-rust-workspace).
+      - name: Gate on scripts/runlib.sh drift from the canonical NEAT-AI-core copy
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-runlib-canonical.sh
+          ./scripts/check-runlib-canonical.sh "$GITHUB_WORKSPACE/NEAT-AI-core/scripts/runlib.sh"
+
       - name: Validate the auto version bump covers every build-affecting path
         run: |
           set -euo pipefail

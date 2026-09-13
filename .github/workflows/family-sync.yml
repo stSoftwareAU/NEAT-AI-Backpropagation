@@ -112,7 +112,11 @@ jobs:
           # increment, auto-format) may have pushed while this one ran, and a
           # stale parent would be rejected as a non-fast-forward.
           "$GIT" -c core.hooksPath=/dev/null fetch origin "$PR_HEAD_REF"
-          "$GIT" -c core.hooksPath=/dev/null rebase FETCH_HEAD
+          if ! "$GIT" -c core.hooksPath=/dev/null rebase FETCH_HEAD; then
+            "$GIT" -c core.hooksPath=/dev/null rebase --abort || true
+            echo "::error::could not rebase the refreshed scripts/runlib.sh onto $PR_HEAD_REF — the branch edits it too; re-copy it from NEAT-AI-core Develop by hand"
+            exit 1
+          fi
           "$GIT" -c core.hooksPath=/dev/null \
             -c http.https://github.com/.extraheader="$AUTH_HEADER" \
             push origin "HEAD:$PR_HEAD_REF"

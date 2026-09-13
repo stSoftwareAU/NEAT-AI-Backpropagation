@@ -207,6 +207,113 @@ RC=0
 OUT="$(bash "${RUNLIB}" 2>"${WORK_DIR}/stale.err")" || RC=$?
 assert_eq "stale stamp rebuilds rather than reporting complete" "99" "${RC}"
 
+# The install path itself, hermetically: a synthetic checkout with this crate's
+# shape (an explicit `[[bin]]` table beside a cdylib `[lib]`), and a cargo shim
+# whose "build" drops the artefacts where the real one would. Nothing else in
+# the repository asserts that both artefacts land, that both stamps are written
+# or that `target/` is removed — the cases above all stop at the decision to
+# build.
+echo ""
+echo "=== a cold run installs both artefacts, stamps them and removes target/ ==="
+FIXTURE="${WORK_DIR}/fixture"
+mkdir -p "${FIXTURE}/member/src" "${FIXTURE}/shim"
+cat >"${FIXTURE}/Cargo.toml" <<'TOML'
+[workspace]
+members = ["member"]
+resolver = "2"
+TOML
+cat >"${FIXTURE}/member/Cargo.toml" <<TOML
+[package]
+name = "${CRATE}"
+version = "${VERSION}"
+edition = "2024"
+
+[lib]
+name = "${CRATE}"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "${CRATE}"
+path = "src/main.rs"
+TOML
+: >"${FIXTURE}/member/src/lib.rs"
+: >"${FIXTURE}/member/src/main.rs"
+
+# `build` writes the artefacts the real cargo would, so the staging, commit,
+# stamp and target/ removal steps all run for real against them.
+cat >"${FIXTURE}/shim/cargo" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s
+' "\$*" >>"\${RUNLIB_SHIM_LOG}"
+case "\${1:-}" in
+  metadata)
+    cat <<'JSON'
+{
+  "packages": [
+    {
+      "name": "${CRATE}",
+      "version": "${VERSION}",
+      "manifest_path": "${FIXTURE}/member/Cargo.toml",
+      "targets": [
+        { "kind": ["bin"], "name": "${CRATE}" },
+        { "kind": ["cdylib", "rlib"], "name": "${CRATE}" }
+      ]
+    }
+  ],
+  "target_directory": "${FIXTURE}/target"
+}
+JSON
+    ;;
+  build)
+    mkdir -p "${FIXTURE}/target/release"
+    printf 'built-bin
+' >"${FIXTURE}/target/release/${CRATE}"
+    chmod +x "${FIXTURE}/target/release/${CRATE}"
+    printf 'built-lib
+' >"${FIXTURE}/target/release/${LIB_FILE}"
+    ;;
+  *)
+    echo "UNEXPECTED cargo: \$*" >&2
+    exit 99
+    ;;
+esac
+EOF
+chmod +x "${FIXTURE}/shim/cargo"
+
+rm -rf "${HOME}"
+mkdir -p "${BIN_DIR}" "${LIB_DIR}"
+: >"${SHIM_LOG}"
+RC=0
+OUT="$(cd "${FIXTURE}" && PATH="${FIXTURE}/shim:${REAL_PATH}" bash "${RUNLIB}" 2>"${WORK_DIR}/install.err")" || RC=$?
+assert_eq "cold install exits 0" "0" "${RC}"
+assert_eq "cold install stdout is the CLI path" "${BIN_DIR}/${CRATE}" "${OUT}"
+assert_eq "the CLI binary is installed" "built-bin" "$(cat "${BIN_DIR}/${CRATE}" 2>/dev/null || true)"
+assert_eq "the cdylib is installed" "built-lib" "$(cat "${LIB_DIR}/${LIB_FILE}" 2>/dev/null || true)"
+BIN_EXECUTABLE="no"
+[[ -x "${BIN_DIR}/${CRATE}" ]] && BIN_EXECUTABLE="yes"
+assert_eq "the CLI binary is executable" "yes" "${BIN_EXECUTABLE}"
+assert_eq "a stamp sits beside the binary" "${VERSION}" \
+  "$(cat "${BIN_DIR}/.${CRATE}.version" 2>/dev/null || true)"
+assert_eq "a stamp sits beside the cdylib" "${VERSION}" \
+  "$(cat "${LIB_DIR}/.${CRATE}.version" 2>/dev/null || true)"
+TARGET_PRESENT="yes"
+[[ -d "${FIXTURE}/target" ]] || TARGET_PRESENT="no"
+assert_eq "target/ is removed after a successful install" "no" "${TARGET_PRESENT}"
+assert_eq "the removal names the freed bytes on stderr" "0" \
+  "$(grep -q "\[${CRATE}\] removed ${FIXTURE}/target (freed [0-9]* bytes)" "${WORK_DIR}/install.err"; echo $?)"
+
+echo ""
+echo "=== the run after that install compiles nothing ==="
+: >"${SHIM_LOG}"
+RC=0
+OUT="$(cd "${FIXTURE}" && PATH="${FIXTURE}/shim:${REAL_PATH}" bash "${RUNLIB}" 2>"${WORK_DIR}/install-warm.err")" || RC=$?
+assert_eq "the warm run exits 0" "0" "${RC}"
+assert_eq "the warm run names the installed version" "0" \
+  "$(grep -q "\[${CRATE}\] already installed v${VERSION}" "${WORK_DIR}/install-warm.err"; echo $?)"
+assert_eq "the warm run runs no cargo build" "0" "$(cargo_non_metadata_invocations)"
+
 echo ""
 echo "=== summary: ${PASSED} passed, ${FAILED} failed ==="
 [[ "${FAILED}" -eq 0 ]]

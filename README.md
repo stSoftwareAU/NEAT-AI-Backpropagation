@@ -36,8 +36,11 @@ Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.98.0`).
 ### Installed artefacts (`scripts/runlib.sh`)
 
 GRQ builds this crate through [`scripts/runlib.sh`](./scripts/runlib.sh)
-(sibling #152 / GRQ#4774). The script installs both artefacts under
-`~/.cargo` and prints the CLI path on stdout:
+(sibling #152 / GRQ#4774). **Run it from the repository root** — it resolves
+the workspace from the current directory, not from its own location, and exits
+non-zero (`no Cargo.toml in <dir>`) anywhere else. It installs both artefacts
+under `~/.cargo` (or `$CARGO_HOME`, when set) and prints the CLI path on
+stdout:
 
 | Artefact | Path |
 | -------- | ---- |
@@ -60,7 +63,11 @@ is the copy — on every PR it fetches core's `Develop` copy and commits the
 refreshed file onto the branch when it differs, and a fetch error fails the
 job rather than passing a stale copy off as synced.
 [`scripts/check-family-sync-workflow.sh`](./scripts/check-family-sync-workflow.sh)
-fails CI when that job is misdeclared.
+fails CI when that job is misdeclared, and
+[`scripts/check-runlib-canonical.sh`](./scripts/check-runlib-canonical.sh)
+fails CI when the committed copy has drifted from core `Develop` by so much as
+a byte — the sync job is skipped on fork PRs, so the content is gated
+separately from the workflow's shape.
 
 ```mermaid
 flowchart LR

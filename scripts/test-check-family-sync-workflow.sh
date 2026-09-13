@@ -77,10 +77,16 @@ YAML
 }
 
 # break_rule NAME SED_EXPRESSION → path to a fixture with one rule broken.
+#
+# `sed -i` is written to a new file rather than in place: BSD sed (macOS) reads
+# the argument after -i as a backup suffix, so the in-place form fails there.
+# Multi-line insertions are built with heredocs below for the same reason —
+# `\n` in a replacement is a GNU extension.
 break_rule() {
   local name="$1" expression="$2" path
   path="$(write_valid "$name")"
-  sed -i "$expression" "$path"
+  sed "$expression" "$path" >"$path.edited"
+  mv "$path.edited" "$path"
   printf '%s' "$path"
 }
 
@@ -114,17 +120,24 @@ expect_exit "rejects a workflow with no pull_request trigger" 1 \
   "$(break_rule no-pr 's/^  pull_request:/  workflow_dispatch:/')" \
   "no pull_request trigger"
 
-expect_exit "rejects a push trigger" 1 \
-  "$(break_rule push-trigger 's/^on:/on:\n  push:\n    branches: [Develop]/')" \
-  "push trigger present"
+push_trigger="$(write_valid push-trigger)"
+{
+  echo "on:"
+  echo "  push:"
+  echo "    branches: [Develop]"
+  grep -v '^on:$' "$push_trigger"
+} >"$push_trigger.edited"
+mv "$push_trigger.edited" "$push_trigger"
+expect_exit "rejects a push trigger" 1 "$push_trigger" "push trigger present"
 
 expect_exit "rejects a branch filter that skips milestone branches" 1 \
   "$(break_rule no-milestone '/milestone/d')" \
   "milestone"
 
-expect_exit "rejects permissions: write-all" 1 \
-  "$(break_rule write-all 's/^      contents: write/      write-all/;s/^permissions:/permissions: write-all\nunused:/')" \
-  "write-all"
+write_all="$(write_valid write-all)"
+sed 's/^permissions:$/permissions: write-all/' "$write_all" >"$write_all.edited"
+mv "$write_all.edited" "$write_all"
+expect_exit "rejects permissions: write-all" 1 "$write_all" "write-all"
 
 expect_exit "rejects a canonical URL that is not core Develop runlib.sh" 1 \
   "$(break_rule wrong-source 's#NEAT-AI-core/Develop/scripts/runlib.sh#NEAT-AI-core/Develop/scripts/other.sh#')" \
@@ -141,6 +154,15 @@ expect_exit "rejects an unconditional commit/push" 1 \
 expect_exit "rejects a push with no rebase" 1 \
   "$(break_rule no-rebase '/git rebase FETCH_HEAD/d')" \
   "rebase"
+
+commented_rebase="$(write_valid commented-rebase)"
+{
+  echo "# The rebase before the push keeps a moved branch pushable."
+  grep -v 'git rebase FETCH_HEAD' "$commented_rebase"
+} >"$commented_rebase.edited"
+mv "$commented_rebase.edited" "$commented_rebase"
+expect_exit "rejects a rebase that exists only in a comment" 1 \
+  "$commented_rebase" "rebase"
 
 expect_exit "rejects a missing fork guard" 1 \
   "$(break_rule no-fork-guard '/head.repo.full_name/d')" \
