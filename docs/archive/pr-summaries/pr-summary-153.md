@@ -172,8 +172,8 @@ actionlint, codespell, markdownlint, `cargo deny check`, lockfile integrity —
 - **clean** — Australian English throughout; bash 3.2 portability (no
   `mapfile`/associative arrays/GNU-only flags, safe empty-array expansion,
   `set -euo pipefail` everywhere); every `uses:` pinned to a 40-char SHA with a
-  version comment, least-privilege `permissions:`, `persist-credentials: false`,
-  no `${{ github.* }}` interpolated into `run:`; tests run real scripts and
+  version comment, least-privilege `permissions:`, credential persistence
+  disabled on every checkout, no `${{ github.* }}` interpolated into `run:`; tests run real scripts and
   assert exit codes and messages; fail-loud behaviour (exit 2 for an unverified
   comparison, non-zero for an unresolvable pin); no secrets or hidden files
   staged; the deleted `test-check-runlib-canonical.sh` cases are all carried
