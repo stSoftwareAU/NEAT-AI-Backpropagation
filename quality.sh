@@ -47,12 +47,10 @@ echo "Validating the family-sync workflow that keeps the copied helpers canonica
 echo "Validating the canonical-copies drift gate..."
 ./scripts/test-check-canonical-copies.sh
 
-if [ -d "./../NEAT-AI-core" ]; then
-  echo "Gating on drift from the canonical NEAT-AI-core copies..."
-  ./scripts/check-canonical-copies.sh
-else
-  echo "sibling ../NEAT-AI-core not found — skipping the canonical-copies drift gate (CI runs this for real)"
-fi
+# Reads NEAT-AI-core Develop over https, falling back — loudly — to a sibling
+# checkout. Neither reachable is exit 2, never a pass.
+echo "Gating on drift from the canonical NEAT-AI-core copies..."
+./scripts/check-canonical-copies.sh
 
 echo "Validating every build-affecting change bumps the crate version (issue #95)..."
 ./scripts/test-bump-backpropagation-version.sh

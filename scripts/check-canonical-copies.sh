@@ -15,15 +15,20 @@
 #
 # Usage: check-canonical-copies.sh [CANONICAL_DIR]
 #
-# With CANONICAL_DIR the copies in that directory are the authority (CI fetches
-# them from NEAT-AI-core `Develop` and passes the directory). With no argument
-# the NEAT-AI-core sibling checkout is read at `origin/Develop`, falling back —
-# with a warning, never silently — to that checkout's working tree.
+# With CANONICAL_DIR the copies in that directory are the authority. With no
+# argument the copies are fetched from NEAT-AI-core `Develop` over https
+# (`$CANONICAL_BASE_URL`) — the same source the family-sync job copies from, so
+# a local run and CI compare against the same bytes. When that fetch fails the
+# NEAT-AI-core sibling checkout is read instead, at `origin/Develop` and then
+# its working tree, each announced with a warning: a sibling is only as current
+# as its last fetch, so a fallback must never read as the ordinary path. With
+# neither the run exits 2 — unverified is not a pass.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COPIES_DIR="${CANONICAL_COPIES_DIR:-$REPO_ROOT/scripts}"
+CANONICAL_BASE_URL="${CANONICAL_BASE_URL:-https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts}"
 SIBLING="${NEAT_CORE_DIR:-$REPO_ROOT/../NEAT-AI-core}"
 CANONICAL_DIR="${1:-}"
 WORK_DIR=""
@@ -37,8 +42,8 @@ usage() {
 Usage: check-canonical-copies.sh [CANONICAL_DIR]
 
 Exits 0 when every copied NEAT-AI-core helper is byte-identical to its
-canonical copy, 1 when one has drifted, and 2 when a canonical copy cannot
-be read.
+canonical copy, 1 when one has drifted, and 2 when the canonical copies
+cannot be read at all.
 USAGE
 }
 
@@ -56,32 +61,59 @@ for name in "${CANONICAL_SCRIPTS[@]}"; do
   fi
 done
 
-# No canonical directory given: extract the canonical copies from the sibling
-# checkout, preferring the branch that governs them over its working tree.
-if [[ -z "$CANONICAL_DIR" ]]; then
-  if [[ ! -d "$SIBLING" ]]; then
-    echo "FAIL: no NEAT-AI-core sibling at $SIBLING — pass a directory holding the canonical copies as an argument" >&2
-    exit 2
-  fi
-  WORK_DIR="$(mktemp -d)"
-  CANONICAL_DIR="$WORK_DIR"
+# Fetch the canonical copies from NEAT-AI-core `Develop` into $1. Returns
+# non-zero — leaving the caller to say so — when any of them cannot be had.
+fetch_canonical() {
+  local dir="$1" name
+  command -v curl >/dev/null 2>&1 || return 1
+  for name in "${CANONICAL_SCRIPTS[@]}"; do
+    curl --fail --silent --show-error --location --retry 3 \
+      --output "$dir/$name" "$CANONICAL_BASE_URL/$name" >/dev/null 2>&1 || return 1
+    [[ -s "$dir/$name" ]] || return 1
+  done
+  return 0
+}
+
+# Extract the canonical copies from the sibling checkout into $1, preferring
+# the branch that governs them over its working tree.
+sibling_canonical() {
+  local dir="$1" name
   if git -C "$SIBLING" rev-parse --verify --quiet origin/Develop >/dev/null; then
-    echo "INFO canonical copies read from origin/Develop in $SIBLING"
+    echo "WARNING reading origin/Develop in $SIBLING, which is only as current as its last fetch" >&2
     for name in "${CANONICAL_SCRIPTS[@]}"; do
-      if ! git -C "$SIBLING" show "origin/Develop:scripts/$name" >"$WORK_DIR/$name" 2>/dev/null; then
+      if ! git -C "$SIBLING" show "origin/Develop:scripts/$name" >"$dir/$name" 2>/dev/null; then
         echo "FAIL: cannot read 'scripts/$name' at origin/Develop in $SIBLING" >&2
         exit 2
       fi
     done
+    return 0
+  fi
+
+  echo "WARNING no origin/Develop in $SIBLING — falling back to its working tree" >&2
+  for name in "${CANONICAL_SCRIPTS[@]}"; do
+    if [[ ! -f "$SIBLING/scripts/$name" ]]; then
+      echo "FAIL: $SIBLING has no scripts/$name to compare against" >&2
+      exit 2
+    fi
+    cp "$SIBLING/scripts/$name" "$dir/$name"
+  done
+  return 0
+}
+
+# No canonical directory given: fetch from Develop, and fall back — loudly —
+# to the sibling checkout only when that fetch cannot be made.
+if [[ -z "$CANONICAL_DIR" ]]; then
+  WORK_DIR="$(mktemp -d)"
+  CANONICAL_DIR="$WORK_DIR"
+  if fetch_canonical "$WORK_DIR"; then
+    echo "INFO canonical copies fetched from $CANONICAL_BASE_URL"
+  elif [[ -d "$SIBLING" ]]; then
+    echo "WARNING could not fetch the canonical copies from $CANONICAL_BASE_URL" >&2
+    sibling_canonical "$WORK_DIR"
   else
-    echo "WARNING no origin/Develop in $SIBLING — falling back to its working tree" >&2
-    for name in "${CANONICAL_SCRIPTS[@]}"; do
-      if [[ ! -f "$SIBLING/scripts/$name" ]]; then
-        echo "FAIL: $SIBLING has no scripts/$name to compare against" >&2
-        exit 2
-      fi
-      cp "$SIBLING/scripts/$name" "$WORK_DIR/$name"
-    done
+    echo "FAIL: could not fetch the canonical copies from $CANONICAL_BASE_URL, and no NEAT-AI-core sibling at $SIBLING to fall back to" >&2
+    echo "      the copies are UNVERIFIED — this is not a pass" >&2
+    exit 2
   fi
 fi
 

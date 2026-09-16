@@ -187,18 +187,10 @@ jobs:
       # NEAT-AI-core out beside the repo any more — the canonical copies are
       # fetched straight from `Develop`, and a fetch error fails the job.
       - name: Gate on drift from the canonical NEAT-AI-core copies
-        env:
-          CANONICAL_BASE_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts
         run: |
           set -euo pipefail
           ./scripts/test-check-canonical-copies.sh
-          canonical_dir="$(mktemp -d)"
-          trap 'rm -rf "$canonical_dir"' EXIT
-          for script in runlib.sh family-pins.sh; do
-            curl --fail --silent --show-error --location --retry 3 \
-              --output "$canonical_dir/$script" "$CANONICAL_BASE_URL/$script"
-          done
-          ./scripts/check-canonical-copies.sh "$canonical_dir"
+          ./scripts/check-canonical-copies.sh
 
       - name: Validate the auto version bump covers every build-affecting path
         run: |

@@ -6,7 +6,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CHECKER="$SCRIPT_DIR/check-canonical-copies.sh"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -19,11 +18,27 @@ if [[ ! -x "$CHECKER" ]]; then
   exit 2
 fi
 
+# Every case pins the fetch source and the sibling, so no case reaches the
+# network or a developer's real ../NEAT-AI-core checkout. `file://` URLs make
+# the fetch path itself testable: curl really fetches, from a fixture.
+UNREACHABLE_BASE_URL="file:///nonexistent-canonical-source"
+ABSENT_SIBLING="/nonexistent-neat-ai-core"
+
 # expect_exit DESCRIPTION EXPECTED_CODE COPIES_DIR CANONICAL_DIR [NEEDLE]
+#
+# The canonical source defaults to unreachable, so a case that passes a
+# directory is testing that directory and nothing else. Override
+# CANONICAL_BASE_URL or NEAT_CORE_DIR in the environment to exercise the
+# fetch and fallback paths.
 expect_exit() {
   local description="$1" expected="$2" copies="$3" canonical="$4" needle="${5:-}"
   local output status=0
-  output="$(CANONICAL_COPIES_DIR="$copies" "$CHECKER" "$canonical" 2>&1)" || status=$?
+  output="$(
+    CANONICAL_COPIES_DIR="$copies" \
+      CANONICAL_BASE_URL="${CANONICAL_BASE_URL:-$UNREACHABLE_BASE_URL}" \
+      NEAT_CORE_DIR="${NEAT_CORE_DIR:-$ABSENT_SIBLING}" \
+      "$CHECKER" "$canonical" 2>&1
+  )" || status=$?
   if [[ "$status" -ne "$expected" ]]; then
     echo "FAIL $description: expected exit $expected, got $status" >&2
     printf '%s\n' "$output" >&2
@@ -106,16 +121,42 @@ test_reports_a_missing_copy_with_exit_2() {
     "$dir/copies" "$dir/canonical" "no copy to check"
 }
 
-# The committed copies against the real sibling, when this checkout has one —
-# the same comparison CI makes. Skipped loudly rather than silently when the
-# sibling is absent.
-test_the_committed_copies_match_the_sibling() {
-  if [[ -d "$REPO_ROOT/../NEAT-AI-core" ]]; then
-    expect_exit "the committed copies match the NEAT-AI-core sibling" 0 \
-      "$REPO_ROOT/scripts" "" "byte-identical"
-  else
-    echo "SKIP the committed copies vs the sibling — no ../NEAT-AI-core checkout (CI runs this for real)"
-  fi
+# With no directory argument the canonical copies are fetched from
+# `$CANONICAL_BASE_URL`; a `file://` fixture exercises that path for real.
+test_fetches_the_canonical_copies_from_the_base_url() {
+  local dir
+  dir="$(new_pair fetched)"
+  CANONICAL_BASE_URL="file://$dir/canonical" \
+    expect_exit "fetches the canonical copies from the base URL" 0 \
+    "$dir/copies" "" "fetched from"
+}
+
+test_a_fetched_canonical_copy_still_catches_drift() {
+  local dir
+  dir="$(new_pair fetched-drift)"
+  printf '# a downstream edit\n' >>"$dir/copies/runlib.sh"
+  CANONICAL_BASE_URL="file://$dir/canonical" \
+    expect_exit "catches drift against the fetched canonical copies" 1 \
+    "$dir/copies" "" "has drifted"
+}
+
+# An unreachable source is never quietly accepted: the sibling checkout is the
+# announced fallback, and with neither the run reports exit 2.
+test_falls_back_to_the_sibling_when_the_fetch_fails() {
+  local dir
+  dir="$(new_pair fallback)"
+  mkdir -p "$dir/sibling/scripts"
+  cp "$dir/canonical/runlib.sh" "$dir/canonical/family-pins.sh" "$dir/sibling/scripts/"
+  NEAT_CORE_DIR="$dir/sibling" \
+    expect_exit "falls back to the sibling checkout, loudly, when the fetch fails" 0 \
+    "$dir/copies" "" "could not fetch the canonical copies"
+}
+
+test_reports_exit_2_with_neither_a_fetch_nor_a_sibling() {
+  local dir
+  dir="$(new_pair no-source)"
+  expect_exit "reports exit 2 when nothing can supply the canonical copies" 2 \
+    "$dir/copies" "" "UNVERIFIED"
 }
 
 for test_case in \
@@ -126,7 +167,10 @@ for test_case in \
   test_names_the_copy_contract_in_the_failure \
   test_reports_an_unreadable_canonical_copy_with_exit_2 \
   test_reports_a_missing_copy_with_exit_2 \
-  test_the_committed_copies_match_the_sibling; do
+  test_fetches_the_canonical_copies_from_the_base_url \
+  test_a_fetched_canonical_copy_still_catches_drift \
+  test_falls_back_to_the_sibling_when_the_fetch_fails \
+  test_reports_exit_2_with_neither_a_fetch_nor_a_sibling; do
   "$test_case"
 done
 

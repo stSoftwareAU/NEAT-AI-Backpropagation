@@ -103,7 +103,11 @@ fails CI when that job is misdeclared, and
 [`scripts/check-canonical-copies.sh`](./scripts/check-canonical-copies.sh)
 fails CI when either committed copy has drifted from core `Develop` by so much
 as a byte — the sync job is skipped on fork PRs, so the content is gated
-separately from the workflow's shape.
+separately from the workflow's shape. It reads `Develop` over https, the same
+source the sync job copies from, so a local run and CI compare against the same
+bytes; a failed fetch falls back — loudly — to a `../NEAT-AI-core` sibling
+checkout, and with neither it exits 2, because an unverified copy must not look
+like a verified one.
 
 ```mermaid
 flowchart LR
