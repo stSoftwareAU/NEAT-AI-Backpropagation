@@ -25,10 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   misdeclared, and `scripts/check-runlib-canonical.sh` fails CI when the
   committed copy has drifted from core `Develop` by a single byte — the sync
   job is skipped on fork PRs, so content is gated separately from workflow
-  shape. All of them run from `quality.sh` and `ci.yml`. While core `#690`
-  is open the already-installed run still costs one `cargo metadata` call on
-  this crate's explicit `[[bin]]` shape — it compiles nothing either way, and
-  the family sync brings the fix in once `#690` lands (issue #152).
+  shape. All of them run from `quality.sh` and `ci.yml`. Core `#690` has since
+  landed (core 0.21.1) and is re-copied here, so the already-installed run now
+  reads this crate's single `[[bin]]` table directly and runs no `cargo`
+  command at all (issue #152).
 - Lockfile integrity gate (`scripts/check-lockfile-integrity.sh`,
   `scripts/lockfile_integrity.py`), wired into `quality.sh` and CI. It fetches
   the crates.io sparse index for every registry package in `Cargo.lock` and
@@ -373,6 +373,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `quality.sh` runs it on every PR.
 
 ### Changed
+
+- Recorded neat-core 0.21.1 as the handled baseline in
+  `neat-core.expected-version` (was 0.20.0) and re-locked `Cargo.lock` onto it,
+  clearing the unhandled-breaking-bump gate that failed on every PR and on a
+  clean `Develop` (issue #156). The range is one milestone roll-up minor
+  (0.21.0, core `#698`) whose five PRs are all internal — the packed batch
+  scan's parameter bundle (`#671`), one declarative per-variant list behind
+  `apply_get_range` and `apply_safe_zone_adjustment` (`#673`), a declined
+  `SynapseExport` endpoint newtype (`#672`) and dependency-containment policy
+  (`#676`, `#677`) — plus 0.21.1 (core `#690`), which touches no `.rs` file and
+  is brought in here as the re-copied canonical `scripts/runlib.sh`. No
+  signature this crate names changed, so no code change was required.
 
 - Recorded neat-core 0.20.0 as the handled baseline in
   `neat-core.expected-version` (was 0.17.0), clearing the
