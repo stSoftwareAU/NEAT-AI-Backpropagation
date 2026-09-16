@@ -36,7 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   when it differs, rebasing before the push and failing non-zero on a fetch
   error. `scripts/check-family-sync-workflow.sh` (with
   `scripts/test-check-family-sync-workflow.sh`) fails CI when the job is
-  misdeclared, and `scripts/check-runlib-canonical.sh` fails CI when the
+  misdeclared, and `scripts/check-canonical-copies.sh` fails CI when the
   committed copy has drifted from core `Develop` by a single byte — the sync
   job is skipped on fork PRs, so content is gated separately from workflow
   shape. All of them run from `quality.sh` and `ci.yml`. Core `#690` has since
