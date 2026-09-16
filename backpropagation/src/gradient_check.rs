@@ -150,24 +150,36 @@ pub struct ClassStats {
 /// versions reads this first and refuses a schema it does not know.
 pub const GRADIENT_CHECK_SCHEMA: u32 = 2;
 
-/// The repository's declared neat-core baseline, as committed in
-/// `neat-core.expected-version` (issue #107).
+/// This crate's own manifest, which carries the `neat-core` release pin.
 ///
-/// neat-core is an unpinned `path` dependency tracking head, so the crate
-/// version alone cannot tell two artefacts apart when the difference came
-/// from core. Stamping the handled baseline beside it makes the comparison
-/// legible: a comment-and-blank-line header followed by the version.
-const NEAT_CORE_EXPECTED_VERSION: &str = include_str!("../../neat-core.expected-version");
+/// The crate version alone cannot tell two artefacts apart when the difference
+/// came from core, so the pinned core release is stamped beside it. Reading it
+/// from the manifest means the artefact names the release the run actually
+/// compiled against — the pin `scripts/family-pins.sh` moves (issue #153) —
+/// rather than a separately-maintained baseline file (issue #107).
+const BACKPROPAGATION_MANIFEST: &str = include_str!("../Cargo.toml");
 
-/// The version line of [`NEAT_CORE_EXPECTED_VERSION`], or `"unknown"` when
-/// the file carries no version line.
-fn neat_core_baseline() -> String {
-    NEAT_CORE_EXPECTED_VERSION
+/// The `neat-core` release the manifest pins, without its `v` prefix, or
+/// `"unknown"` when the dependency is not pinned to a tag.
+fn parse_pinned_neat_core_version(manifest: &str) -> String {
+    manifest
         .lines()
         .map(str::trim)
-        .rfind(|line| !line.is_empty() && !line.starts_with('#'))
-        .unwrap_or("unknown")
-        .to_string()
+        .find(|line| {
+            !line.starts_with('#') && line.starts_with("neat-core") && line.contains("tag")
+        })
+        .and_then(|line| {
+            let rest = line.split_once("tag")?.1.trim_start();
+            let rest = rest.strip_prefix('=')?.trim_start();
+            let tag = rest.strip_prefix('"')?.split_once('"')?.0;
+            Some(tag.trim_start_matches('v').to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// The pinned `neat-core` release of [`BACKPROPAGATION_MANIFEST`].
+fn neat_core_baseline() -> String {
+    parse_pinned_neat_core_version(BACKPROPAGATION_MANIFEST)
 }
 
 /// Shape of the probed creature, so two artefacts can be shown to describe
@@ -205,7 +217,7 @@ pub struct GradientCheckSummary {
     pub schema_version: u32,
     /// Crate version.
     pub version: String,
-    /// Declared neat-core baseline from `neat-core.expected-version`, so an
+    /// The pinned neat-core release from `backpropagation/Cargo.toml`, so an
     /// artefact says which core it was measured against.
     pub neat_core_baseline: String,
     /// Issue that introduced the probe (#40). Later extensions — the #107
@@ -801,16 +813,45 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn the_neat_core_baseline_is_read_from_the_committed_file() {
+    fn the_neat_core_baseline_is_the_pinned_release_tag() {
         let baseline = neat_core_baseline();
         assert_ne!(
             baseline, "unknown",
-            "the committed file must carry a version"
+            "the manifest must pin neat-core to a release tag"
         );
         assert!(
-            !baseline.starts_with('#') && baseline.split('.').count() == 3,
+            !baseline.starts_with('v') && baseline.split('.').count() == 3,
             "expected a semver baseline, got '{baseline}'"
         );
+    }
+
+    #[test]
+    fn the_pinned_version_is_read_from_an_inline_git_tag_pin() {
+        let manifest = concat!(
+            "[dependencies]\n",
+            "neat-core = { git = \"https://github.com/stSoftwareAU/NEAT-AI-core\", tag = \"v0.22.2\" }\n",
+            "serde = \"1\"\n",
+        );
+        assert_eq!(parse_pinned_neat_core_version(manifest), "0.22.2");
+    }
+
+    #[test]
+    fn a_commented_out_pin_is_not_read_as_the_version() {
+        let manifest = concat!(
+            "[dependencies]\n",
+            "# neat-core = { git = \"https://github.com/stSoftwareAU/NEAT-AI-core\", tag = \"v9.9.9\" }\n",
+            "neat-core = { git = \"https://github.com/stSoftwareAU/NEAT-AI-core\", tag = \"v0.21.0\" }\n",
+        );
+        assert_eq!(parse_pinned_neat_core_version(manifest), "0.21.0");
+    }
+
+    #[test]
+    fn an_unpinned_dependency_reports_unknown() {
+        let manifest = concat!(
+            "[dependencies]\n",
+            "neat-core = { path = \"../../NEAT-AI-core/neat-core\" }\n",
+        );
+        assert_eq!(parse_pinned_neat_core_version(manifest), "unknown");
     }
 
     #[test]
