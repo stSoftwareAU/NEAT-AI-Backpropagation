@@ -194,10 +194,11 @@ fn parse_pinned_neat_core_version(manifest: &str) -> String {
         let is_inline = line
             .split_once('=')
             .is_some_and(|(name, _)| name.trim() == "neat-core");
-        if (is_inline || in_neat_core_table) && line.contains("tag") {
-            if let Some(version) = tag_value(line) {
-                return version;
-            }
+        if (is_inline || in_neat_core_table)
+            && line.contains("tag")
+            && let Some(version) = tag_value(line)
+        {
+            return version;
         }
     }
 
