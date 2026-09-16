@@ -822,8 +822,9 @@ both lists are empty and it says that instead.
 
 The run is reproducible from `seed` alone: the same seed over the same
 creature, corpus and caps writes byte-identical artefacts.
-`schemaVersion`, `version`, `neatCoreBaseline` (the pinned neat-core
-release read from
+`schemaVersion` (now `3`: `neatCoreBaseline` keeps its shape but changes
+meaning under issue #153), `version`, `neatCoreBaseline` (the pinned
+neat-core release read from
 [`backpropagation/Cargo.toml`](./backpropagation/Cargo.toml)) and
 the creature fingerprint are what let two artefacts be compared across
 NEAT-AI-core / Backpropagation versions — read the schema first and

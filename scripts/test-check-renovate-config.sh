@@ -167,7 +167,7 @@ no_neat_core=$(write_config no-neat-core <<'JSON'
 }
 JSON
 )
-expect_exit "rejects a config that leaves the neat-core path dependency enabled" 1 \
+expect_exit "rejects a config that leaves the neat-core release pin enabled" 1 \
   "$no_neat_core" "neat-core"
 
 cargo_disabled=$(write_config cargo-disabled <<'JSON'

@@ -15,7 +15,7 @@ set -euo pipefail
 COMMIT_MESSAGE="chore(fmt): apply rustfmt and sync neat-core lock
 
 Automated by the auto-format PR job (rustfmt via cargo fmt; Cargo.lock
-synced to the checked-out NEAT-AI-core path dependency via
+re-resolved against the pinned neat-core release via
 \`cargo update -p neat-core\`) — see issue #33."
 
 usage() {
@@ -71,8 +71,8 @@ case "$MODE" in
     ;;
 
   check-changes)
-    # Ignore untracked paths (e.g. the NEAT-AI-core checkout beside the
-    # workspace) — cargo cannot modify them as tracked files.
+    # Ignore untracked paths (build output, scratch files) — cargo cannot
+    # modify them as tracked files.
     status_output="$(cd "$REPO_DIR" && git status --porcelain | grep -v '^??' || true)"
     if [[ -z "$status_output" ]]; then
       echo "clean: no formatting or lockfile changes detected"

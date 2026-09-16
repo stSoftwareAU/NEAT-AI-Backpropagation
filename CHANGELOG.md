@@ -390,7 +390,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `gradient-check` artefacts read `neatCoreBaseline` from the pinned tag in
   `backpropagation/Cargo.toml`, so the field names the core release the run
-  actually compiled against (issue #153).
+  actually compiled against. The field keeps its shape and changes meaning, so
+  `GRADIENT_CHECK_SCHEMA` is `3`: a consumer that reads the schema first can
+  tell the two apart (issue #153).
 
 - Recorded neat-core 0.21.1 as the handled baseline in
   `neat-core.expected-version` (was 0.20.0) and re-locked `Cargo.lock` onto it,
