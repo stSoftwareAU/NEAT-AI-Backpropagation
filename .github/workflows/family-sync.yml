@@ -1,0 +1,122 @@
+# Keep `scripts/runlib.sh` byte-identical to its one home — `scripts/runlib.sh`
+# on NEAT-AI-core `Develop` (core #680 copy contract, issue #152).
+#
+# Behaviour changes to the canonical helper are made in NEAT-AI-core and
+# re-copied outward, never edited downstream. This job is the copy: on every PR
+# it fetches core's `Develop` copy and, when the branch's copy differs, commits
+# the refreshed file onto the PR branch. A fetch that fails — an unreachable
+# raw URL, an HTTP error, an empty or non-script payload — fails the job rather
+# than leaving a stale copy looking synced.
+#
+# Refreshing the script is not a source change: `scripts/runlib.sh` is absent
+# from scripts/build-affecting-paths.sh, so the sync commit bumps no version.
+#
+# Push auth matches version-increment.yml (App token -> ACTIONS_PUSH ->
+# GITHUB_TOKEN), and the rebase before the push keeps a PR branch that moved
+# while this job ran from being rejected as non-fast-forward.
+name: Family Sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - Develop
+      - "milestone/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: family-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  family-sync:
+    name: Sync scripts/runlib.sh from NEAT-AI-core
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Forks get no push credential, so the sync would fail on every fork PR.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+    env:
+      PUSH_APP_CONFIGURED: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID != '' && secrets.ACTIONS_PUSH_APP_PRIVATE_KEY != '' }}
+      CANONICAL_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/runlib.sh
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the canonical scripts/runlib.sh from NEAT-AI-core Develop
+        id: sync
+        run: |
+          set -euo pipefail
+          fetched="$(mktemp)"
+          trap 'rm -f "$fetched"' EXIT
+          # --fail makes any HTTP error a non-zero exit: an unreachable
+          # canonical copy fails this job instead of passing on a stale one.
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$fetched" "$CANONICAL_URL"
+          if [[ ! -s "$fetched" ]]; then
+            echo "::error::fetched an empty scripts/runlib.sh from $CANONICAL_URL"
+            exit 1
+          fi
+          if ! head -n 1 "$fetched" | grep -q '^#!'; then
+            echo "::error::$CANONICAL_URL did not answer with a shell script"
+            exit 1
+          fi
+          if cmp -s "$fetched" scripts/runlib.sh; then
+            echo "scripts/runlib.sh is byte-identical to NEAT-AI-core Develop"
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+          else
+            cp "$fetched" scripts/runlib.sh
+            chmod +x scripts/runlib.sh
+            echo "scripts/runlib.sh refreshed from NEAT-AI-core Develop"
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint repo-scoped push token
+        id: push-token
+        if: steps.sync.outputs.changed == 'true' && env.PUSH_APP_CONFIGURED == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ACTIONS_PUSH_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Commit and push the refreshed copy
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GH_PAT: ${{ steps.push-token.outputs.token || secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          GIT=/usr/bin/git
+          BASE64=/usr/bin/base64
+          "$GIT" -c core.hooksPath=/dev/null config user.name "github-actions[bot]"
+          "$GIT" -c core.hooksPath=/dev/null config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          "$GIT" -c core.hooksPath=/dev/null add scripts/runlib.sh
+          "$GIT" -c core.hooksPath=/dev/null commit \
+            -m "chore: sync scripts/runlib.sh from NEAT-AI-core Develop"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_PAT" | "$BASE64" -w0)"
+          if ! "$GIT" ls-remote --exit-code --heads origin "$PR_HEAD_REF" >/dev/null 2>&1; then
+            echo "::notice::Head branch '$PR_HEAD_REF' no longer exists; skipping push."
+            exit 0
+          fi
+          # Rebase onto whatever the branch holds now: another job (version
+          # increment, auto-format) may have pushed while this one ran, and a
+          # stale parent would be rejected as a non-fast-forward.
+          "$GIT" -c core.hooksPath=/dev/null fetch origin "$PR_HEAD_REF"
+          if ! "$GIT" -c core.hooksPath=/dev/null rebase FETCH_HEAD; then
+            "$GIT" -c core.hooksPath=/dev/null rebase --abort || true
+            echo "::error::could not rebase the refreshed scripts/runlib.sh onto $PR_HEAD_REF — the branch edits it too; re-copy it from NEAT-AI-core Develop by hand"
+            exit 1
+          fi
+          "$GIT" -c core.hooksPath=/dev/null \
+            -c http.https://github.com/.extraheader="$AUTH_HEADER" \
+            push origin "HEAD:$PR_HEAD_REF"

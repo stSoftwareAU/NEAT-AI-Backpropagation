@@ -111,4 +111,34 @@
 # change is required. Verified by a repo-wide grep for those symbols (zero
 # hits) and `./scripts/check-neat-core-version.sh` against neat-core
 # `origin/Develop` at 0.17.0 (282bc18).
-0.17.0
+#
+# 0.17.0 -> 0.20.0: acknowledge one breaking neat-core minor and two that carry
+# no Rust change at all.
+#   * 0.18.0 (neat-core #684, Ockham #201) is confined to the pruning surface —
+#     `prune_json.rs`, `prune_neuron.rs`, `prune_synapse.rs` and their golden
+#     record — carrying every pruning corner case across the JSON/WASM boundary
+#     unchanged.
+#   * 0.19.0 (neat-core #685, Issue #682) is the breaking half that touches a
+#     function this crate does name. `compile_creature` now refuses a synapse
+#     whose `toUUID` names no neuron in `CreatureExport::neurons`, with the new
+#     `CreatureError::UnknownTargetUuid` variant mirroring `UnknownSourceUuid`.
+#     Until #682 such an edge was silently dropped and the compiled network came
+#     back one synapse smaller with `Ok` — a fail-silent path, now loud.
+#   * 0.19.1 (neat-core #687) bumps `wasm-bindgen` in `wasm-bench` only, and
+#     0.20.0 (neat-core #689, Issue #680) is the canonical `scripts/runlib.sh`
+#     this crate adopts in #158 — the diff `0.19.1..0.20.0` touches no `.rs`
+#     file, so there is no API surface to name.
+#
+# No code change is required. `backpropagation` never matches on
+# `CreatureError`, so the added variant cannot break an exhaustive match, and it
+# never synthesises a synapse destination: it reads `to_uuid` (`blocks.rs`,
+# `backprop.rs`, `blockwise.rs`) off creatures it parsed and rewrites weights and
+# biases in place, so every `toUUID` it hands back to `compile_creature` was
+# already a listed neuron on the way in. The new refusal therefore only rejects
+# malformed creature JSON this crate never constructs, and it rejects it loudly
+# instead of dropping the edge. The prune surface is not named anywhere in this
+# crate (repo-wide grep for `PruneResult`, `prune_neuron`, `prune_synapse`:
+# zero hits). Verified against the sibling clone at 0.20.0 (ae71f44) by a clean
+# `cargo build --all-targets`, `cargo clippy --all-targets -- -D warnings` and
+# the full test suite (19 test binaries, 0 failures).
+0.20.0

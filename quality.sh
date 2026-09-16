@@ -50,6 +50,20 @@ echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
 ./scripts/test-check-version-increment-workflow.sh
 ./scripts/check-version-increment-workflow.sh
 
+echo "Validating the family-sync workflow that keeps scripts/runlib.sh canonical..."
+./scripts/test-check-family-sync-workflow.sh
+./scripts/check-family-sync-workflow.sh
+
+echo "Validating the runlib.sh drift gate..."
+./scripts/test-check-runlib-canonical.sh
+
+if [ -d "./../NEAT-AI-core" ]; then
+  echo "Gating on scripts/runlib.sh drift from the canonical NEAT-AI-core copy..."
+  ./scripts/check-runlib-canonical.sh
+else
+  echo "sibling ../NEAT-AI-core not found — skipping the runlib.sh drift gate (CI runs this for real)"
+fi
+
 echo "Validating every build-affecting change bumps the crate version (issue #95)..."
 ./scripts/test-bump-backpropagation-version.sh
 
