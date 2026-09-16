@@ -15,15 +15,20 @@ This module makes that comparison explicit, checking each `[[package]]` block
 against the crates.io index entry for that exact version:
 
 1. Every registry package is sourced from the one registry `deny.toml` allows
-   and carries a 64-hex sha256 checksum.
+   and carries a 64-hex sha256 checksum; every git package is pinned to an
+   immutable tag and commit.
 2. Every name in a `dependencies` list resolves to a `[[package]]` block in the
    same lockfile — no dangling references.
 3. The recorded checksum equals the registry's `cksum` for that version.
 4. Every recorded dependency is genuinely declared (normal or build kind,
    honouring `package = ` renames) by that version's published manifest.
 
-Path packages (workspace members and sibling path dependencies) have no
-registry entry, so only rules 1 and 2 apply to them.
+Path packages (workspace members) have no registry entry, so only rules 1 and
+2 apply to them. A git package — `neat-core`, pinned to a NEAT-AI-core release
+tag (Issue #153) — has none either, so rules 3 and 4 are replaced by the
+property that makes a git pin verifiable: the source must name an immutable
+tag *and* the commit it resolved to, the tag must agree with the locked
+version, and no checksum may be recorded.
 
 The index snapshot is a directory of sparse-index files named after the crate,
 one JSON object per line — the format `index.crates.io` serves. Keeping the
@@ -41,6 +46,10 @@ import sys
 
 CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
+# A git dependency cargo cannot re-resolve: an immutable tag plus the commit
+# that tag pointed at when the lockfile was written (Issue #153).
+GIT_PIN_RE = re.compile(r"^git\+[^?#\s]+\?tag=([^#\s]+)#([0-9a-f]{40})$")
+SEMVER_TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)$")
 FIELD_RE = re.compile(r'^(name|version|source|checksum) = "([^"]*)"$')
 DEP_RE = re.compile(r'^"([^"]+)",?$')
 
@@ -65,8 +74,12 @@ class Package:
         return f"{self.name} {self.version}"
 
     @property
+    def is_git(self) -> bool:
+        return self.source is not None and self.source.startswith("git+")
+
+    @property
     def is_registry(self) -> bool:
-        return self.source is not None
+        return self.source is not None and not self.is_git
 
 
 def parse_lockfile(text: str) -> list[Package]:
@@ -174,6 +187,9 @@ def verify(packages: list[Package], index_dir: str) -> tuple[list[str], list[str
         resolvable.add(package.label)
 
     for package in packages:
+        git_tag = None
+        git_commit = None
+
         # Rule 1 — source and checksum shape.
         if package.is_registry:
             if package.source != CRATES_IO_SOURCE:
@@ -186,6 +202,31 @@ def verify(packages: list[Package], index_dir: str) -> tuple[list[str], list[str
                 failures.append(
                     f"{package.label}: registry package has no valid sha256 "
                     f"checksum — cargo cannot verify what it downloads"
+                )
+                continue
+        elif package.is_git:
+            if package.checksum:
+                failures.append(
+                    f"{package.label}: git package records a checksum — cargo "
+                    f"verifies a git pin by commit, so a checksum here is not "
+                    f"something it wrote"
+                )
+                continue
+            pin = GIT_PIN_RE.match(str(package.source))
+            if pin is None:
+                failures.append(
+                    f"{package.label}: git source '{package.source}' is not "
+                    f"pinned to an immutable tag and commit — cargo would "
+                    f"re-resolve it onto whatever the remote moves to"
+                )
+                continue
+            git_tag, git_commit = pin.group(1), pin.group(2)
+            semver_tag = SEMVER_TAG_RE.match(git_tag)
+            if semver_tag and semver_tag.group(1) != package.version:
+                failures.append(
+                    f"{package.label}: tag {git_tag} does not match the locked "
+                    f"version {package.version} — the pin and the package "
+                    f"disagree about which release this is"
                 )
                 continue
         elif package.checksum:
@@ -201,6 +242,13 @@ def verify(packages: list[Package], index_dir: str) -> tuple[list[str], list[str
                     f"{package.label}: depends on '{reference}', which has no "
                     f"[[package]] entry in this lockfile"
                 )
+
+        if package.is_git:
+            ok.append(
+                f"{package.label}: git package pinned at {git_tag} "
+                f"{str(git_commit)[:8]}, no registry entry to verify"
+            )
+            continue
 
         if not package.is_registry:
             ok.append(f"{package.label}: path package, no registry entry to verify")

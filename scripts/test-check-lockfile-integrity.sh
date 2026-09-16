@@ -230,7 +230,7 @@ test_rejects_a_package_sourced_outside_the_allowed_registry() {
   write_baseline_index "$foreign"
   write_baseline_lock "$foreign"
   edit_lock "$foreign" \
-    's|^source = "registry+https://github.com/rust-lang/crates.io-index"$|source = "git+https://example.invalid/zmij"|'
+    's|^source = "registry+https://github.com/rust-lang/crates.io-index"$|source = "registry+https://example.invalid/index"|'
   expect_exit "rejects a package sourced outside the allowed registry" 1 \
     "$foreign" "not the crates.io registry"
 }
@@ -301,6 +301,82 @@ test_reports_a_missing_index_snapshot_with_exit_2() {
     "$no_index" "index snapshot not found"
 }
 
+
+# --- git-source packages (issue #153) -------------------------------------
+#
+# `neat-core` is consumed as a git-tag pin on a NEAT-AI-core release, so the
+# lockfile carries a `git+…?tag=v<semver>#<40-hex>` source with no registry
+# entry behind it. Such a package is verifiable in a different way: the pin
+# must name an immutable tag AND the commit it resolved to, so cargo cannot
+# quietly re-resolve it onto different content.
+GIT_TAG_SOURCE='source = "git+https://github.com/stSoftwareAU/NEAT-AI-core?tag=v0.22.2#9b26d47c321cdb3ad1e5b130b47de3c5bcc0dd2f"'
+
+# append_git_package CASE_DIR SOURCE_LINE [VERSION] [DEPENDENCY]
+append_git_package() {
+  local dir="$1" source_line="$2" version="${3:-0.22.2}" dependency="${4:-itoa}"
+  cat >>"$dir/Cargo.lock" <<LOCK
+
+[[package]]
+name = "neat-core"
+version = "$version"
+$source_line
+dependencies = [
+ "$dependency",
+]
+LOCK
+}
+
+test_accepts_a_git_package_pinned_to_a_tag_and_commit() {
+  local pinned
+  pinned="$(new_case git-pinned)"
+  write_baseline_index "$pinned"
+  write_baseline_lock "$pinned"
+  append_git_package "$pinned" "$GIT_TAG_SOURCE"
+  expect_exit "accepts a git package pinned to a tag and its commit" 0 \
+    "$pinned" "neat-core 0.22.2: git package pinned at v0.22.2"
+}
+
+test_rejects_a_git_package_not_pinned_to_a_tag_and_commit() {
+  local floating
+  floating="$(new_case git-floating)"
+  write_baseline_index "$floating"
+  write_baseline_lock "$floating"
+  append_git_package "$floating" 'source = "git+https://example.invalid/zmij"'
+  expect_exit "rejects a git package not pinned to a tag and commit" 1 \
+    "$floating" "not pinned to an immutable tag and commit"
+}
+
+test_rejects_a_git_package_whose_tag_disagrees_with_its_version() {
+  local mismatched
+  mismatched="$(new_case git-tag-mismatch)"
+  write_baseline_index "$mismatched"
+  write_baseline_lock "$mismatched"
+  append_git_package "$mismatched" "$GIT_TAG_SOURCE" "0.21.0"
+  expect_exit "rejects a git package whose tag disagrees with its version" 1 \
+    "$mismatched" "tag v0.22.2 does not match"
+}
+
+test_rejects_a_git_package_carrying_a_checksum() {
+  local checksummed
+  checksummed="$(new_case git-checksum)"
+  write_baseline_index "$checksummed"
+  write_baseline_lock "$checksummed"
+  append_git_package "$checksummed" "$GIT_TAG_SOURCE"
+  printf 'checksum = "%s"\n' "$CKSUM_EVIL" >>"$checksummed/Cargo.lock"
+  expect_exit "rejects a git package carrying a checksum" 1 \
+    "$checksummed" "git package records a checksum"
+}
+
+test_rejects_a_dangling_dependency_of_a_git_package() {
+  local dangling_git
+  dangling_git="$(new_case git-dangling)"
+  write_baseline_index "$dangling_git"
+  write_baseline_lock "$dangling_git"
+  append_git_package "$dangling_git" "$GIT_TAG_SOURCE" "0.22.2" "ryu"
+  expect_exit "rejects a dangling dependency of a git package" 1 \
+    "$dangling_git" "no [[package]] entry"
+}
+
 for test_case in \
   test_accepts_a_lockfile_matching_the_published_index \
   test_rejects_a_dependency_the_published_manifest_never_declares \
@@ -311,6 +387,11 @@ for test_case in \
   test_rejects_a_registry_package_with_no_sha256_checksum \
   test_accepts_a_dependency_the_manifest_declares_under_a_rename \
   test_rejects_a_dependency_the_manifest_declares_only_for_dev \
+  test_accepts_a_git_package_pinned_to_a_tag_and_commit \
+  test_rejects_a_git_package_not_pinned_to_a_tag_and_commit \
+  test_rejects_a_git_package_whose_tag_disagrees_with_its_version \
+  test_rejects_a_git_package_carrying_a_checksum \
+  test_rejects_a_dangling_dependency_of_a_git_package \
   test_reports_a_missing_lockfile_with_exit_2 \
   test_reports_a_missing_index_snapshot_with_exit_2; do
   "$test_case"
