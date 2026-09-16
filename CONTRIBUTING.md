@@ -6,7 +6,13 @@ summarises how to build, test, and submit changes.
 
 ## Repository layout
 
-Clone **NEAT-AI-core** and **NEAT-AI-Backpropagation** as siblings:
+This repository builds on its own: `neat-core` is a git dependency pinned to a
+NEAT-AI-core release tag in
+[`backpropagation/Cargo.toml`](./backpropagation/Cargo.toml), so cargo fetches
+it and **no sibling checkout is required** (issue #153).
+
+A sibling layout is still convenient for cross-repo work, and the
+canonical-copy drift gate reads `../NEAT-AI-core` when it is present:
 
 ```text
 parent/
@@ -15,10 +21,6 @@ parent/
   NEAT-AI/                 # optional, TypeScript dual-run
   NEAT-AI-scorer/          # optional, rust_scorer
 ```
-
-The `neat-core` path dependency in
-[`backpropagation/Cargo.toml`](./backpropagation/Cargo.toml) resolves to
-`../../NEAT-AI-core/neat-core`.
 
 ## Prerequisites
 
@@ -140,25 +142,21 @@ External crate bumps arrive as Renovate PRs under a 24-hour quarantine — see
 On each PR the **Auto Format** workflow
 ([`.github/workflows/auto-format.yml`](./.github/workflows/auto-format.yml))
 runs `cargo fmt --all` and `cargo update -p neat-core`, then pushes any
-tracked-tree changes back to the PR branch. It does **not** bump
-`neat-core.expected-version` — acknowledge breaking neat-core bumps
-deliberately in the same PR that updates this crate for them.
+tracked-tree changes back to the PR branch.
 
-The gate ([`scripts/check-neat-core-version.sh`](./scripts/check-neat-core-version.sh))
-compares that baseline against neat-core's **`Develop`** branch, not against
-whatever branch your sibling `../NEAT-AI-core` checkout is parked on — an
-unmerged branch is not a bump neat-core has presented, so it must not fail
-your PR (issue #141). Pass `--core-ref ''` to compare against the sibling
-working tree as it stands when you are deliberately building against a local
-neat-core branch.
+The `neat-core` pin itself is moved by the **Family Sync** workflow
+([`.github/workflows/family-sync.yml`](./.github/workflows/family-sync.yml)),
+which runs [`scripts/family-pins.sh`](./scripts/family-pins.sh) on every PR:
+the tag in [`backpropagation/Cargo.toml`](./backpropagation/Cargo.toml) is
+rewritten to NEAT-AI-core's newest release, `Cargo.lock` follows, and the patch
+version is bumped behind it. Run the script yourself to move the pin locally —
+it is idempotent, so a pin already on the newest release is left alone.
 
-Because the `path` dependency compiles the working tree rather than the branch,
-the gate **warns** whenever the two versions differ — a local build against an
-unmerged neat-core is reported, it just does not fail the gate. It also warns
-and falls back to the working tree when the sibling is not a git checkout or
-carries no `Develop` (a `--single-branch` clone, say). `origin/Develop` is read
-as of your last fetch; the gate does no network I/O, and CI clones neat-core
-fresh, so CI is the copy that enforces.
+There is no separate breaking-bump acknowledgement any more: the retired
+`neat-core.expected-version` baseline duplicated what the pinned build already
+proves, and went red on every PR whenever core released a new pre-1.0 minor
+(issue #156). A core release this crate cannot consume now fails the PR that
+moves the pin, in the build and the tests.
 
 ## Version bumping
 

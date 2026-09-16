@@ -14,7 +14,47 @@ program proves numerical parity **and** a measured learning win on the
 GRQ production creature and corpus. Tiny identity-chain fixtures are
 unit regression only — they are not a win.
 
-## Sibling layout
+## The neat-core pin
+
+`neat-core` is a **git dependency pinned to a NEAT-AI-core release tag**
+(issue #153), declared in
+[`backpropagation/Cargo.toml`](./backpropagation/Cargo.toml):
+
+```toml
+neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.22.2" }
+```
+
+Cargo fetches that tag itself, so the workspace builds with **no NEAT-AI-core
+checkout beside this repository** — nothing in CI clones the sibling any more.
+
+The pin moves only through this repository's own pull request, and it is moved
+automatically on every one of them:
+[`scripts/family-pins.sh`](./scripts/family-pins.sh) — run by the family-sync
+job — resolves NEAT-AI-core's newest released `v*` tag, rewrites the pin when it
+is behind, and re-locks `Cargo.lock`. A remote that cannot be listed fails the
+job rather than leaving a stale pin looking current.
+
+Because `backpropagation/Cargo.toml` and `Cargo.lock` are both in
+[`scripts/build-affecting-paths.sh`](./scripts/build-affecting-paths.sh), a
+moved pin re-triggers `version-increment.yml` and the patch version follows it
+— the pin never moves at an unchanged crate version. A breaking core release is
+caught where it actually breaks: the PR that moves the pin fails to compile, or
+fails its tests, instead of being acknowledged in a separate baseline file (the
+retired `neat-core.expected-version` gate).
+
+```mermaid
+flowchart TD
+    A["PR opened / updated"] --> B["family-sync job"]
+    B --> C["family-pins.sh:<br/>newest v* tag on NEAT-AI-core"]
+    C -- "pin already current" --> D["no commit"]
+    C -- "pin behind" --> E["rewrite tag + cargo update<br/>commit Cargo.toml + Cargo.lock"]
+    C -- "remote unlistable" --> F["job fails"]
+    E --> G["version-increment.yml<br/>bumps the patch"]
+    G --> H["ci.yml builds against the new release"]
+```
+
+A sibling checkout is still handy for local cross-repo work, and the
+canonical-copy drift gate reads one when it is there:
 
 ```text
 parent/
@@ -23,13 +63,6 @@ parent/
   NEAT-AI/            # optional TypeScript dual-run
   NEAT-AI-scorer/     # optional rust_scorer
 ```
-
-`neat-core` is an unpinned path dependency
-(`../../NEAT-AI-core/neat-core`). Breaking SemVer bumps are gated by
-[`neat-core.expected-version`](./neat-core.expected-version), compared against
-neat-core's `Develop` branch rather than whatever branch the sibling checkout
-sits on — falling back to the working tree, with a warning, when no such branch
-resolves (issue #141).
 
 Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.98.0`).
 
@@ -52,35 +85,39 @@ A second run whose stamps match the crate version prints
 `[neat_ai_backpropagation] already installed v<x>`, compiles nothing and
 prints the same CLI path. `target/` is removed after a successful build.
 
-#### Canonical copy and family sync
+#### Canonical copies and family sync
 
-`scripts/runlib.sh` has **one home** — `scripts/runlib.sh` on
-[NEAT-AI-core](https://github.com/stSoftwareAU/NEAT-AI-core) `Develop`
-(core `#680`). The copy here is byte-identical and is never edited:
-behaviour changes are made in NEAT-AI-core and re-copied outward.
+Two helpers have **one home** each — the same path on
+[NEAT-AI-core](https://github.com/stSoftwareAU/NEAT-AI-core) `Develop`:
+[`scripts/runlib.sh`](./scripts/runlib.sh) (core `#680`) and
+[`scripts/family-pins.sh`](./scripts/family-pins.sh) (core `#681`). Both copies
+here are byte-identical and are never edited: behaviour changes are made in
+NEAT-AI-core and re-copied outward.
 [`.github/workflows/family-sync.yml`](./.github/workflows/family-sync.yml)
-is the copy — on every PR it fetches core's `Develop` copy and commits the
-refreshed file onto the branch when it differs, and a fetch error fails the
-job rather than passing a stale copy off as synced.
+is the copy — on every PR it fetches core's `Develop` copies, refreshes either
+that differs, then runs `scripts/family-pins.sh` and commits the refreshed
+helpers together with any moved pin. A fetch error fails the job rather than
+passing a stale copy off as synced.
 [`scripts/check-family-sync-workflow.sh`](./scripts/check-family-sync-workflow.sh)
 fails CI when that job is misdeclared, and
-[`scripts/check-runlib-canonical.sh`](./scripts/check-runlib-canonical.sh)
-fails CI when the committed copy has drifted from core `Develop` by so much as
-a byte — the sync job is skipped on fork PRs, so the content is gated
+[`scripts/check-canonical-copies.sh`](./scripts/check-canonical-copies.sh)
+fails CI when either committed copy has drifted from core `Develop` by so much
+as a byte — the sync job is skipped on fork PRs, so the content is gated
 separately from the workflow's shape.
 
 ```mermaid
 flowchart LR
-    core["NEAT-AI-core Develop<br/>scripts/runlib.sh"] -->|curl --fail| job["family-sync job<br/>(pull_request)"]
-    branch["PR branch copy"] --> job
-    job -->|byte-identical| same["no commit"]
-    job -->|differs| push["commit + rebase + push<br/>refreshed copy"]
-    job -->|fetch error| red["job fails"]
+    core["NEAT-AI-core Develop<br/>runlib.sh + family-pins.sh"] -->|curl --fail| job["family-sync job<br/>(pull_request)"]
+    branch["PR branch copies + pin"] --> job
+    job -->|copies current, pin current| same["no commit"]
+    job -->|copy differs or pin behind| push["commit + rebase + push<br/>copies + Cargo.toml + Cargo.lock"]
+    job -->|fetch or pin error| red["job fails"]
 ```
 
-Refreshing the script is not a source change — it is not in
+Refreshing either script is not a source change — neither is in
 [`scripts/build-affecting-paths.sh`](./scripts/build-affecting-paths.sh),
-so the sync commit bumps no version.
+so a sync-only commit bumps no version. A moved pin is a source change, and
+does.
 
 [Core `#690`](https://github.com/stSoftwareAU/NEAT-AI-core/pull/690) has
 landed (core 0.21.1) and the refreshed copy is committed here, so the
@@ -674,8 +711,8 @@ NEAT-AI's `RustTrainDirBridge` drives both ends of that store (issue #81):
 it passes `TrainOptions.traceStore` through as `--trace-store`, and reads
 `<output-dir>/best-trace.json` back as `TrainingResult.trace` instead of
 synthesising one from `best.json`. An older binary that predates the flag
-fails the run loudly with clap's unknown-argument error — rebuild the
-sibling checkout rather than dropping the option.
+fails the run loudly with clap's unknown-argument error — rebuild this
+crate rather than dropping the option.
 
 `--learning-rate` is the *initial* rate; `--learning-rate-strategy`
 (`fixed`, `decay`, `adaptive`, `warm-restart`) plus `--learning-rate-decay`
@@ -781,8 +818,9 @@ both lists are empty and it says that instead.
 
 The run is reproducible from `seed` alone: the same seed over the same
 creature, corpus and caps writes byte-identical artefacts.
-`schemaVersion`, `version`, `neatCoreBaseline` (the declared baseline
-from [`neat-core.expected-version`](./neat-core.expected-version)) and
+`schemaVersion`, `version`, `neatCoreBaseline` (the pinned neat-core
+release read from
+[`backpropagation/Cargo.toml`](./backpropagation/Cargo.toml)) and
 the creature fingerprint are what let two artefacts be compared across
 NEAT-AI-core / Backpropagation versions — read the schema first and
 refuse one you do not know.
@@ -983,9 +1021,9 @@ External crates.io dependencies are bumped by Renovate
 ([`renovate.json`](./renovate.json)) under a **24-hour quarantine**
 (`minimumReleaseAge`), so a freshly-hijacked release cannot be merged on
 publish day. Internal `stSoftwareAU/*` dependencies carry no embargo, and
-`neat-core` is disabled outright — it is a sibling path dependency whose
-lockfile entry is already synced by the Auto Format workflow's
-`cargo update -p neat-core`.
+`neat-core` is disabled outright — it is a release-tag pin that
+[`scripts/family-pins.sh`](./scripts/family-pins.sh) moves on every PR
+(issue #153).
 
 ```mermaid
 flowchart LR
@@ -994,7 +1032,7 @@ flowchart LR
     C --> B
     B -- yes --> D[Renovate PR]
     E[stSoftwareAU release] --> D
-    F[neat-core path dep] --> G[Auto Format<br/>cargo update -p neat-core]
+    F[neat-core release tag] --> G[family-sync<br/>family-pins.sh]
     D --> H["ci.yml — cargo-deny, clippy, tests"]
     G --> H
     H --> I[merge]

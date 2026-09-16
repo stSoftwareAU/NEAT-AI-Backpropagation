@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `neat-core` is pinned to a **NEAT-AI-core release tag** —
+  `neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.22.2" }`
+  — replacing the unpinned sibling path dependency, so the workspace builds
+  with no NEAT-AI-core checkout beside the repository. The pin moves only
+  through this repository's own PR and is refreshed automatically on every one:
+  `scripts/family-pins.sh` (the second byte-identical NEAT-AI-core copy, core
+  `#681`) is run by `.github/workflows/family-sync.yml`, which commits the moved
+  tag and `Cargo.lock`; both paths are build-affecting, so `version-increment`
+  bumps the patch behind it. `scripts/check-canonical-copies.sh` replaces
+  `scripts/check-runlib-canonical.sh` and gates both copies against core
+  `Develop`, `scripts/check-family-sync-workflow.sh` gates the new job shape,
+  and `scripts/lockfile_integrity.py` now verifies a git package by its
+  immutable tag + commit pin instead of a registry record (issue #153).
+
 - `scripts/runlib.sh` installs both artefacts this crate ships —
   `~/.cargo/bin/neat_ai_backpropagation` and
   `~/.cargo/lib/libneat_ai_backpropagation.{dylib,so}` — each stamped with
@@ -374,6 +388,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `gradient-check` artefacts read `neatCoreBaseline` from the pinned tag in
+  `backpropagation/Cargo.toml`, so the field names the core release the run
+  actually compiled against (issue #153).
+
 - Recorded neat-core 0.21.1 as the handled baseline in
   `neat-core.expected-version` (was 0.20.0) and re-locked `Cargo.lock` onto it,
   clearing the unhandled-breaking-bump gate that failed on every PR and on a
@@ -568,6 +586,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (issue #54).
 
 ### Removed
+
+- The `neat-core.expected-version` breaking-bump gate —
+  `scripts/check-neat-core-version.sh`, its test twin and the baseline file.
+  It acknowledged breaking bumps of an unpinned dependency on paper; with the
+  pin, a core release this crate cannot consume fails the build and tests of
+  the PR that moves the pin, while the baseline went red on every PR whenever
+  core released a new pre-1.0 minor (issue #156). CI no longer checks
+  NEAT-AI-core out beside the repository at all (issue #153).
 
 - `scorer::default_scorer_path()` — a `pub fn` no code ever called. It returned
   a bare `rust_scorer` PATH lookup for a fallback the CLI never adopted:

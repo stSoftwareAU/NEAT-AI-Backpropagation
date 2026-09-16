@@ -2,13 +2,13 @@
 #
 # Runs on pull requests targeting Develop or a `milestone/**` branch (milestone
 # sub-issue PRs merge into the shared milestone branch, so they need the same
-# gate — Issue #27). Applies `cargo fmt --all` and
-# refreshes `Cargo.lock` against the checked-out NEAT-AI-core path dependency
-# (`cargo update -p neat-core`). If the working tree changes, the fix is
-# committed and pushed back. Re-running on a clean branch is a no-op.
+# gate — Issue #27). Applies `cargo fmt --all` and re-resolves `Cargo.lock`
+# against the pinned `neat-core` release (`cargo update -p neat-core`). If the
+# working tree changes, the fix is committed and pushed back. Re-running on a
+# clean branch is a no-op.
 #
-# Deliberately does NOT bump `neat-core.expected-version` — the breaking-bump
-# gate stays a human acknowledgement.
+# Deliberately does NOT move the `neat-core` pin: `scripts/family-pins.sh`,
+# run by family-sync.yml, is the one job that does (issue #153).
 name: Auto Format
 
 on:
