@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up the Rust workspace (NEAT-AI-core sibling + toolchain)
+      - name: Set up the Rust workspace (pinned toolchain)
         uses: ./.github/actions/setup-rust-workspace
         with:
           components: rustfmt
