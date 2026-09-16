@@ -62,8 +62,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable, frozen 2026-05-18
+      # family-pins.sh runs `cargo update`, so the pinned toolchain is needed.
+      - name: Set up the Rust workspace (pinned toolchain)
+        uses: ./.github/actions/setup-rust-workspace
 
       - name: Fetch the canonical helpers from NEAT-AI-core Develop
         run: |
