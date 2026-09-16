@@ -82,13 +82,11 @@ Refreshing the script is not a source change — it is not in
 [`scripts/build-affecting-paths.sh`](./scripts/build-affecting-paths.sh),
 so the sync commit bumps no version.
 
-One caveat while
-[core `#690`](https://github.com/stSoftwareAU/NEAT-AI-core/pull/690) is
-open: today's canonical copy declines its no-cargo fast path on a manifest
-carrying an explicit `[[bin]]` table — this crate's shape — so the
-already-installed run still costs a single `cargo metadata` call before it
-skips. It builds nothing either way, and the family sync brings the fix in
-automatically once `#690` lands on core `Develop`.
+[Core `#690`](https://github.com/stSoftwareAU/NEAT-AI-core/pull/690) has
+landed (core 0.21.1) and the refreshed copy is committed here, so the
+canonical script now reads a manifest's single `[[bin]]` table directly —
+this crate's shape — and an already-installed run skips with no `cargo`
+command at all.
 
 ### Build profiles
 
