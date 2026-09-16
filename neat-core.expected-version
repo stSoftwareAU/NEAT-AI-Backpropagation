@@ -141,4 +141,39 @@
 # zero hits). Verified against the sibling clone at 0.20.0 (ae71f44) by a clean
 # `cargo build --all-targets`, `cargo clippy --all-targets -- -D warnings` and
 # the full test suite (19 test binaries, 0 failures).
-0.20.0
+#
+# 0.20.0 -> 0.21.1: acknowledge one breaking-by-policy neat-core minor and the
+# patch above it. Neither changes a signature this crate names.
+#   * 0.21.0 (neat-core #698, "Milestone: Scan 20260911") is a scan roll-up of
+#     five PRs, none of which alters the published surface. #671 folds the four
+#     record-describing parameters of the packed batch scan in `loss.rs` into an
+#     internal `RecordScanConfig`, leaving `mse_sum_batch_packed`,
+#     `mae_sum_batch_packed` and every WASM-exported batch signature unchanged.
+#     #673 moves the per-variant output range and safe-zone rule out of two
+#     38-arm `match`es into the crate-internal `squash_profile` module, so
+#     `apply_get_range` and `apply_safe_zone_adjustment` keep both their
+#     signatures and their values — the two arms its test file gained
+#     (`Gaussian`, `BipolarSigmoid`) already carried a hand-inlined copy of the
+#     same rule. #672 declines a `NeuronUuid` newtype over `SynapseExport`'s
+#     endpoints and records why, so both stay `String`. #676 and #677 are
+#     `deny.toml` containment policy plus a dev-dependency note for
+#     `winapi`/`page_size`/`tinytemplate`, which never reach this crate's graph.
+#   * 0.21.1 (neat-core #690) touches no `.rs` file at all: it teaches the
+#     canonical `scripts/runlib.sh` to read a single `[[bin]]` table so a skipped
+#     build runs no `cargo` command. This crate adopted that canonical copy in
+#     #158, so handling 0.21.1 means re-copying `scripts/runlib.sh` from
+#     neat-core `Develop` — done in this PR, and
+#     `scripts/check-runlib-canonical.sh` passes byte-for-byte again.
+#
+# No Rust change is required. `backpropagation` reaches neat-core through
+# `parse_creature_json`, `compile_creature`, `creature_validate`,
+# `propagate_topological_loop`, the MSE entry points, `apply_get_range`,
+# `parse_squash_name`, `parse_synapse_type` and the
+# `calculate_weight`/`calculate_bias` helpers, and every one of those keeps its
+# 0.20.0 signature and behaviour. It never names `apply_safe_zone_adjustment`,
+# `SynapseExport`, `squash_profile` or the prune surface (repo-wide grep: zero
+# hits). Verified against the sibling clone at 0.21.1 (8461eb0) by a clean
+# `cargo build --all-targets`, `cargo clippy --workspace --all-targets
+# --all-features -- -D warnings` and the full test suite (18 test binaries, 0
+# failures).
+0.21.1
