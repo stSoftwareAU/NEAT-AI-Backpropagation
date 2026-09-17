@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
-# Validate the family-sync PR workflow (issue #152 / NEAT-AI-core #680).
+# Validate the family-sync PR workflow (issue #152 / #153, NEAT-AI-core
+# #680 / #681).
 #
-# `scripts/runlib.sh` has one home — `scripts/runlib.sh` on NEAT-AI-core
-# `Develop`. This repository carries a byte-identical copy, and the family-sync
-# workflow is what keeps it that way. A misdeclared job would let the copy rot
-# silently, so CI runs this checker on every PR.
+# `scripts/runlib.sh` and `scripts/family-pins.sh` each have one home — the
+# same path on NEAT-AI-core `Develop`. This repository carries byte-identical
+# copies, and the family-sync workflow is what keeps them that way; it also
+# runs `scripts/family-pins.sh`, which is the only way the `neat-core` release
+# pin moves (issue #153). A misdeclared job would let a copy rot, or leave the
+# pin stale, silently — so CI runs this checker on every PR.
 #
 # The workflow must:
 #   1. Run on `pull_request` events (never on a push to the default branch).
 #   2. Cover milestone branches — a filter that omits `milestone/*` leaves
 #      every milestone sub-issue PR unsynced (Issue #27).
 #   3. Declare minimal permissions (`contents: write`, never `write-all`).
-#   4. Fetch the canonical copy from NEAT-AI-core `Develop`.
+#   4. Fetch both canonical copies from NEAT-AI-core `Develop`.
 #   5. Fail non-zero on a fetch error (`curl --fail`) — a stale copy must never
 #      be reported as synced.
-#   6. Gate the commit/push behind a change-detection output (idempotent).
-#   7. Rebase before pushing, so a branch that moved meanwhile is not rejected.
-#   8. Refuse to push onto a fork's PR branch.
-#   9. Check out with `persist-credentials: false`.
-#  10. Pin every action to a 40-character commit SHA.
-#  11. Authenticate the push App token -> ACTIONS_PUSH -> GITHUB_TOKEN.
-#  12. Use strict bash (`set -euo pipefail`).
+#   6. Run `scripts/family-pins.sh`, so the neat-core pin is refreshed to the
+#      latest release on every PR.
+#   7. Stage `Cargo.lock` in the commit, so a moved pin is actually committed.
+#   8. Gate the commit/push behind a change-detection output (idempotent).
+#   9. Rebase before pushing, so a branch that moved meanwhile is not rejected.
+#  10. Refuse to push onto a fork's PR branch.
+#  11. Check out with `persist-credentials: false`.
+#  12. Pin every action to a 40-character commit SHA.
+#  13. Authenticate the push App token -> ACTIONS_PUSH -> GITHUB_TOKEN.
+#  14. Use strict bash (`set -euo pipefail`).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -80,17 +86,49 @@ else
   fail "no 'contents: write' permission — the job cannot push the refreshed copy"
 fi
 
-if grep -qE 'NEAT-AI-core/Develop/scripts/runlib\.sh' "$WORKFLOW" \
-  || grep -qE 'NEAT-AI-core/contents/scripts/runlib\.sh' "$WORKFLOW"; then
-  ok "fetches scripts/runlib.sh from NEAT-AI-core Develop"
-else
-  fail "no NEAT-AI-core Develop scripts/runlib.sh source — nothing to sync from"
-fi
+for canonical_script in runlib.sh family-pins.sh; do
+  if grep -qF "NEAT-AI-core/Develop/scripts/$canonical_script" "$WORKFLOW" \
+    || grep -qF "NEAT-AI-core/contents/scripts/$canonical_script" "$WORKFLOW"; then
+    ok "fetches scripts/$canonical_script from NEAT-AI-core Develop"
+  else
+    fail "no NEAT-AI-core Develop scripts/$canonical_script source — nothing to sync from"
+  fi
+done
 
 if grep -qE 'curl[^|]*--fail' "$WORKFLOW" || grep -qE 'curl[[:space:]]+-[A-Za-z]*f' "$WORKFLOW"; then
   ok "fetch failures exit non-zero (curl --fail)"
 else
   fail "no 'curl --fail' — an HTTP error page would be copied over the script, or a stale copy passed off as synced"
+fi
+
+# The invocation, not the fetch: the canonical URL also ends in the script's
+# name, so the pattern requires the `./scripts/...` form a run: step uses.
+if grep -vE '^[[:space:]]*#' "$WORKFLOW" | grep -qE '\./scripts/family-pins\.sh'; then
+  ok "runs scripts/family-pins.sh, so the neat-core pin moves on every PR"
+else
+  fail "no './scripts/family-pins.sh' run — the neat-core pin would never move (issue #153)"
+fi
+
+# Comment-free, with backslash continuations folded onto one line, so a
+# `git add` split across lines is read as the single command it is.
+joined_lines() {
+  grep -vE '^[[:space:]]*#' "$1" | awk '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      buf = (buf == "") ? line : buf " " line
+      if (buf ~ /\\$/) { sub(/\\$/, "", buf); next }
+      print buf
+      buf = ""
+    }
+    END { if (buf != "") print buf }
+  '
+}
+
+if joined_lines "$WORKFLOW" | grep -qE '(^|[[:space:]])add([[:space:]]|$)[^#]*Cargo\.lock'; then
+  ok "commit stages Cargo.lock, so a moved pin is committed"
+else
+  fail "the commit does not stage Cargo.lock — a moved pin would be left in the runner's working tree (issue #153)"
 fi
 
 if grep -qE '^[[:space:]]*if:[[:space:]]*steps\.[A-Za-z0-9_-]+\.outputs\.' "$WORKFLOW"; then

@@ -193,7 +193,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "neat-core"
-version = "0.21.1"
+version = "0.22.2"
+source = "git+https://github.com/stSoftwareAU/NEAT-AI-core?tag=v0.22.2#9b26d47c321cdb3ad1e5b130b47de3c5bcc0dd2f"
 dependencies = [
  "serde",
  "serde_json",
@@ -202,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "neat_ai_backpropagation"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "clap",
  "neat-core",

@@ -6,7 +6,7 @@
   "osvVulnerabilityAlerts": true,
   "packageRules": [
     {
-      "description": "neat-core is a sibling path dependency; the Auto Format workflow already runs `cargo update -p neat-core` on every PR, so Renovate must not fight it.",
+      "description": "neat-core is pinned to a NEAT-AI-core release tag that `scripts/family-pins.sh` moves on every PR (issue #153), so Renovate must not fight it.",
       "matchPackageNames": ["neat-core"],
       "enabled": false
     },

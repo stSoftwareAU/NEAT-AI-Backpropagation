@@ -7,8 +7,8 @@
 #      freshly-hijacked crates.io release cannot be merged on publish day.
 #   3. Only shorten that window in rules scoped to internal stSoftwareAU
 #      packages (external crates keep the full quarantine).
-#   4. Disable `neat-core` — it is a sibling path dependency whose lockfile
-#      entry is already synced by the Auto Format workflow.
+#   4. Disable `neat-core` — it is a release-tag pin moved by
+#      `scripts/family-pins.sh` on every PR (issue #153).
 #   5. Leave the `cargo` manager enabled, otherwise nothing is updated at all.
 set -euo pipefail
 
@@ -217,11 +217,11 @@ else:
     ok("no package rule disables the cargo manager")
 
 if neat_core_disabled:
-    ok("neat-core is disabled (path dependency, synced by Auto Format)")
+    ok("neat-core is disabled (release-tag pin, moved by family-pins.sh)")
 else:
     fail(
-        "no package rule disables neat-core — Renovate would fight the Auto "
-        "Format workflow over the sibling path dependency"
+        "no package rule disables neat-core — Renovate would fight "
+        "scripts/family-pins.sh over the release-tag pin"
     )
 
 sys.exit(exit_code)

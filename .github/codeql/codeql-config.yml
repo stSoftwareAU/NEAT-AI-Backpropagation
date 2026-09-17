@@ -1,17 +1,16 @@
 # CodeQL analysis configuration for NEAT-AI-Backpropagation.
 #
-# `.github/actions/setup-rust-workspace` checks stSoftwareAU/NEAT-AI-core out
-# into the workspace, because `backpropagation/Cargo.toml` path-depends on
-# `neat-core` and the crate does not build without it. CodeQL's Rust
-# extraction (`build-mode: none`) resolves the workspace from source, so it
-# extracted that sibling checkout as well and filed its findings against *this*
-# repository: two `rust/cleartext-logging` alerts on NEAT-AI-core's own test
-# suite (`creature_validate_conformance.rs`) reached this repo's Security tab,
-# where nobody can fix them — the code lives in another repository, which runs
-# its own CodeQL.
+# `neat-core` used to be a path dependency, so CI checked NEAT-AI-core out into
+# the workspace and CodeQL's Rust extraction (`build-mode: none`) — which
+# resolves the workspace from source — extracted that sibling as well, filing
+# its findings against *this* repository: two `rust/cleartext-logging` alerts on
+# NEAT-AI-core's own test suite (`creature_validate_conformance.rs`) reached
+# this repo's Security tab, where nobody can fix them.
 #
-# Ignoring the path keeps NEAT-AI-core resolvable as a dependency while
-# scoping the alerts to the code this repository owns.
+# The dependency is a git-tag pin now (Issue #153), so cargo resolves it under
+# `~/.cargo/git` and nothing checks NEAT-AI-core out beside this repository. The
+# ignore is kept as a standing guard: were a sibling checkout ever reintroduced,
+# its alerts would stay in the repository that owns that code.
 name: NEAT-AI-Backpropagation
 
 paths-ignore:

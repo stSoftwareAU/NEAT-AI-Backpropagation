@@ -1,15 +1,25 @@
-# Keep `scripts/runlib.sh` byte-identical to its one home — `scripts/runlib.sh`
-# on NEAT-AI-core `Develop` (core #680 copy contract, issue #152).
+# Keep the copied NEAT-AI-core helpers current, and keep the `neat-core`
+# release pin moving (issue #152 / #153, core #680 / #681).
 #
-# Behaviour changes to the canonical helper are made in NEAT-AI-core and
-# re-copied outward, never edited downstream. This job is the copy: on every PR
-# it fetches core's `Develop` copy and, when the branch's copy differs, commits
-# the refreshed file onto the PR branch. A fetch that fails — an unreachable
-# raw URL, an HTTP error, an empty or non-script payload — fails the job rather
-# than leaving a stale copy looking synced.
+# `scripts/runlib.sh` and `scripts/family-pins.sh` each have one home — the
+# same path on NEAT-AI-core `Develop`. Behaviour changes to either are made in
+# NEAT-AI-core and re-copied outward, never edited downstream. This job is the
+# copy: on every PR it fetches both canonical copies and, when the branch's
+# copy differs, refreshes it. A fetch that fails — an unreachable raw URL, an
+# HTTP error, an empty or non-script payload — fails the job rather than
+# leaving a stale copy looking synced.
 #
-# Refreshing the script is not a source change: `scripts/runlib.sh` is absent
-# from scripts/build-affecting-paths.sh, so the sync commit bumps no version.
+# It then runs `scripts/family-pins.sh`, which rewrites the `neat-core` git
+# tag in `backpropagation/Cargo.toml` to NEAT-AI-core's newest release and
+# re-locks `Cargo.lock`. That is the only way the pin moves: through this
+# repository's own PR, refreshed automatically on every one of them. A pin that
+# cannot be resolved exits the job non-zero rather than leaving it stale.
+#
+# Refreshing a script is not a source change — neither copied script is in
+# scripts/build-affecting-paths.sh — but a moved pin is: `Cargo.lock` and
+# `backpropagation/Cargo.toml` are both build-affecting, so the push below
+# re-triggers `version-increment.yml`, which bumps the patch version. The pin
+# therefore never moves at an unchanged crate version.
 #
 # Push auth matches version-increment.yml (App token -> ACTIONS_PUSH ->
 # GITHUB_TOKEN), and the rebase before the push keeps a PR branch that moved
@@ -32,7 +42,7 @@ concurrency:
 
 jobs:
   family-sync:
-    name: Sync scripts/runlib.sh from NEAT-AI-core
+    name: Sync NEAT-AI-core helpers and the neat-core pin
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Forks get no push credential, so the sync would fail on every fork PR.
@@ -41,7 +51,8 @@ jobs:
       contents: write
     env:
       PUSH_APP_CONFIGURED: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID != '' && secrets.ACTIONS_PUSH_APP_PRIVATE_KEY != '' }}
-      CANONICAL_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/runlib.sh
+      CANONICAL_RUNLIB_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/runlib.sh
+      CANONICAL_FAMILY_PINS_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/family-pins.sh
 
     steps:
       - name: Checkout PR branch
@@ -51,32 +62,60 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fetch the canonical scripts/runlib.sh from NEAT-AI-core Develop
-        id: sync
+      # family-pins.sh runs `cargo update`, so the pinned toolchain is needed.
+      - name: Set up the Rust workspace (pinned toolchain)
+        uses: ./.github/actions/setup-rust-workspace
+
+      - name: Fetch the canonical helpers from NEAT-AI-core Develop
         run: |
           set -euo pipefail
           fetched="$(mktemp)"
           trap 'rm -f "$fetched"' EXIT
-          # --fail makes any HTTP error a non-zero exit: an unreachable
-          # canonical copy fails this job instead of passing on a stale one.
-          curl --fail --silent --show-error --location --retry 3 \
-            --output "$fetched" "$CANONICAL_URL"
-          if [[ ! -s "$fetched" ]]; then
-            echo "::error::fetched an empty scripts/runlib.sh from $CANONICAL_URL"
-            exit 1
-          fi
-          if ! head -n 1 "$fetched" | grep -q '^#!'; then
-            echo "::error::$CANONICAL_URL did not answer with a shell script"
-            exit 1
-          fi
-          if cmp -s "$fetched" scripts/runlib.sh; then
-            echo "scripts/runlib.sh is byte-identical to NEAT-AI-core Develop"
-            echo "changed=false" >>"$GITHUB_OUTPUT"
-          else
-            cp "$fetched" scripts/runlib.sh
-            chmod +x scripts/runlib.sh
-            echo "scripts/runlib.sh refreshed from NEAT-AI-core Develop"
+          sync_one() {
+            local url="$1" target="$2"
+            # --fail makes any HTTP error a non-zero exit: an unreachable
+            # canonical copy fails this job instead of passing on a stale one.
+            curl --fail --silent --show-error --location --retry 3 \
+              --output "$fetched" "$url"
+            if [[ ! -s "$fetched" ]]; then
+              echo "::error::fetched an empty $target from $url"
+              exit 1
+            fi
+            if ! head -n 1 "$fetched" | grep -q '^#!'; then
+              echo "::error::$url did not answer with a shell script"
+              exit 1
+            fi
+            if cmp -s "$fetched" "$target"; then
+              echo "$target is byte-identical to NEAT-AI-core Develop"
+            else
+              cp "$fetched" "$target"
+              chmod +x "$target"
+              echo "$target refreshed from NEAT-AI-core Develop"
+            fi
+          }
+          sync_one "$CANONICAL_RUNLIB_URL" scripts/runlib.sh
+          sync_one "$CANONICAL_FAMILY_PINS_URL" scripts/family-pins.sh
+
+      - name: Move the neat-core pin to the latest NEAT-AI-core release
+        run: |
+          set -euo pipefail
+          ./scripts/family-pins.sh
+
+      - name: Detect a refreshed helper or a moved pin
+        id: sync
+        run: |
+          set -euo pipefail
+          CHANGED_PATHS=(
+            scripts/runlib.sh
+            scripts/family-pins.sh
+            backpropagation/Cargo.toml
+            Cargo.lock
+          )
+          if [[ -n "$(git status --porcelain -- "${CHANGED_PATHS[@]}")" ]]; then
             echo "changed=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "nothing to sync — helpers current and the pin is on the latest release"
+            echo "changed=false" >>"$GITHUB_OUTPUT"
           fi
 
       - name: Mint repo-scoped push token
@@ -89,7 +128,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
 
-      - name: Commit and push the refreshed copy
+      - name: Commit and push the refreshed copies and pin
         if: steps.sync.outputs.changed == 'true'
         env:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -100,9 +139,11 @@ jobs:
           BASE64=/usr/bin/base64
           "$GIT" -c core.hooksPath=/dev/null config user.name "github-actions[bot]"
           "$GIT" -c core.hooksPath=/dev/null config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          "$GIT" -c core.hooksPath=/dev/null add scripts/runlib.sh
+          "$GIT" -c core.hooksPath=/dev/null add \
+            scripts/runlib.sh scripts/family-pins.sh \
+            backpropagation/Cargo.toml Cargo.lock
           "$GIT" -c core.hooksPath=/dev/null commit \
-            -m "chore: sync scripts/runlib.sh from NEAT-AI-core Develop"
+            -m "chore: sync NEAT-AI-core helpers and move the neat-core pin"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_PAT" | "$BASE64" -w0)"
           if ! "$GIT" ls-remote --exit-code --heads origin "$PR_HEAD_REF" >/dev/null 2>&1; then
             echo "::notice::Head branch '$PR_HEAD_REF' no longer exists; skipping push."
@@ -114,7 +155,7 @@ jobs:
           "$GIT" -c core.hooksPath=/dev/null fetch origin "$PR_HEAD_REF"
           if ! "$GIT" -c core.hooksPath=/dev/null rebase FETCH_HEAD; then
             "$GIT" -c core.hooksPath=/dev/null rebase --abort || true
-            echo "::error::could not rebase the refreshed scripts/runlib.sh onto $PR_HEAD_REF — the branch edits it too; re-copy it from NEAT-AI-core Develop by hand"
+            echo "::error::could not rebase the refreshed copies onto $PR_HEAD_REF — the branch edits them too; re-copy them from NEAT-AI-core Develop by hand"
             exit 1
           fi
           "$GIT" -c core.hooksPath=/dev/null \

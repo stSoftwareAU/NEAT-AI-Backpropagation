@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up the Rust workspace (NEAT-AI-core sibling + toolchain)
+      - name: Set up the Rust workspace (pinned toolchain)
         uses: ./.github/actions/setup-rust-workspace
         with:
           components: rustfmt, clippy
@@ -114,7 +114,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up the Rust workspace (NEAT-AI-core sibling + toolchain)
+      - name: Set up the Rust workspace (pinned toolchain)
         uses: ./.github/actions/setup-rust-workspace
 
       - name: Check for required files
@@ -135,7 +135,7 @@ jobs:
             ".github/workflows/gitleaks.yml"
             ".github/workflows/semgrep.yml"
             "SECURITY.md"
-            "neat-core.expected-version"
+            "scripts/family-pins.sh"
             "renovate.json"
           )
           missing_files=()
@@ -151,12 +151,6 @@ jobs:
 
       - name: Validate Cargo workspace
         run: cargo metadata --no-deps --format-version 1 > /dev/null
-
-      - name: Gate on unhandled breaking neat-core bump
-        run: |
-          set -euo pipefail
-          ./scripts/test-check-neat-core-version.sh
-          ./scripts/check-neat-core-version.sh
 
       - name: Verify Cargo.lock against the published crates.io index
         run: |
@@ -181,20 +175,22 @@ jobs:
           set -euo pipefail
           ./scripts/test-runlib.sh
 
-      - name: Validate the family-sync workflow keeps scripts/runlib.sh canonical
+      - name: Validate the family-sync workflow keeps the copied helpers canonical
         run: |
           set -euo pipefail
           ./scripts/test-check-family-sync-workflow.sh
           ./scripts/check-family-sync-workflow.sh
 
       # Content, not workflow shape: family-sync is skipped on fork PRs, so a
-      # downstream edit to the copy would otherwise merge unnoticed. The
-      # NEAT-AI-core Develop checkout is already on the runner (setup-rust-workspace).
-      - name: Gate on scripts/runlib.sh drift from the canonical NEAT-AI-core copy
+      # downstream edit to a copied helper would otherwise merge unnoticed.
+      # `neat-core` is a git-tag pin now (Issue #153), so nothing checks
+      # NEAT-AI-core out beside the repo any more — the canonical copies are
+      # fetched straight from `Develop`, and a fetch error fails the job.
+      - name: Gate on drift from the canonical NEAT-AI-core copies
         run: |
           set -euo pipefail
-          ./scripts/test-check-runlib-canonical.sh
-          ./scripts/check-runlib-canonical.sh "$GITHUB_WORKSPACE/NEAT-AI-core/scripts/runlib.sh"
+          ./scripts/test-check-canonical-copies.sh
+          ./scripts/check-canonical-copies.sh
 
       - name: Validate the auto version bump covers every build-affecting path
         run: |

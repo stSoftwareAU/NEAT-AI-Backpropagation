@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for scripts/check-family-sync-workflow.sh (issue #152).
+# Tests for scripts/check-family-sync-workflow.sh (issues #152 and #153).
 #
 # Every case writes a fixture workflow, runs the real checker against it and
 # asserts the exit code — and, where it matters, that the failure names the
@@ -42,33 +42,45 @@ jobs:
     permissions:
       contents: write
     env:
-      CANONICAL_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/runlib.sh
+      CANONICAL_RUNLIB_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/runlib.sh
+      CANONICAL_FAMILY_PINS_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/family-pins.sh
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           persist-credentials: false
-      - name: Fetch the canonical copy
-        id: sync
+      - name: Fetch the canonical copies
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --location \
-            --output fetched "$CANONICAL_URL"
-          if cmp -s fetched scripts/runlib.sh; then
-            echo "changed=false" >>"$GITHUB_OUTPUT"
-          else
-            cp fetched scripts/runlib.sh
+            --output fetched "$CANONICAL_RUNLIB_URL"
+          cp fetched scripts/runlib.sh
+          curl --fail --silent --show-error --location \
+            --output fetched "$CANONICAL_FAMILY_PINS_URL"
+          cp fetched scripts/family-pins.sh
+      - name: Move the neat-core pin to the latest release
+        run: |
+          set -euo pipefail
+          ./scripts/family-pins.sh
+      - name: Detect changes
+        id: sync
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --porcelain)" ]]; then
             echo "changed=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >>"$GITHUB_OUTPUT"
           fi
-      - name: Commit and push the refreshed copy
+      - name: Commit and push the refreshed copies
         if: steps.sync.outputs.changed == 'true'
         env:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           GH_PAT: ${{ steps.push-token.outputs.token || secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git commit -m "chore: sync scripts/runlib.sh from NEAT-AI-core Develop"
+          git add scripts/runlib.sh scripts/family-pins.sh backpropagation/Cargo.toml Cargo.lock
+          git commit -m "chore: sync NEAT-AI-core helpers and move the neat-core pin"
           git fetch origin "$PR_HEAD_REF"
           git rebase FETCH_HEAD
           git push origin "HEAD:$PR_HEAD_REF"
@@ -139,9 +151,21 @@ sed 's/^permissions:$/permissions: write-all/' "$write_all" >"$write_all.edited"
 mv "$write_all.edited" "$write_all"
 expect_exit "rejects permissions: write-all" 1 "$write_all" "write-all"
 
-expect_exit "rejects a canonical URL that is not core Develop runlib.sh" 1 \
-  "$(break_rule wrong-source 's#NEAT-AI-core/Develop/scripts/runlib.sh#NEAT-AI-core/Develop/scripts/other.sh#')" \
-  "nothing to sync from"
+expect_exit "rejects a workflow that never fetches runlib.sh" 1 \
+  "$(break_rule no-runlib-source '/runlib.sh/d')" \
+  "scripts/runlib.sh source — nothing to sync from"
+
+expect_exit "rejects a workflow that never fetches family-pins.sh" 1 \
+  "$(break_rule no-pins-source '\|Develop/scripts/family-pins.sh|d')" \
+  "scripts/family-pins.sh source — nothing to sync from"
+
+expect_exit "rejects a workflow that never runs family-pins.sh" 1 \
+  "$(break_rule no-pins-run '\|./scripts/family-pins.sh$|d')" \
+  "the neat-core pin would never move"
+
+expect_exit "rejects a commit that does not stage Cargo.lock" 1 \
+  "$(break_rule no-lock-staged 's|git add .*|git add scripts/runlib.sh|')" \
+  "does not stage Cargo.lock"
 
 expect_exit "rejects a fetch that ignores HTTP errors" 1 \
   "$(break_rule no-curl-fail 's/curl --fail/curl/')" \

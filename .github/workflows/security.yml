@@ -24,7 +24,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up the Rust workspace (NEAT-AI-core sibling + toolchain)
+      - name: Set up the Rust workspace (pinned toolchain)
         uses: ./.github/actions/setup-rust-workspace
 
       - name: Cargo Security Audit (rustsec/audit-check)

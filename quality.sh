@@ -32,16 +32,6 @@ if [[ "$SHELLCHECK_FAILED" -ne 0 ]]; then
 fi
 echo "shellcheck: all scripts passed"
 
-echo "Validating the neat-core breaking-bump gate..."
-./scripts/test-check-neat-core-version.sh
-
-if [ -f "./../NEAT-AI-core/Cargo.toml" ]; then
-  echo "Gating on unhandled breaking neat-core bump..."
-  ./scripts/check-neat-core-version.sh
-else
-  echo "sibling ../NEAT-AI-core not found — skipping neat-core version gate (CI runs this for real)"
-fi
-
 echo "Validating auto-format PR workflow..."
 ./scripts/test-check-auto-format-workflow.sh
 ./scripts/check-auto-format-workflow.sh
@@ -50,19 +40,17 @@ echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
 ./scripts/test-check-version-increment-workflow.sh
 ./scripts/check-version-increment-workflow.sh
 
-echo "Validating the family-sync workflow that keeps scripts/runlib.sh canonical..."
+echo "Validating the family-sync workflow that keeps the copied helpers canonical..."
 ./scripts/test-check-family-sync-workflow.sh
 ./scripts/check-family-sync-workflow.sh
 
-echo "Validating the runlib.sh drift gate..."
-./scripts/test-check-runlib-canonical.sh
+echo "Validating the canonical-copies drift gate..."
+./scripts/test-check-canonical-copies.sh
 
-if [ -d "./../NEAT-AI-core" ]; then
-  echo "Gating on scripts/runlib.sh drift from the canonical NEAT-AI-core copy..."
-  ./scripts/check-runlib-canonical.sh
-else
-  echo "sibling ../NEAT-AI-core not found — skipping the runlib.sh drift gate (CI runs this for real)"
-fi
+# Reads NEAT-AI-core Develop over https, falling back — loudly — to a sibling
+# checkout. Neither reachable is exit 2, never a pass.
+echo "Gating on drift from the canonical NEAT-AI-core copies..."
+./scripts/check-canonical-copies.sh
 
 echo "Validating every build-affecting change bumps the crate version (issue #95)..."
 ./scripts/test-bump-backpropagation-version.sh
