@@ -48,7 +48,7 @@ jobs:
         uses: ./.github/actions/setup-rust-workspace
 
       - name: Initialise CodeQL
-        uses: github/codeql-action/init@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef  # v4 (codeql-bundle-v2.26.3)
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd  # v4.38.1
         with:
           languages: rust
           # Rust extraction resolves the workspace from source; no build step.
@@ -59,6 +59,6 @@ jobs:
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef  # v4 (codeql-bundle-v2.26.3)
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd  # v4.38.1
         with:
           category: "/language:rust"
