@@ -43,17 +43,45 @@ expect_exit() {
   PASSED=$((PASSED + 1))
 }
 
-expect_exit "checker: behind fails" 1 \
-  "$CHECKER" --base-version 0.1.18 --head-version 0.1.17
+# One checker case per row: BASE|HEAD|EXPECTED EXIT|DESCRIPTION. `|` separates
+# for the same reason as the bump-script table — a description may carry any
+# punctuation. Expected exit 0 = the head version is acceptable, 1 = it is a
+# downgrade the checker must refuse.
+CHECKER_CASES=$(
+  cat <<'EOF'
+0.1.18|0.1.17|1|behind fails
+0.1.18|0.1.18|0|equal passes
+0.1.18|0.1.19|0|ahead passes
+0.2.0|0.1.99|1|minor-behind fails (sort -V)
+EOF
+)
 
-expect_exit "checker: equal passes" 0 \
-  "$CHECKER" --base-version 0.1.18 --head-version 0.1.18
+SAW_PASS_CASE=0
+SAW_FAIL_CASE=0
+while IFS= read -r row; do
+  IFS='|' read -r base head expected description <<<"$row"
+  if [[ -z "$base" || -z "$head" || -z "$expected" || -z "$description" ]]; then
+    echo "FAIL: malformed case row: '$row'" >&2
+    exit 2
+  fi
+  expect_exit "checker: $description" "$expected" \
+    "$CHECKER" --base-version "$base" --head-version "$head"
+  if [[ "$expected" -eq 0 ]]; then
+    SAW_PASS_CASE=1
+  else
+    SAW_FAIL_CASE=1
+  fi
+done <<<"$CHECKER_CASES"
 
-expect_exit "checker: ahead passes" 0 \
-  "$CHECKER" --base-version 0.1.18 --head-version 0.1.19
-
-expect_exit "checker: minor-behind fails (sort -V)" 1 \
-  "$CHECKER" --base-version 0.2.0 --head-version 0.1.99
+# An emptied or mis-parsed table would otherwise run no cases and still report
+# a pass, so both sides of the checker's contract must have been exercised.
+if [[ "$SAW_PASS_CASE" -eq 1 && "$SAW_FAIL_CASE" -eq 1 ]]; then
+  echo "OK   checker: both accept and reject cases ran"
+  PASSED=$((PASSED + 1))
+else
+  echo "FAIL: checker case table exercised only one side of the contract" >&2
+  FAILED=$((FAILED + 1))
+fi
 
 # Fixture repo for the bump script: Develop at 0.1.10, branch variants.
 FIXTURE="$WORK_DIR/repo"
