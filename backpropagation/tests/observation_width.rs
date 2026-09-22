@@ -114,22 +114,26 @@ fn assert_no_run_artifacts(out: &Path) {
     }
 }
 
-#[test]
-fn train_rejects_input_zero_before_any_epoch() {
-    let (dir, creature_path, data) = fixture(INPUT_ZERO);
-    let out = dir.path().join("out");
-    let err = train(&creature_path, &data, &out).expect_err("input 0 must be rejected");
-    assert_eq!(err, INPUT_ERR);
-    assert_no_run_artifacts(&out);
-}
+/// Every zeroed width and the error the guard must report for it, as
+/// `(case, creature, expected error)`. The library and CLI rejections below
+/// both walk this table, so a third zero-width source is one row rather than
+/// another copy of a whole `#[test]`.
+const ZERO_WIDTH_CASES: [(&str, &str, &str); 2] = [
+    ("input 0", INPUT_ZERO, INPUT_ERR),
+    ("output 0", OUTPUT_ZERO, OUTPUT_ERR),
+];
 
 #[test]
-fn train_rejects_output_zero_before_any_epoch() {
-    let (dir, creature_path, data) = fixture(OUTPUT_ZERO);
-    let out = dir.path().join("out");
-    let err = train(&creature_path, &data, &out).expect_err("output 0 must be rejected");
-    assert_eq!(err, OUTPUT_ERR);
-    assert_no_run_artifacts(&out);
+fn train_rejects_zero_width_before_any_epoch() {
+    for (case, creature, expected_err) in ZERO_WIDTH_CASES {
+        let (dir, creature_path, data) = fixture(creature);
+        let out = dir.path().join("out");
+        let Err(err) = train(&creature_path, &data, &out) else {
+            panic!("{case} must be rejected");
+        };
+        assert_eq!(err, expected_err, "{case}");
+        assert_no_run_artifacts(&out);
+    }
 }
 
 /// The width check runs before the forward-only check, so a widthless
@@ -165,49 +169,32 @@ fn a_valid_source_round_trips_its_width_into_best_json() {
     assert_eq!(result.creature.output, 1);
 }
 
-/// The CLI acceptance criterion: `train` on `{"input":0,...}` exits non-zero
-/// with the width error and writes no `best.json`.
+/// The CLI acceptance criterion: `train` on `{"input":0,...}` — and on
+/// `{"output":0,...}` — exits non-zero with the width error and writes no
+/// `best.json`.
 #[test]
-fn cli_train_exits_non_zero_on_input_zero_and_writes_nothing() {
-    let (dir, creature_path, data) = fixture(INPUT_ZERO);
-    let out = dir.path().join("out");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_neat_ai_backpropagation"))
-        .arg("train")
-        .arg(&creature_path)
-        .arg(&data)
-        .arg("--epochs")
-        .arg("1")
-        .arg("--output-dir")
-        .arg(&out)
-        .output()
-        .expect("run train");
-    assert!(
-        !output.status.success(),
-        "train must exit non-zero on input 0"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains(INPUT_ERR), "stderr: {stderr}");
-    assert_no_run_artifacts(&out);
-}
-
-#[test]
-fn cli_train_exits_non_zero_on_output_zero() {
-    let (dir, creature_path, data) = fixture(OUTPUT_ZERO);
-    let out = dir.path().join("out");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_neat_ai_backpropagation"))
-        .arg("train")
-        .arg(&creature_path)
-        .arg(&data)
-        .arg("--epochs")
-        .arg("1")
-        .arg("--output-dir")
-        .arg(&out)
-        .output()
-        .expect("run train");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains(OUTPUT_ERR), "stderr: {stderr}");
-    assert_no_run_artifacts(&out);
+fn cli_train_exits_non_zero_on_zero_width_and_writes_nothing() {
+    for (case, creature, expected_err) in ZERO_WIDTH_CASES {
+        let (dir, creature_path, data) = fixture(creature);
+        let out = dir.path().join("out");
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_neat_ai_backpropagation"))
+            .arg("train")
+            .arg(&creature_path)
+            .arg(&data)
+            .arg("--epochs")
+            .arg("1")
+            .arg("--output-dir")
+            .arg(&out)
+            .output()
+            .expect("run train");
+        assert!(
+            !output.status.success(),
+            "train must exit non-zero on {case}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected_err), "{case} stderr: {stderr}");
+        assert_no_run_artifacts(&out);
+    }
 }
 
 /// The C ABI (issue #84) hands the creature over as JSON text; the same guard
