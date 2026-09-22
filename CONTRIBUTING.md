@@ -162,18 +162,19 @@ moves the pin, in the build and the tests.
 
 **Every binary-affecting change must bump the patch version in
 [`backpropagation/Cargo.toml`](./backpropagation/Cargo.toml)** (and keep
-`Cargo.lock` in sync). Remote GRQ runners use the same pattern as
-[`runlib.sh`](https://github.com/stSoftwareAU/GRQ-taxation/blob/Develop/scripts/runlib.sh):
-they compare the installed `neat_ai_backpropagation` version marker against
-`Cargo.toml` and skip rebuilding when they match. Forgetting to bump leaves
-stale binaries on remote machines.
+`Cargo.lock` in sync). Remote runners follow the shared version-marker
+convention that this repository's own
+[`scripts/runlib.sh`](./scripts/runlib.sh) implements: they compare the
+installed `neat_ai_backpropagation` version marker against `Cargo.toml` and
+skip rebuilding when the two match. Forgetting to bump leaves stale binaries
+on remote machines.
 
 CI also runs a **Version Increment** workflow
 ([`.github/workflows/version-increment.yml`](./.github/workflows/version-increment.yml))
 that auto-increments the patch on a pull request when any **build-affecting
 path** has changed — but only if the PR branch is not already *ahead* of
-Develop (same approach as GRQ-taxation). Bumping locally keeps the version
-correct and avoids an extra bot commit.
+Develop (the same approach the sibling repositories in this family take).
+Bumping locally keeps the version correct and avoids an extra bot commit.
 
 The build-affecting set is declared once, in
 [`scripts/build-affecting-paths.sh`](./scripts/build-affecting-paths.sh), and
