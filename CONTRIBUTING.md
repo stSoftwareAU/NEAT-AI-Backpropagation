@@ -63,7 +63,7 @@ and `./scripts/check-branch-protection.sh` verifies it against the live API:
 | ---- | ------- | --- |
 | `pull_request` | required | No direct pushes to `Develop`; every change is reviewable before it merges. |
 | `required_approving_review_count` | ≥ 1 | A single account cannot merge its own change. |
-| `require_code_owner_review` | on | [`.github/CODEOWNERS`](./.github/CODEOWNERS) is advisory without it. `auto-format.yml` and `version-increment.yml` mint GitHub App push tokens, so an unreviewed workflow edit is an unreviewed secret grab. |
+| `require_code_owner_review` | on | [`.github/CODEOWNERS`](./.github/CODEOWNERS) is advisory without it. [`.github/actions/push-branch-changes`](./.github/actions/push-branch-changes/action.yml) mints the GitHub App push token for `auto-format.yml`, `family-sync.yml` and `version-increment.yml`, so an unreviewed edit to it — or to a caller — is an unreviewed secret grab. |
 | `required_status_checks` | `CI Required Checks` | The `ci-required` aggregator in [`ci.yml`](./.github/workflows/ci.yml) only gates merges when it is registered as required. |
 | `non_fast_forward` | required | Merged history on `Develop` cannot be rewritten by a force-push. |
 

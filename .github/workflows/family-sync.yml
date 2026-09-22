@@ -21,9 +21,11 @@
 # re-triggers `version-increment.yml`, which bumps the patch version. The pin
 # therefore never moves at an unchanged crate version.
 #
-# Push auth matches version-increment.yml (App token -> ACTIONS_PUSH ->
-# GITHUB_TOKEN), and the rebase before the push keeps a PR branch that moved
-# while this job ran from being rejected as non-fast-forward.
+# The refreshed copies are committed and pushed by
+# `.github/actions/push-branch-changes`, the one copy of the push recipe this
+# repository's three pushing workflows share (App token -> ACTIONS_PUSH ->
+# GITHUB_TOKEN, issue #164). It rebases first, so a PR branch that moved while
+# this job ran is not rejected as non-fast-forward.
 name: Family Sync
 
 on:
@@ -50,7 +52,6 @@ jobs:
     permissions:
       contents: write
     env:
-      PUSH_APP_CONFIGURED: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID != '' && secrets.ACTIONS_PUSH_APP_PRIVATE_KEY != '' }}
       CANONICAL_RUNLIB_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/runlib.sh
       CANONICAL_FAMILY_PINS_URL: https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI-core/Develop/scripts/family-pins.sh
 
@@ -118,46 +119,18 @@ jobs:
             echo "changed=false" >>"$GITHUB_OUTPUT"
           fi
 
-      - name: Mint repo-scoped push token
-        id: push-token
-        if: steps.sync.outputs.changed == 'true' && env.PUSH_APP_CONFIGURED == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          client-id: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ACTIONS_PUSH_APP_PRIVATE_KEY }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-
+      # Mint, commit and push all live in the shared composite action, so the
+      # push credential — and the rebase that keeps a branch which moved
+      # meanwhile pushable — have one home across the three pushing workflows
+      # (Issue #164). A rebase conflict here means the branch edits the copied
+      # helpers too: re-copy them from NEAT-AI-core Develop by hand.
       - name: Commit and push the refreshed copies and pin
         if: steps.sync.outputs.changed == 'true'
-        env:
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          GH_PAT: ${{ steps.push-token.outputs.token || secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          GIT=/usr/bin/git
-          BASE64=/usr/bin/base64
-          "$GIT" -c core.hooksPath=/dev/null config user.name "github-actions[bot]"
-          "$GIT" -c core.hooksPath=/dev/null config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          "$GIT" -c core.hooksPath=/dev/null add \
-            scripts/runlib.sh scripts/family-pins.sh \
-            backpropagation/Cargo.toml Cargo.lock
-          "$GIT" -c core.hooksPath=/dev/null commit \
-            -m "chore: sync NEAT-AI-core helpers and move the neat-core pin"
-          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_PAT" | "$BASE64" -w0)"
-          if ! "$GIT" ls-remote --exit-code --heads origin "$PR_HEAD_REF" >/dev/null 2>&1; then
-            echo "::notice::Head branch '$PR_HEAD_REF' no longer exists; skipping push."
-            exit 0
-          fi
-          # Rebase onto whatever the branch holds now: another job (version
-          # increment, auto-format) may have pushed while this one ran, and a
-          # stale parent would be rejected as a non-fast-forward.
-          "$GIT" -c core.hooksPath=/dev/null fetch origin "$PR_HEAD_REF"
-          if ! "$GIT" -c core.hooksPath=/dev/null rebase FETCH_HEAD; then
-            "$GIT" -c core.hooksPath=/dev/null rebase --abort || true
-            echo "::error::could not rebase the refreshed copies onto $PR_HEAD_REF — the branch edits them too; re-copy them from NEAT-AI-core Develop by hand"
-            exit 1
-          fi
-          "$GIT" -c core.hooksPath=/dev/null \
-            -c http.https://github.com/.extraheader="$AUTH_HEADER" \
-            push origin "HEAD:$PR_HEAD_REF"
+        uses: ./.github/actions/push-branch-changes
+        with:
+          branch: ${{ github.event.pull_request.head.ref }}
+          commit-message: "chore: sync NEAT-AI-core helpers and move the neat-core pin"
+          paths: scripts/runlib.sh scripts/family-pins.sh backpropagation/Cargo.toml Cargo.lock
+          app-client-id: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.ACTIONS_PUSH_APP_PRIVATE_KEY }}
+          fallback-token: ${{ secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}

@@ -175,6 +175,15 @@ jobs:
           set -euo pipefail
           ./scripts/test-runlib.sh
 
+      # The three pushing workflows share one push credential recipe; this is
+      # what keeps it single (Issue #164).
+      - name: Validate the shared push-branch-changes composite action
+        run: |
+          set -euo pipefail
+          ./scripts/test-push-branch-changes-action.sh
+          ./scripts/test-check-push-branch-changes-action.sh
+          ./scripts/check-push-branch-changes-action.sh
+
       - name: Validate the family-sync workflow keeps the copied helpers canonical
         run: |
           set -euo pipefail

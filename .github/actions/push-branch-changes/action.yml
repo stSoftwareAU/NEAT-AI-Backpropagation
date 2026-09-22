@@ -1,0 +1,118 @@
+name: Push branch changes
+description: >-
+  Commit the job's fixes and push them back onto the pull request's head
+  branch, using a repo-scoped GitHub App token where one is configured
+  (Issue #164).
+
+  auto-format.yml, family-sync.yml and version-increment.yml all end the same
+  way — mint a token, commit as github-actions[bot], push with a basic-auth
+  header — so that recipe lives here once instead of three times. A change to
+  the credential chain, the commit identity or the push is made in this file
+  and every caller gets it.
+
+  Secrets cannot be read from inside a composite action, so the caller passes
+  the App credentials and the fallback token in; the fallback chain itself
+  (App token -> the caller's fallback-token) stays here.
+
+inputs:
+  branch:
+    description: The head branch to push onto (the PR's head ref).
+    required: true
+  commit-message:
+    description: Commit subject/body for the fix being pushed.
+    required: true
+  paths:
+    description: >-
+      Whitespace-separated paths to stage. Empty stages every tracked
+      modification (`git commit -a`). Paths containing spaces are not
+      supported.
+    required: false
+    default: ""
+  app-client-id:
+    description: >-
+      Client id of the push GitHub App. Empty skips the mint and falls back to
+      `fallback-token`.
+    required: false
+    default: ""
+  app-private-key:
+    description: Private key of the push GitHub App. Empty skips the mint.
+    required: false
+    default: ""
+  fallback-token:
+    description: >-
+      Token used when no App token was minted — the caller's
+      `secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN`.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Mint repo-scoped push token
+      id: push-token
+      if: inputs.app-client-id != '' && inputs.app-private-key != ''
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        client-id: ${{ inputs.app-client-id }}
+        private-key: ${{ inputs.app-private-key }}
+        repositories: ${{ github.event.repository.name }}
+        permission-contents: write
+
+    - name: Commit and push
+      shell: bash
+      env:
+        PR_HEAD_REF: ${{ inputs.branch }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        STAGE_PATHS: ${{ inputs.paths }}
+        GH_PAT: ${{ steps.push-token.outputs.token || inputs.fallback-token }}
+      run: |
+        set -euo pipefail
+        GIT=/usr/bin/git
+        BASE64=/usr/bin/base64
+        # Every git call runs with repository hooks disabled: the bot commit
+        # must not trigger whatever the branch happens to install.
+        git_c() { "$GIT" -c core.hooksPath=/dev/null "$@"; }
+
+        # No credential at all would reach `git push` as an anonymous push and
+        # fail with a confusing 403, so refuse it here instead.
+        if [[ -z "$GH_PAT" ]]; then
+          echo "::error::no push credential available — configure the push App, ACTIONS_PUSH, or leave GITHUB_TOKEN write access on"
+          exit 1
+        fi
+
+        git_c config user.name "github-actions[bot]"
+        git_c config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        # `mapfile` is avoided deliberately: scripts/test-push-branch-changes-action.sh
+        # runs this block locally, and macOS ships bash 3.2, which lacks it.
+        STAGE=()
+        while IFS= read -r stage_path; do
+          if [[ -n "$stage_path" ]]; then
+            STAGE+=("$stage_path")
+          fi
+        done < <(printf '%s\n' "$STAGE_PATHS" | tr -s ' \t' '\n')
+        if [[ "${#STAGE[@]}" -gt 0 ]]; then
+          git_c add -- "${STAGE[@]}"
+          git_c commit -m "$COMMIT_MESSAGE"
+        else
+          git_c commit -am "$COMMIT_MESSAGE"
+        fi
+
+        if ! git_c ls-remote --exit-code --heads origin "$PR_HEAD_REF" >/dev/null 2>&1; then
+          echo "::notice::Head branch '$PR_HEAD_REF' no longer exists; skipping push."
+          exit 0
+        fi
+
+        # Rebase onto whatever the branch holds now: another job (auto-format,
+        # family sync, version increment) may have pushed while this one ran,
+        # and a stale parent would be rejected as a non-fast-forward.
+        # `--autostash` because a caller that staged named paths can leave
+        # other modifications in the tree, and git refuses to rebase over them.
+        git_c fetch origin "$PR_HEAD_REF"
+        if ! git_c rebase --autostash FETCH_HEAD; then
+          git_c rebase --abort || true
+          echo "::error::could not rebase the automated commit onto $PR_HEAD_REF — the branch changes the same paths; apply the change by hand"
+          exit 1
+        fi
+
+        AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_PAT" | "$BASE64" -w0)"
+        git_c -c http.https://github.com/.extraheader="$AUTH_HEADER" push origin "HEAD:$PR_HEAD_REF"

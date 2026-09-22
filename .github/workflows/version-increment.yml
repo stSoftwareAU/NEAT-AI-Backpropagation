@@ -10,7 +10,9 @@
 # than looking like a deliberate bump — silent downgrades break trainDir / FFI
 # consumers (issue #87). Re-running after a valid bump is a no-op (idempotent).
 #
-# Push auth matches auto-format.yml (App token → ACTIONS_PUSH → GITHUB_TOKEN).
+# The bump is committed and pushed by `.github/actions/push-branch-changes`,
+# the one copy of the push recipe this repository's three pushing workflows
+# share (App token → ACTIONS_PUSH → GITHUB_TOKEN, issue #164).
 name: Version Increment
 
 on:
@@ -49,8 +51,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event.pull_request.head.repo.full_name == github.repository
-    env:
-      PUSH_APP_CONFIGURED: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID != '' && secrets.ACTIONS_PUSH_APP_PRIVATE_KEY != '' }}
 
     steps:
       - name: Checkout PR branch
@@ -80,34 +80,16 @@ jobs:
             exit "$status"
           fi
 
-      - name: Mint repo-scoped push token
-        id: push-token
-        if: steps.bump.outputs.changed == 'true' && env.PUSH_APP_CONFIGURED == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          client-id: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ACTIONS_PUSH_APP_PRIVATE_KEY }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-
+      # Mint, commit and push all live in the shared composite action, so the
+      # push credential has one home across the three pushing workflows
+      # (Issue #164).
       - name: Commit and push version bump
         if: steps.bump.outputs.changed == 'true'
-        env:
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          GH_PAT: ${{ steps.push-token.outputs.token || secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          GIT=/usr/bin/git
-          BASE64=/usr/bin/base64
-          "$GIT" -c core.hooksPath=/dev/null config user.name "github-actions[bot]"
-          "$GIT" -c core.hooksPath=/dev/null config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          "$GIT" -c core.hooksPath=/dev/null add backpropagation/Cargo.toml Cargo.lock
-          "$GIT" -c core.hooksPath=/dev/null commit -m "chore: auto-increment versions for changed projects"
-          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_PAT" | "$BASE64" -w0)"
-          if git ls-remote --exit-code --heads origin "$PR_HEAD_REF" >/dev/null 2>&1; then
-            "$GIT" -c core.hooksPath=/dev/null \
-              -c http.https://github.com/.extraheader="$AUTH_HEADER" \
-              push origin "HEAD:$PR_HEAD_REF"
-          else
-            echo "::notice::Head branch '$PR_HEAD_REF' no longer exists; skipping push."
-          fi
+        uses: ./.github/actions/push-branch-changes
+        with:
+          branch: ${{ github.event.pull_request.head.ref }}
+          commit-message: "chore: auto-increment versions for changed projects"
+          paths: backpropagation/Cargo.toml Cargo.lock
+          app-client-id: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.ACTIONS_PUSH_APP_PRIVATE_KEY }}
+          fallback-token: ${{ secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
