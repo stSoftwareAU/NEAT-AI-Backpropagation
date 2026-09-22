@@ -128,6 +128,39 @@ expect_exit "accepts the committed family-sync workflow" 0 \
 
 expect_exit "accepts a workflow satisfying every rule" 0 "$(write_valid valid)"
 
+# The committed shape since issue #164: the commit/push step is the shared
+# composite action, so staging and rebasing are satisfied by the delegation
+# rather than by inline git commands.
+write_delegated() {
+  local path
+  path="$(write_valid "$1")"
+  {
+    sed '/- name: Commit and push the refreshed copies/,$d' "$path"
+    cat <<'YAML'
+      - name: Commit and push the refreshed copies
+        if: steps.sync.outputs.changed == 'true'
+        uses: ./.github/actions/push-branch-changes
+        with:
+          branch: ${{ github.event.pull_request.head.ref }}
+          commit-message: "chore: sync NEAT-AI-core helpers and move the neat-core pin"
+          paths: scripts/runlib.sh scripts/family-pins.sh backpropagation/Cargo.toml Cargo.lock
+          fallback-token: ${{ secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
+YAML
+  } >"$path.edited"
+  mv "$path.edited" "$path"
+  printf '%s' "$path"
+}
+
+expect_exit "accepts a workflow that delegates the push to the shared action" 0 \
+  "$(write_delegated delegated)"
+
+delegated_no_lock="$(write_delegated delegated-no-lock)"
+sed 's| backpropagation/Cargo.toml Cargo.lock||' "$delegated_no_lock" \
+  >"$delegated_no_lock.edited"
+mv "$delegated_no_lock.edited" "$delegated_no_lock"
+expect_exit "rejects a delegated push whose paths omit Cargo.lock" 1 \
+  "$delegated_no_lock" "does not stage Cargo.lock"
+
 expect_exit "rejects a workflow with no pull_request trigger" 1 \
   "$(break_rule no-pr 's/^  pull_request:/  workflow_dispatch:/')" \
   "no pull_request trigger"

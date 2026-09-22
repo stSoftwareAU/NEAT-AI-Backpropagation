@@ -40,6 +40,11 @@ echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
 ./scripts/test-check-version-increment-workflow.sh
 ./scripts/check-version-increment-workflow.sh
 
+echo "Validating the shared push-branch-changes composite action (issue #164)..."
+./scripts/test-push-branch-changes-action.sh
+./scripts/test-check-push-branch-changes-action.sh
+./scripts/check-push-branch-changes-action.sh
+
 echo "Validating the family-sync workflow that keeps the copied helpers canonical..."
 ./scripts/test-check-family-sync-workflow.sh
 ./scripts/check-family-sync-workflow.sh

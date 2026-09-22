@@ -35,8 +35,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event.pull_request.head.repo.full_name == github.repository
-    env:
-      PUSH_APP_CONFIGURED: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID != '' && secrets.ACTIONS_PUSH_APP_PRIVATE_KEY != '' }}
 
     steps:
       - name: Checkout PR branch
@@ -76,30 +74,16 @@ jobs:
             echo "AUTO_FORMAT_COMMIT_MESSAGE_EOF"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Mint repo-scoped push token
-        id: push-token
-        if: steps.detect.outputs.changed == 'true' && env.PUSH_APP_CONFIGURED == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3
-        with:
-          client-id: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ACTIONS_PUSH_APP_PRIVATE_KEY }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-
+      # Mint, commit and push all live in the shared composite action, so the
+      # push credential has one home across the three pushing workflows
+      # (Issue #164). No `paths:` input: every tracked change cargo fmt and
+      # cargo update made is committed.
       - name: Commit and push rustfmt / lock sync fixes
         if: steps.detect.outputs.changed == 'true'
-        env:
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          COMMIT_MESSAGE: ${{ steps.detect.outputs.commit_message }}
-          GH_PAT: ${{ steps.push-token.outputs.token || secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          GIT=/usr/bin/git
-          BASE64=/usr/bin/base64
-          "$GIT" -c core.hooksPath=/dev/null config user.name "github-actions[bot]"
-          "$GIT" -c core.hooksPath=/dev/null config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          "$GIT" -c core.hooksPath=/dev/null commit -am "$COMMIT_MESSAGE"
-          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_PAT" | "$BASE64" -w0)"
-          "$GIT" -c core.hooksPath=/dev/null \
-            -c http.https://github.com/.extraheader="$AUTH_HEADER" \
-            push origin "HEAD:$PR_HEAD_REF"
+        uses: ./.github/actions/push-branch-changes
+        with:
+          branch: ${{ github.event.pull_request.head.ref }}
+          commit-message: ${{ steps.detect.outputs.commit_message }}
+          app-client-id: ${{ secrets.ACTIONS_PUSH_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.ACTIONS_PUSH_APP_PRIVATE_KEY }}
+          fallback-token: ${{ secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}

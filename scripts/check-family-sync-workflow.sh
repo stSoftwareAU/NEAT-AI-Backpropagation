@@ -19,9 +19,11 @@
 #      be reported as synced.
 #   6. Run `scripts/family-pins.sh`, so the neat-core pin is refreshed to the
 #      latest release on every PR.
-#   7. Stage `Cargo.lock` in the commit, so a moved pin is actually committed.
+#   7. Stage `Cargo.lock` in the commit, so a moved pin is actually committed —
+#      inline, or through the shared push action's `paths:` input (issue #164).
 #   8. Gate the commit/push behind a change-detection output (idempotent).
-#   9. Rebase before pushing, so a branch that moved meanwhile is not rejected.
+#   9. Rebase before pushing, so a branch that moved meanwhile is not rejected —
+#      inline, or by delegating to the shared push action, which rebases.
 #  10. Refuse to push onto a fork's PR branch.
 #  11. Check out with `persist-credentials: false`.
 #  12. Pin every action to a 40-character commit SHA.
@@ -125,7 +127,9 @@ joined_lines() {
   '
 }
 
-if joined_lines "$WORKFLOW" | grep -qE '(^|[[:space:]])add([[:space:]]|$)[^#]*Cargo\.lock'; then
+# Staged either by an inline `git add`, or by the `paths:` input of the shared
+# push action the workflow delegates to (issue #164).
+if joined_lines "$WORKFLOW" | grep -qE '(^|[[:space:]])(add|paths:)([[:space:]]|$)[^#]*Cargo\.lock'; then
   ok "commit stages Cargo.lock, so a moved pin is committed"
 else
   fail "the commit does not stage Cargo.lock — a moved pin would be left in the runner's working tree (issue #153)"
@@ -139,8 +143,14 @@ fi
 
 # Comment lines are stripped first: the rule has to be satisfied by a real
 # `git ... rebase` command, never by the workflow's own prose about rebasing.
+# Delegating the push to the shared composite action satisfies it too — that
+# action rebases, and check-push-branch-changes-action.sh is what holds it to
+# that (issue #164).
 if grep -vE '^[[:space:]]*#' "$WORKFLOW" | grep -qE '(^|[[:space:]])rebase([[:space:]]|$)'; then
   ok "rebases before pushing"
+elif grep -vE '^[[:space:]]*#' "$WORKFLOW" |
+  grep -qE 'uses:[[:space:]]*\./\.github/actions/push-branch-changes'; then
+  ok "pushes through ./.github/actions/push-branch-changes, which rebases first"
 else
   fail "no rebase command before the push — a branch that moved meanwhile is rejected as non-fast-forward (a comment mentioning rebase does not count)"
 fi
