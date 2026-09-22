@@ -114,43 +114,64 @@ branch_with() {
   git commit -q -m "touch $file"
 }
 
-# Every path that changes the produced artefact must bump the version.
-branch_with lib-src backpropagation/src/lib.rs '// changed'
-expect_exit "src change bumps" 0 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
+# One `--check` case per row: NAME|FILE|APPENDED LINE|EXPECTED EXIT|DESCRIPTION.
+# `|` separates because the appended lines carry spaces, quotes, colons and
+# equals signs. Expected exit 0 = the change must bump the version (a
+# build-affecting path), 1 = it must not.
+CHECK_CASES=$(
+  cat <<'EOF'
+lib-src|backpropagation/src/lib.rs|// changed|0|src change bumps
+crate-manifest|backpropagation/Cargo.toml|rand = "0.9"|0|crate Cargo.toml dependency change bumps
+workspace-manifest|Cargo.toml|lto = "fat"|0|workspace Cargo.toml profile change bumps
+lockfile|Cargo.lock|# dependency graph moved|0|Cargo.lock dependency change bumps
+cargo-config|.cargo/config.toml|# rustflags moved|0|.cargo/config.toml rustflags change bumps
+toolchain|rust-toolchain.toml|profile = "minimal"|0|rust-toolchain.toml change bumps
+ffi-header|include/neat_ai_backpropagation.h|// new export|0|include/ FFI header change bumps
+docs-only|README.md|Docs only.|1|docs-only change skips
+tests-only|backpropagation/tests/smoke.rs|// more coverage|1|integration-test-only change skips
+EOF
+)
 
-branch_with crate-manifest backpropagation/Cargo.toml 'rand = "0.9"'
-expect_exit "crate Cargo.toml dependency change bumps" 0 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
+CHECKED_FILES=""
+while IFS= read -r row; do
+  IFS='|' read -r name file line expected description <<<"$row"
+  if [[ -z "$name" || -z "$file" || -z "$line" || -z "$expected" || -z "$description" ]]; then
+    echo "FAIL: malformed case row: '$row'" >&2
+    exit 2
+  fi
+  branch_with "$name" "$file" "$line"
+  expect_exit "$description" "$expected" \
+    "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
+  if [[ "$expected" -eq 0 ]]; then
+    CHECKED_FILES="$CHECKED_FILES$file"$'\n'
+  fi
+done <<<"$CHECK_CASES"
 
-branch_with workspace-manifest Cargo.toml 'lto = "fat"'
-expect_exit "workspace Cargo.toml profile change bumps" 0 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
+# The table must mirror the canonical list, so a path added to
+# build-affecting-paths.sh fails here until a case covers it.
+# shellcheck source=scripts/build-affecting-paths.sh
+source "$SCRIPT_DIR/build-affecting-paths.sh"
+UNCOVERED=""
+while IFS= read -r pathspec; do
+  covered=0
+  while IFS= read -r checked; do
+    if [[ "$checked" == "$pathspec" || "$checked" == "$pathspec"/* ]]; then
+      covered=1
+      break
+    fi
+  done <<<"$CHECKED_FILES"
+  if [[ "$covered" -eq 0 ]]; then
+    UNCOVERED="$UNCOVERED $pathspec"
+  fi
+done < <(build_affecting_pathspecs)
 
-branch_with lockfile Cargo.lock '# dependency graph moved'
-expect_exit "Cargo.lock dependency change bumps" 0 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
-
-branch_with cargo-config .cargo/config.toml '# rustflags moved'
-expect_exit ".cargo/config.toml rustflags change bumps" 0 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
-
-branch_with toolchain rust-toolchain.toml 'profile = "minimal"'
-expect_exit "rust-toolchain.toml change bumps" 0 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
-
-branch_with ffi-header include/neat_ai_backpropagation.h '// new export'
-expect_exit "include/ FFI header change bumps" 0 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
-
-# Paths outside the artefact must not force a bump.
-branch_with docs-only README.md 'Docs only.'
-expect_exit "docs-only change skips" 1 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
-
-branch_with tests-only backpropagation/tests/smoke.rs '// more coverage'
-expect_exit "integration-test-only change skips" 1 \
-  "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
+if [[ -z "$UNCOVERED" ]]; then
+  echo "OK   every build-affecting path has a bump case"
+  PASSED=$((PASSED + 1))
+else
+  echo "FAIL: build-affecting paths with no bump case:$UNCOVERED" >&2
+  FAILED=$((FAILED + 1))
+fi
 
 # A real run rewrites manifest and lockfile, and is idempotent afterwards.
 branch_with real-bump Cargo.lock '# real dependency move'
