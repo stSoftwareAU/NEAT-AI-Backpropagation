@@ -95,6 +95,10 @@ echo "Validating confirmed cross-repo defects stay durably recorded (issue #140)
 ./scripts/test-check-cross-repo-defect-record.sh
 ./scripts/check-cross-repo-defect-record.sh
 
+echo "Validating no public file references a private repository (issue #171)..."
+./scripts/test-check-no-private-repo-references.sh
+./scripts/check-no-private-repo-references.sh
+
 echo "Validating Renovate dependency-update config..."
 ./scripts/test-check-renovate-config.sh
 ./scripts/check-renovate-config.sh

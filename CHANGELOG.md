@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `scripts/check-no-private-repo-references.sh` (with
+  `scripts/test-check-no-private-repo-references.sh`) fails CI when a tracked
+  file cites a private fleet repository — either a `github.com` URL or the
+  `Repo#1234` shorthand an issue tracker resolves — because a public reader
+  cannot open either. Public stSoftware repositories are untouched; an empty or
+  unreadable scan exits 2 rather than reporting a vacuous pass. The four
+  build-profile references it found (`README.md`, `CHANGELOG.md`, `Cargo.toml`,
+  `.cargo/config.toml`) are reworded to concept level — dev compiles as fast as
+  practical, release is fully optimised — citing this repository's own issue
+  #88 (issue #171).
+
 - `neat-core` is pinned to a **NEAT-AI-core release tag** —
   `neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.22.2" }`
   — replacing the unpinned sibling path dependency, so the workspace builds
@@ -473,7 +484,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   cannot be inferred after the fact, and inventing a default would report a
   guess as a record — the read fails loudly instead (issue #104).
 
-- Workspace build profiles follow VibeCoding#4159 / issue #88: `dev` uses
+- Workspace build profiles follow the fleet rule — dev compiles as fast as
+  practical, release is fully optimised (issue #88): `dev` uses
   `debug = "line-tables-only"` for faster rebuilds; `release` is
   workspace-wide `opt-level = 3`, `lto = "fat"`, `codegen-units = 1`
   (no longer scoped only to `neat_ai_backpropagation`); non-`wasm32`
