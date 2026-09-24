@@ -132,8 +132,7 @@ command at all.
 ### Build profiles
 
 Workspace root [`Cargo.toml`](./Cargo.toml) follows the fleet rule
-([VibeCoding#4159](https://github.com/stSoftwareAU/VibeCoding/issues/4159) /
-issue #88): **dev compiles as fast as practical; release is fully
+(issue #88): **dev compiles as fast as practical; release is fully
 optimised** (compile time irrelevant). Stable Rust only.
 
 | Profile | Settings |

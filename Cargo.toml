@@ -2,7 +2,7 @@
 members = ["backpropagation"]
 resolver = "2"
 
-# Fastest practical compile (VibeCoding#4159 / issue #88): keep panic
+# Fleet rule (issue #88): dev compiles as fast as practical. Keep panic
 # file:line, drop full DWARF. Default opt-level = 0 and incremental stay.
 [profile.dev]
 debug = "line-tables-only"

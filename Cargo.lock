@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "neat_ai_backpropagation"
-version = "0.1.42"
+version = "0.1.43"
 dependencies = [
  "clap",
  "neat-core",
