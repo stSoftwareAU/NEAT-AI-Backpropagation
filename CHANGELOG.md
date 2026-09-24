@@ -399,6 +399,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `CONTRIBUTING.md`'s "Version bumping" section describes the shared
+  version-marker convention at concept level and links this repository's own
+  public `scripts/runlib.sh`, instead of linking a private sibling
+  repository's copy that a public reader cannot open (issue #172).
+
 - `gradient-check` artefacts read `neatCoreBaseline` from the pinned tag in
   `backpropagation/Cargo.toml`, so the field names the core release the run
   actually compiled against. The field keeps its shape and changes meaning, so
