@@ -4,8 +4,8 @@
 # Every case runs the real checker against a fixture tree and asserts on its
 # exit code and message. The final case runs it against this repository's own
 # tree — the regression test for the four build-profile references that named
-# the first private fleet repository, and for the four runlib-contract comments
-# that named the second (issue #191).
+# the first private fleet repository, and now for the second one as well
+# (issue #191).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -94,18 +94,19 @@ tree="$(write_tree second_repo_shorthand CHANGELOG.md \
 expect_exit "the second private repo's Repo#1234 shorthand is rejected" 1 \
   "$tree" "CHANGELOG.md:1"
 
-tree="$(write_tree second_repo_bare .github/workflows/version-increment.yml \
-  '# Auto-increment the patch (GRQ-taxation version-increment contract).')"
-expect_exit "the second private repo named bare in prose is rejected" 1 \
-  "$tree" ".github/workflows/version-increment.yml:1"
-
-tree="$(write_tree bare_name README.md 'The fleet rule lives in VibeCoding.')"
-expect_exit "a private repo named bare in prose is rejected" 1 "$tree" \
-  "README.md:1"
+tree="$(write_tree second_repo_owner scripts/bump-backpropagation-version.sh \
+  '# Mirrors stSoftwareAU/GRQ-taxation version-increment job.')"
+expect_exit "the second private repo's owner/repo shorthand is rejected" 1 \
+  "$tree" "scripts/bump-backpropagation-version.sh:1"
 
 tree="$(write_tree second_repo_concept .github/workflows/version-increment.yml \
   '# Auto-increment the patch (shared runlib.sh version-marker contract).')"
 expect_exit "concept-level wording for the second private repo passes" 0 "$tree"
+
+tree="$(write_tree both_repos README.md 'Fleet rule: VibeCoding#4159.')"
+printf '%s\n' 'Remote contract: stSoftwareAU/GRQ-taxation.' >"$tree/CONTRIBUTING.md"
+expect_exit "both private repos are matched by the one pattern" 1 "$tree" \
+  "CONTRIBUTING.md:1"
 
 tree="$(write_tree self_exclusion scripts/check-no-private-repo-references.sh \
   'PRIVATE_REPOS=("VibeCoding")')"

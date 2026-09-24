@@ -2,13 +2,15 @@
 # Fail when a tracked file references a private stSoftware repository (issue #171).
 #
 # This repository is public and must be self-contained for a public reader. A
-# reference to a private fleet repository — a github.com URL, the `Repo#1234`
-# shorthand an issue tracker resolves, or the bare repository name in prose — is
-# dead weight to that reader: they cannot open it, and whatever it was cited to
-# justify no longer stands on its own. A rule that originated in a private
-# repository has to be restated here at concept level ("dev compiles fast,
-# release is fully optimised"), citing this repository's own issue number
-# instead.
+# reference to a private fleet repository — a github.com URL, or the `Repo#1234`
+# shorthand an issue tracker resolves — is dead weight to that reader: they
+# cannot open it, and whatever it was cited to justify no longer stands on its
+# own. A rule that originated in a private repository has to be restated here at
+# concept level ("dev compiles fast, release is fully optimised"), citing this
+# repository's own issue number instead.
+#
+# Only those two citation forms are matched — a bare repository name in a code
+# comment is not yet caught. Extending the pattern to bare names is issue #192.
 #
 # Public stSoftware repositories are untouched — this gates privacy, not the
 # organisation name.
@@ -79,15 +81,14 @@ is_self() {
   return 1
 }
 
-# One ERE of the private repository names. Matching the name itself covers
-# every citation form at once — the github.com URL, the `Repo#1234` shorthand
-# and the bare name in a comment — because all three spell the name out.
+# One ERE covering both citation forms for every private repository.
 PATTERN=""
 for repo in "${PRIVATE_REPOS[@]}"; do
+  alternative="stSoftwareAU/${repo}|${repo}#[0-9]+"
   if [[ -z "$PATTERN" ]]; then
-    PATTERN="$repo"
+    PATTERN="$alternative"
   else
-    PATTERN="$PATTERN|$repo"
+    PATTERN="$PATTERN|$alternative"
   fi
 done
 

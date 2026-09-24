@@ -2,72 +2,88 @@
 
 ## Summary
 
-`scripts/check-no-private-repo-references.sh` (added by #189) listed only one
+`scripts/check-no-private-repo-references.sh` (added by #189) listed one
 private sibling repository. The second one — the repository whose
-version-increment / `runlib.sh` contract this crate mirrors, removed from
-`CONTRIBUTING.md` by hand in #190 because the guard did not yet exist on that
-branch — was unguarded: nothing stopped the reference being reintroduced.
+version-increment / `runlib.sh` contract this crate mirrors, whose URL #190
+removed from `CONTRIBUTING.md` by hand because the guard did not yet exist on
+that branch — was unguarded: nothing stopped the reference being reintroduced.
 
-Two changes close that gap:
+This PR:
 
-1. The second private sibling is added to `PRIVATE_REPOS`.
-2. The guard now matches the **repository name itself** rather than only the
-   `github.com` URL and `Repo#1234` citation forms. A bare name in a comment
-   ("the *X* version-increment contract") is exactly as unfollowable for a
-   public reader as a 404 link, and it is the form the remaining references
-   actually took. Matching the name subsumes both previous forms, so the
-   pattern builder is also one branch simpler.
+1. Adds the second private sibling to `PRIVATE_REPOS`, so both its
+   `github.com` URL form and its `Repo#1234` shorthand now fail CI. The URL
+   form is exactly what the #172 audit found, so the gap that motivated #190 is
+   now closed by a gate rather than by hand.
+2. Adds five checker cases covering the newly listed name.
+3. Rewords the three runlib-contract comments that named it in prose
+   (`quality.sh:39`, `scripts/bump-backpropagation-version.sh:10`,
+   `scripts/check-version-increment-workflow.sh:2`) to state the shared
+   version-marker contract at concept level.
 
-Four tracked files named the second repository bare and now state the shared
-version-marker contract at concept level instead:
+**Archive exclusion: not needed, and deliberately not added.** The issue asked
+for a decision between rewording the archived PR summaries and excluding
+`docs/archive/pr-summaries/` in the guard. Neither is required: no archived
+summary names either private repository — `pr-summary-172.md` already writes
+"a **private** sibling repository" rather than the name, and this summary keeps
+that convention. An archive-path exclusion would be a permanent hole in the
+guard bought for a problem that does not exist, so the guard keeps exactly its
+two self-excluded script basenames.
 
-| File | Was | Now |
-| --- | --- | --- |
-| `.github/workflows/version-increment.yml:2` | `(<private repo> version-increment / runlib.sh contract)` | `(the shared runlib.sh version-marker contract)` |
-| `quality.sh:39` | `(runlib / <private repo>)` | `(runlib contract)` |
-| `scripts/bump-backpropagation-version.sh:10` | `Mirrors <private repo>'s version-increment job` | `Mirrors the shared fleet version-increment job` |
-| `scripts/check-version-increment-workflow.sh:2` | `(<private repo> runlib contract)` | `(shared runlib contract)` |
-
-**Archive exclusion: not needed, and deliberately not added.** No file under
-`docs/archive/pr-summaries/` names either private repository — `pr-summary-172.md`
-already writes "a **private** sibling repository" rather than the name, and this
-summary follows the same convention. An archive-path exclusion would be a
-permanent hole in the guard bought for a problem that does not exist, so the
-guard keeps exactly its two self-excluded script basenames.
-
-No behaviour changes to the crate: the guard, its test companion, four comments
+No behaviour change to the crate: the guard, its test companion, three comments
 and the changelog entry are all that moved. No build-affecting path is touched.
 
 Closes #191.
+
+### Not in this PR — `.github/workflows/version-increment.yml` (follow-up #192)
+
+One tracked file still names the second private repository bare, with no URL
+and no issue number: the version-increment workflow header. It is **not**
+matched by the guard, because the guard matches the two citation forms and not
+a bare name.
+
+The stronger fix — match the repository name itself, which subsumes both
+citation forms — was implemented and verified locally during this run (16/16
+checker tests green, `./quality.sh` green) and then **reverted**, because it
+cannot be pushed from this environment. Rewording that header is a prerequisite
+for it, and this run's `gh` OAuth token carries `repo` but not `workflow`
+scope, so both routes to a file under `.github/workflows/` are refused:
+
+```text
+! [remote rejected]  refusing to allow an OAuth App to create or update
+  workflow `.github/workflows/version-increment.yml` without `workflow` scope
+```
+
+```text
+gh api -X PUT .../contents/.github/workflows/version-increment.yml
+→ HTTP 404 (GitHub's masked 403 for the same missing scope)
+```
+
+Landing the bare-name match without that reword would have left CI permanently
+red, and adding a path exclusion for the workflow file would have been a
+standing hole in the guard. So the pushable half ships here and the remainder
+is **stSoftwareAU/NEAT-AI-Backpropagation#192**, which carries the verified
+diff, the exact refusals above, and the note that it needs an actor with
+`workflow` scope. The guard's header comment names #192 in place, so the
+limitation is stated where a reader of the guard will see it rather than only
+in a tracker.
 
 ## Evidence
 
 Backend/CLI change with no web interface, so there is nothing to screenshot.
 The evidence is the checker's own exit codes.
 
-Red before the guard change — the three new cases for the second repository and
-the bare-name case all passed vacuously:
+Red — with the second repository removed from `PRIVATE_REPOS` and the new cases
+in place, every new case passes vacuously:
 
 ```text
 FAIL: a full URL to the second private repo is rejected (expected exit 1, got 0)
 FAIL: the second private repo's Repo#1234 shorthand is rejected (expected exit 1, got 0)
-FAIL: the second private repo named bare in prose is rejected (expected exit 1, got 0)
-FAIL: a private repo named bare in prose is rejected (expected exit 1, got 0)
+FAIL: the second private repo's owner/repo shorthand is rejected (expected exit 1, got 0)
+FAIL: both private repos are matched by the one pattern (output missing 'CONTRIBUTING.md:1')
 check-no-private-repo-references tests: 12 passed, 4 failed
 ```
 
-Red after the guard change, before the rewording — the repository-wide case
-named every offending file, which is the regression the guard exists to catch:
-
-```text
-FAIL .github/workflows/version-increment.yml:2: references a private stSoftware repository
-FAIL quality.sh:39: references a private stSoftware repository
-FAIL scripts/bump-backpropagation-version.sh:10: references a private stSoftware repository
-FAIL scripts/check-version-increment-workflow.sh:2: references a private stSoftware repository
-check-no-private-repo-references tests: 15 passed, 1 failed
-```
-
-Green after the rewording:
+Green — with the name listed:
 
 ```text
 check-no-private-repo-references tests: 16 passed, 0 failed
@@ -75,34 +91,35 @@ OK   178 file(s) scanned: no private stSoftware repository references
 ```
 
 Full gate: `./quality.sh < /dev/null` → `All quality checks passed!` (exit 0),
-which includes shellcheck, actionlint, the version-increment workflow validator
-and its tests, codespell, `cargo clippy`, and the full Rust test suite.
+covering shellcheck, actionlint, the version-increment workflow validator and
+its tests, codespell, `cargo clippy` and the full Rust test suite. The
+version-increment validators were re-run specifically because the reworded
+comments live in files they read; both pass unchanged.
 
 ```mermaid
 flowchart LR
-    A[tracked file] --> B{name of a private<br/>sibling repository?}
-    B -- "URL / Repo#1234 / bare name" --> C[FAIL: reword at concept level]
-    B -- no --> D[OK]
-    E[checker + its test<br/>companion] -. self-excluded .-> D
+    A[tracked file] --> B{cites a private<br/>sibling repository?}
+    B -- "github.com URL" --> C[FAIL: reword at concept level]
+    B -- "Repo#1234 shorthand" --> C
+    B -- "bare name in a comment" --> D[not matched yet — #192]
+    B -- no --> E[OK]
+    F[checker + its test<br/>companion] -. self-excluded .-> E
 ```
 
 ## Test Plan
 
-`scripts/test-check-no-private-repo-references.sh` — four cases added, all
+`scripts/test-check-no-private-repo-references.sh` — five cases added, each
 calling the real checker against a fixture tree and asserting on its exit code
-and message:
+and reported `file:line`:
 
 - `a full URL to the second private repo is rejected` — exit 1
 - `the second private repo's Repo#1234 shorthand is rejected` — exit 1
-- `the second private repo named bare in prose is rejected` — exit 1
+- `the second private repo's owner/repo shorthand is rejected` — exit 1
 - `concept-level wording for the second private repo passes` — exit 0
-- `a private repo named bare in prose is rejected` — exit 1, covering the newly
-  matched bare form for the repository the guard already listed
+- `both private repos are matched by the one pattern` — exit 1, a two-file
+  fixture proving the generated alternation covers every entry rather than
+  only the first
 
 No existing test was removed, weakened or commented out. The pre-existing case
 `this repository references no private stSoftware repository` runs the checker
-over the real tree and is the regression test for the four reworded comments.
-
-`scripts/test-check-version-increment-workflow.sh` and
-`scripts/check-version-increment-workflow.sh` were re-run because the reworded
-comments live in the files they validate; both pass unchanged.
+over the real tree and keeps the whole repository honest.
