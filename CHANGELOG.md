@@ -10,14 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `scripts/check-no-private-repo-references.sh` (with
   `scripts/test-check-no-private-repo-references.sh`) fails CI when a tracked
-  file cites a private fleet repository — either a `github.com` URL or the
-  `Repo#1234` shorthand an issue tracker resolves — because a public reader
-  cannot open either. Public stSoftware repositories are untouched; an empty or
-  unreadable scan exits 2 rather than reporting a vacuous pass. The four
-  build-profile references it found (`README.md`, `CHANGELOG.md`, `Cargo.toml`,
-  `.cargo/config.toml`) are reworded to concept level — dev compiles as fast as
-  practical, release is fully optimised — citing this repository's own issue
-  #88 (issue #171).
+  file names a private fleet repository — a `github.com` URL, the `Repo#1234`
+  shorthand an issue tracker resolves, or the bare name in a comment — because
+  a public reader can follow none of them. Public stSoftware repositories are
+  untouched; an empty or unreadable scan exits 2 rather than reporting a
+  vacuous pass. The four build-profile references it found (`README.md`,
+  `CHANGELOG.md`, `Cargo.toml`, `.cargo/config.toml`) are reworded to concept
+  level — dev compiles as fast as practical, release is fully optimised —
+  citing this repository's own issue #88 (issue #171). The guard covers both
+  private sibling repositories: the four runlib-contract comments naming the
+  second one (`.github/workflows/version-increment.yml`, `quality.sh`,
+  `scripts/bump-backpropagation-version.sh`,
+  `scripts/check-version-increment-workflow.sh`) now state the shared
+  version-marker contract itself (issue #191).
 
 - `neat-core` is pinned to a **NEAT-AI-core release tag** —
   `neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.22.2" }`
