@@ -541,8 +541,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   #633) and 0.13.0 followed the same day. Every GRQ host builds the Rust
   consumers from the sibling neat-core at head, so `rust_scorer` failed to
   compile fleet-wide within minutes and, with no fallback engine, the fleet
-  stopped scoring ([GRQ
-  #4724](https://github.com/stSoftwareAU/GRQ/issues/4724)).
+  stopped scoring (GRQ #4724).
   `propagate_layout.rs` read `activations` and `hint_values_buffer` directly;
   those reads now go through `activations()` and `hint_values()`.
   `neat-core.expected-version` acknowledges 0.13.0 (the earlier deliberate hold

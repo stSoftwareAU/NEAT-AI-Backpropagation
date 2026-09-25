@@ -14,8 +14,8 @@ other programs and stay untouched (GRQ #3952).
 ### GRQ companion change — already done, no PR needed
 
 The issue's scope included switching GRQ `worker/Backprop/run.sh` to 🌀. That
-side is **already complete** on `stSoftwareAU/GRQ` `Develop`, so this run made
-no GRQ change:
+side is **already complete** on GRQ's `Develop` branch, so this run made no
+GRQ change:
 
 - Every backprop marker in `worker/Backprop/run.sh` is already 🌀 — the log
   lines (`run.sh:49,90,98,118,124,168,184,217`) and the fallback commit message
