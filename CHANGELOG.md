@@ -17,7 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   build-profile references it found (`README.md`, `CHANGELOG.md`, `Cargo.toml`,
   `.cargo/config.toml`) are reworded to concept level — dev compiles as fast as
   practical, release is fully optimised — citing this repository's own issue
-  #88 (issue #171).
+  #88 (issue #171). Both private sibling repositories are now listed, so a
+  reintroduced URL or shorthand for either one fails CI, and the
+  runlib-contract comments in `quality.sh`,
+  `scripts/bump-backpropagation-version.sh` and
+  `scripts/check-version-increment-workflow.sh` state the shared version-marker
+  contract itself instead of naming the second repository (issue #191). A bare
+  repository name in a comment is not matched yet — issue #192.
 
 - `neat-core` is pinned to a **NEAT-AI-core release tag** —
   `neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.22.2" }`

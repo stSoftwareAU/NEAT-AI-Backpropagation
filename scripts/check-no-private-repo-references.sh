@@ -9,6 +9,9 @@
 # concept level ("dev compiles fast, release is fully optimised"), citing this
 # repository's own issue number instead.
 #
+# Only those two citation forms are matched — a bare repository name in a code
+# comment is not yet caught. Extending the pattern to bare names is issue #192.
+#
 # Public stSoftware repositories are untouched — this gates privacy, not the
 # organisation name.
 #
@@ -23,7 +26,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TREE="${1:-$REPO_ROOT}"
 
 # Private stSoftware repositories a public reader cannot open.
-PRIVATE_REPOS=("VibeCoding")
+PRIVATE_REPOS=("VibeCoding" "GRQ-taxation")
 
 # The two files that necessarily contain the names above.
 SELF_BASENAMES=(

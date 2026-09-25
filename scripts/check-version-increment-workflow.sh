@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate the version-increment PR workflow (GRQ-taxation runlib contract).
+# Validate the version-increment PR workflow (shared runlib contract).
 #
 # The workflow must:
 #   1. Run on `pull_request` events only.

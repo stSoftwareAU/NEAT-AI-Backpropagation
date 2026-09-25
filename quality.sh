@@ -36,7 +36,7 @@ echo "Validating auto-format PR workflow..."
 ./scripts/test-check-auto-format-workflow.sh
 ./scripts/check-auto-format-workflow.sh
 
-echo "Validating version-increment PR workflow (runlib / GRQ-taxation)..."
+echo "Validating version-increment PR workflow (runlib contract)..."
 ./scripts/test-check-version-increment-workflow.sh
 ./scripts/check-version-increment-workflow.sh
 

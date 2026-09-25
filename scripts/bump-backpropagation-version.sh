@@ -7,7 +7,7 @@
 # toolchain change that skipped the bump left them on a stale library even
 # though the artefact differed (issue #95).
 #
-# Mirrors GRQ-taxation's version-increment job / runlib.sh contract: remotes
+# Mirrors the shared fleet version-increment job / runlib.sh contract: remotes
 # rebuild when Cargo.toml version changes. Idempotent — skips when the PR
 # branch is already *ahead* of base or an auto-increment commit exists.
 # A head version strictly *behind* base fails (exit 2); treating a downgrade
