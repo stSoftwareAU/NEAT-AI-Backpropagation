@@ -351,12 +351,7 @@ pub fn apply_learnings_with(
     options: ApplyOptions,
 ) -> CreatureExport {
     let step = effective_step_scale(options.step_scale);
-    let output_uuids: std::collections::HashSet<&str> = creature
-        .neurons
-        .iter()
-        .filter(|n| n.neuron_type == "output")
-        .map(|n| n.uuid.as_str())
-        .collect();
+    let output_uuids = crate::trust_region::output_uuids(creature);
     let mut out = creature.clone();
     for (i, neuron) in out.neurons.iter_mut().enumerate() {
         if options.outputs_only && neuron.neuron_type != "output" {
@@ -419,12 +414,7 @@ pub fn count_apply_deltas(
     after: &CreatureExport,
     plank: f64,
 ) -> ApplyDeltaCounts {
-    let output_uuids: std::collections::HashSet<&str> = before
-        .neurons
-        .iter()
-        .filter(|n| n.neuron_type == "output")
-        .map(|n| n.uuid.as_str())
-        .collect();
+    let output_uuids = crate::trust_region::output_uuids(before);
     let mut counts = ApplyDeltaCounts::default();
     for (a, b) in before.neurons.iter().zip(after.neurons.iter()) {
         if (a.bias - b.bias).abs() < plank {

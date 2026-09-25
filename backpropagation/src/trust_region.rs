@@ -177,8 +177,9 @@ pub fn measure_update(
     })
 }
 
-/// UUIDs of the creature's output neurons.
-fn output_uuids(creature: &CreatureExport) -> std::collections::HashSet<&str> {
+/// UUIDs of the creature's output neurons — the single source for every
+/// "does this synapse target an output?" check in the crate (#176).
+pub(crate) fn output_uuids(creature: &CreatureExport) -> std::collections::HashSet<&str> {
     creature
         .neurons
         .iter()
@@ -537,6 +538,36 @@ mod tests {
             synapse.weight += delta;
         }
         (before, after)
+    }
+
+    #[test]
+    fn output_uuids_selects_only_output_neurons() {
+        let creature = parse_creature_json(
+            r#"{
+              "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+              "neurons":[
+                {"type":"hidden","uuid":"h1","bias":0.0,"squash":"IDENTITY"},
+                {"type":"constant","uuid":"c1","bias":1.0,"squash":"IDENTITY"},
+                {"type":"output","uuid":"o1","bias":0.0,"squash":"IDENTITY"},
+                {"type":"output","uuid":"o2","bias":0.0,"squash":"IDENTITY"}
+              ],
+              "synapses":[
+                {"fromUUID":"input-0","toUUID":"h1","weight":1.0},
+                {"fromUUID":"h1","toUUID":"o1","weight":1.0},
+                {"fromUUID":"c1","toUUID":"o2","weight":1.0}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let uuids = output_uuids(&creature);
+        assert_eq!(uuids, ["o1", "o2"].into_iter().collect());
+    }
+
+    #[test]
+    fn output_uuids_of_a_creature_without_outputs_is_empty() {
+        let mut creature = parse_creature_json(CHAIN).unwrap();
+        creature.neurons.retain(|n| n.neuron_type != "output");
+        assert!(output_uuids(&creature).is_empty());
     }
 
     #[test]
