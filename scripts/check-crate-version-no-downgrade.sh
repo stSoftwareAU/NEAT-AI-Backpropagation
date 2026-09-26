@@ -19,6 +19,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/crate-version.sh
+source "$SCRIPT_DIR/crate-version.sh"
 MANIFEST="$REPO_ROOT/backpropagation/Cargo.toml"
 BASE_REF="origin/Develop"
 BASE_VERSION=""
@@ -68,10 +70,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-read_version_from_text() {
-  sed -n 's/^version *= *"\([^"]*\)".*/\1/p' | head -n 1
-}
-
 if [[ "$EXPLICIT" -eq 1 ]]; then
   if [[ -z "$BASE_VERSION" || -z "$HEAD_VERSION" ]]; then
     echo "FAIL: --base-version and --head-version must be used together" >&2
@@ -88,8 +86,8 @@ else
     echo "FAIL: base ref not found: $BASE_REF" >&2
     exit 2
   fi
-  BASE_VERSION="$(git show "${BASE_REF}:backpropagation/Cargo.toml" 2>/dev/null | read_version_from_text || true)"
-  HEAD_VERSION="$(read_version_from_text <"$MANIFEST")"
+  BASE_VERSION="$(read_version_at_ref "$BASE_REF")"
+  HEAD_VERSION="$(read_version "$MANIFEST")"
   if [[ -z "$HEAD_VERSION" ]]; then
     echo "FAIL: cannot read version from $MANIFEST" >&2
     exit 2
