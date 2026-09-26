@@ -48,24 +48,9 @@ mkdir -p "$OUT"
 # interrupted generator would otherwise look like a corpus and every arm would
 # "compare" on no records at all.
 if [[ ! -f "$DATA_DIR/0.bin" ]]; then
-  mkdir -p "$DATA_DIR"
   # 1000 records of `y = 0.5x + 0.25`.
-  python3 - "$DATA_DIR" <<'PY'
-import struct
-import sys
-from pathlib import Path
-
-data = Path(sys.argv[1])
-for file_index in range(4):
-    with (data / f"{file_index}.bin").open("wb") as handle:
-        for i in range(250):
-            x = i / 250 * 2 - 1
-            handle.write(struct.pack("<ff", x, 0.5 * x + 0.25))
-PY
-  if [[ ! -s "$DATA_DIR/0.bin" ]]; then
-    echo "FAIL: corpus generation wrote no records to $DATA_DIR" >&2
-    exit 2
-  fi
+  "$ROOT/scripts/generate-synthetic-corpus.sh" "$DATA_DIR" \
+    '0.5 * x + 0.25'
 fi
 
 if [[ ! -s "$CREATURE" ]]; then

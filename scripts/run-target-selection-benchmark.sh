@@ -53,27 +53,11 @@ mkdir -p "$OUT"
 # interrupted generator would otherwise look like a corpus and both arms would
 # "compare" on no records at all.
 if [[ ! -f "$DATA_DIR/0.bin" ]]; then
-  mkdir -p "$DATA_DIR"
   # 1000 records of `y = x + 0.1`, except the 5 leading records of each file,
   # which follow `y = -2x + 1` — the same majority/minority corpus the earlier
   # blockwise and scorer-guided experiments generated, so the runs compare.
-  python3 - "$DATA_DIR" <<'PY'
-import struct
-import sys
-from pathlib import Path
-
-data = Path(sys.argv[1])
-for file_index in range(4):
-    with (data / f"{file_index}.bin").open("wb") as handle:
-        for i in range(250):
-            x = i / 250 * 2 - 1
-            y = -2.0 * x + 1.0 if i < 5 else 1.0 * x + 0.1
-            handle.write(struct.pack("<ff", x, y))
-PY
-  if [[ ! -s "$DATA_DIR/0.bin" ]]; then
-    echo "FAIL: corpus generation wrote no records to $DATA_DIR" >&2
-    exit 2
-  fi
+  "$ROOT/scripts/generate-synthetic-corpus.sh" "$DATA_DIR" \
+    '-2.0 * x + 1.0 if i < 5 else 1.0 * x + 0.1'
 fi
 
 if [[ ! -s "$CREATURE" ]]; then

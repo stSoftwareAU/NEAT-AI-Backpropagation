@@ -175,6 +175,11 @@ jobs:
           set -euo pipefail
           ./scripts/test-runlib.sh
 
+      - name: Validate the shared synthetic corpus generator
+        run: |
+          set -euo pipefail
+          ./scripts/test-generate-synthetic-corpus.sh
+
       # The three pushing workflows share one push credential recipe; this is
       # what keeps it single (Issue #164).
       - name: Validate the shared push-branch-changes composite action
