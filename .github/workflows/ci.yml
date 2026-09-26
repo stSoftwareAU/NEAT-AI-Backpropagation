@@ -84,7 +84,7 @@ jobs:
         run: cargo build --workspace
 
       - name: Run tests
-        run: cargo test --workspace --all-features --verbose -- --test-threads=2
+        run: cargo test --workspace --all-features -- --test-threads=2 -q
 
       - name: Build documentation
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
