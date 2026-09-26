@@ -82,7 +82,13 @@ is_self() {
   return 1
 }
 
-# One ERE alternation of the bare names — the names are plain ERE literals.
+# One ERE alternation of the bare names, each checked to be a plain ERE literal.
+for repo in "${PRIVATE_REPOS[@]}"; do
+  if [[ ! "$repo" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "FAIL: private repo name is not a plain ERE literal: $repo" >&2
+    exit 2
+  fi
+done
 PATTERN="$(IFS='|' && echo "${PRIVATE_REPOS[*]}")"
 
 EXIT_CODE=0

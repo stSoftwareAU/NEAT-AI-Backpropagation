@@ -124,6 +124,22 @@ The shared contract comes from ${repo} originally.")"
     "docs/notes.md:2"
 done
 
+# A name with an ERE metacharacter would silently widen the match; the checker
+# refuses it rather than scanning with a wrong pattern.
+bad_checker="$WORK_DIR/bad-checker.sh"
+sed 's/^PRIVATE_REPOS=(.*)$/PRIVATE_REPOS=("Repo.Name")/' "$CHECKER" >"$bad_checker"
+tree="$(write_tree bad_name README.md 'Nothing to see here.')"
+bad_status=0
+bad_output="$(bash "$bad_checker" "$tree" 2>&1)" || bad_status=$?
+if [[ "$bad_status" -eq 2 && "$bad_output" == *"not a plain ERE literal"* ]]; then
+  echo "PASS: a private repo name with an ERE metacharacter exits 2"
+  PASSED=$((PASSED + 1))
+else
+  echo "FAIL: a private repo name with an ERE metacharacter exits 2 (got $bad_status)" >&2
+  echo "      output: $bad_output" >&2
+  FAILED=$((FAILED + 1))
+fi
+
 tree="$(write_tree bare_concept docs/notes.md \
   'The shared contract comes from a private sibling repository originally.')"
 expect_exit "concept-level prose naming no private repo passes" 0 "$tree"
