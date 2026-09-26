@@ -153,7 +153,7 @@ cargo clippy --workspace --all-targets --all-features -- \
   -D clippy::collapsible_if
 
 echo "Running tests..."
-cargo test --workspace --all-features -- --test-threads=2
+cargo test --workspace --all-features -- --test-threads=2 -q
 
 echo "Building documentation..."
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
