@@ -1,5 +1,5 @@
 # Auto-increment backpropagation/Cargo.toml patch when a build-affecting path
-# changes on a PR (GRQ-taxation version-increment / runlib.sh contract).
+# changes on a PR (shared fleet version-increment job / runlib.sh contract).
 #
 # Remotes rebuild neat_ai_backpropagation when the crate version changes — and
 # only then. Every path that alters the artefact (sources, both manifests, the
