@@ -140,6 +140,9 @@ echo "Verifying Cargo.lock against the published crates.io index (issue #148)...
 echo "Validating scripts/runlib.sh already-installed contract (issue #152)..."
 ./scripts/test-runlib.sh
 
+echo "Validating the shared synthetic corpus generator (issue #178)..."
+./scripts/test-generate-synthetic-corpus.sh
+
 echo "Checking formatting..."
 cargo fmt --all -- --check
 
