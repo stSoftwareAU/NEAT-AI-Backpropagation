@@ -14,8 +14,8 @@ repository. It matches the wording already used in
 This change affects CI configuration and a comment only, so there is no UI to
 screenshot.
 
-- `git grep GRQ-taxation` now finds the name only in the guard script and its
-  test companion, which the guard deliberately skips.
+- `git grep` for the private sibling repository's name now finds it only in
+  the guard script and its test companion, which the guard deliberately skips.
 - `scripts/check-no-private-repo-references.sh` passes: 186 files scanned.
 - `scripts/test-check-no-private-repo-references.sh` passes: 16 passed, 0
   failed.

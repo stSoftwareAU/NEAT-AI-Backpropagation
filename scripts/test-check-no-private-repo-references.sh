@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-no-private-repo-references.sh (issues #171, #191).
+# Tests for check-no-private-repo-references.sh (issues #171, #191, #192).
 #
 # Every case runs the real checker against a fixture tree and asserts on its
 # exit code and message. The final case runs it against this repository's own
@@ -107,6 +107,26 @@ tree="$(write_tree both_repos README.md 'Fleet rule: VibeCoding#4159.')"
 printf '%s\n' 'Remote contract: stSoftwareAU/GRQ-taxation.' >"$tree/CONTRIBUTING.md"
 expect_exit "both private repos are matched by the one pattern" 1 "$tree" \
   "CONTRIBUTING.md:1"
+
+# A bare name in prose is a reference too (issue #192): one red case per listed
+# repository, read from the checker's own list so a new entry is covered.
+mapfile -t listed_repos < <(sed -n 's/^PRIVATE_REPOS=(\(.*\))$/\1/p' "$CHECKER" |
+  tr -d '"' | tr ' ' '\n')
+if [[ "${#listed_repos[@]}" -lt 2 ]]; then
+  echo "FAIL: could not read PRIVATE_REPOS from $CHECKER" >&2
+  FAILED=$((FAILED + 1))
+fi
+for repo in ${listed_repos[@]+"${listed_repos[@]}"}; do
+  tree="$(write_tree "bare_${repo}" docs/notes.md \
+    "Line one.
+The shared contract comes from ${repo} originally.")"
+  expect_exit "a bare '${repo}' name in prose is rejected" 1 "$tree" \
+    "docs/notes.md:2"
+done
+
+tree="$(write_tree bare_concept docs/notes.md \
+  'The shared contract comes from a private sibling repository originally.')"
+expect_exit "concept-level prose naming no private repo passes" 0 "$tree"
 
 tree="$(write_tree self_exclusion scripts/check-no-private-repo-references.sh \
   'PRIVATE_REPOS=("VibeCoding")')"
