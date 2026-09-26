@@ -24,6 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/build-affecting-paths.sh
 source "$SCRIPT_DIR/build-affecting-paths.sh"
+# shellcheck source=scripts/crate-version.sh
+source "$SCRIPT_DIR/crate-version.sh"
 
 MANIFEST=""
 LOCKFILE=""
@@ -87,12 +89,7 @@ if ! git show-ref --verify --quiet "$BASE_REF" \
   exit 2
 fi
 
-read_version() {
-  local file="$1"
-  sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "$file" | head -n 1
-}
-
-BASE_VERSION="$(git show "${BASE_REF}:backpropagation/Cargo.toml" 2>/dev/null | sed -n 's/^version *= *"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+BASE_VERSION="$(read_version_at_ref "$BASE_REF")"
 CURRENT_VERSION="$(read_version "$MANIFEST")"
 
 if [[ -z "$CURRENT_VERSION" ]]; then

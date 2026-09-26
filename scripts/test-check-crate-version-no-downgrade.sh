@@ -129,6 +129,39 @@ git commit -q -m "src change, version still equal"
 expect_exit "bump: equal with src changes would bump" 0 \
   "$BUMPER" --repo-root "$FIXTURE" --base-ref Develop --check
 
+# Issue #177: the crate version comes from `[package]`, not the first
+# `version =` line in the file. A `[dependencies.<x>]` table ahead of
+# `[package]` used to be read as the crate version on both sides.
+SCOPED="$WORK_DIR/scoped"
+mkdir -p "$SCOPED/backpropagation/src" "$SCOPED/scripts"
+cp "$CHECKER" "$SCRIPT_DIR/crate-version.sh" "$SCRIPT_DIR/runlib.sh" "$SCOPED/scripts/"
+cd "$SCOPED"
+git init -q -b Develop
+git config user.name "test"
+git config user.email "test@example.com"
+cat >backpropagation/Cargo.toml <<'EOF'
+[dependencies.serde]
+version = "9.9.9"
+
+[package]
+name = "neat_ai_backpropagation"
+version = "0.1.10"
+edition = "2021"
+EOF
+echo '// stub' >backpropagation/src/lib.rs
+git add backpropagation
+git commit -q -m "base Develop 0.1.10, dependency table first"
+
+git checkout -q -b behind-scoped
+sed -i.bak 's/version = "0.1.10"/version = "0.1.9"/' backpropagation/Cargo.toml
+rm -f backpropagation/Cargo.toml.bak
+git add backpropagation/Cargo.toml
+git commit -q -m "take older version behind a dependency table"
+expect_exit "checker: [package] version read past a dependency table" 1 \
+  "$SCOPED/scripts/check-crate-version-no-downgrade.sh" --base-ref Develop
+expect_exit "bump: [package] version read past a dependency table" 2 \
+  "$BUMPER" --repo-root "$SCOPED" --base-ref Develop --check
+
 echo
 echo "Passed: $PASSED  Failed: $FAILED"
 if [[ "$FAILED" -ne 0 ]]; then

@@ -35,6 +35,8 @@ on:
       - "scripts/build-affecting-paths.sh"
       - "scripts/bump-backpropagation-version.sh"
       - "scripts/check-crate-version-no-downgrade.sh"
+      - "scripts/crate-version.sh"
+      - "scripts/runlib.sh"
       - ".github/workflows/version-increment.yml"
 
 permissions:
