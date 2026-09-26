@@ -366,12 +366,7 @@ pub fn run_gradient_check(req: GradientCheckRequest<'_>) -> Result<GradientCheck
         &mut rng,
     )?;
 
-    let output_uuids: HashSet<&str> = creature
-        .neurons
-        .iter()
-        .filter(|n| n.neuron_type == "output")
-        .map(|n| n.uuid.as_str())
-        .collect();
+    let output_uuids = crate::trust_region::output_uuids(&creature);
 
     let filter = PoolFilter {
         outputs_only: req.outputs_only,
