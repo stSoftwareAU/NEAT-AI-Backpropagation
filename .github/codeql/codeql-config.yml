@@ -15,3 +15,15 @@ name: NEAT-AI-Backpropagation
 
 paths-ignore:
   - NEAT-AI-core/**
+
+# Rules that misfire on neural-network code, excluded family-wide
+# (stSoftwareAU/VibeCoder#2716): `uuid` reads as private data to CodeQL's name
+# heuristic, `Math.random()` for weights and biases is not a security context,
+# and `derive_seed(…, salt)` mixes RNG seeds rather than hashing secrets.
+query-filters:
+  - exclude:
+      id: rust/cleartext-logging
+  - exclude:
+      id: js/insecure-randomness
+  - exclude:
+      id: rust/hard-coded-cryptographic-value
