@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-no-private-repo-references.sh (issues #171, #191).
+# Tests for check-no-private-repo-references.sh (issues #171, #191, #192).
 #
 # Every case runs the real checker against a fixture tree and asserts on its
 # exit code and message. The final case runs it against this repository's own
@@ -107,6 +107,42 @@ tree="$(write_tree both_repos README.md 'Fleet rule: VibeCoding#4159.')"
 printf '%s\n' 'Remote contract: stSoftwareAU/GRQ-taxation.' >"$tree/CONTRIBUTING.md"
 expect_exit "both private repos are matched by the one pattern" 1 "$tree" \
   "CONTRIBUTING.md:1"
+
+# A bare name in prose is a reference too (issue #192): one red case per listed
+# repository, read from the checker's own list so a new entry is covered.
+mapfile -t listed_repos < <(sed -n 's/^PRIVATE_REPOS=(\(.*\))$/\1/p' "$CHECKER" |
+  tr -d '"' | tr ' ' '\n')
+if [[ "${#listed_repos[@]}" -lt 2 ]]; then
+  echo "FAIL: could not read PRIVATE_REPOS from $CHECKER" >&2
+  FAILED=$((FAILED + 1))
+fi
+for repo in ${listed_repos[@]+"${listed_repos[@]}"}; do
+  tree="$(write_tree "bare_${repo}" docs/notes.md \
+    "Line one.
+The shared contract comes from ${repo} originally.")"
+  expect_exit "a bare '${repo}' name in prose is rejected" 1 "$tree" \
+    "docs/notes.md:2"
+done
+
+# A name with an ERE metacharacter would silently widen the match; the checker
+# refuses it rather than scanning with a wrong pattern.
+bad_checker="$WORK_DIR/bad-checker.sh"
+sed 's/^PRIVATE_REPOS=(.*)$/PRIVATE_REPOS=("Repo.Name")/' "$CHECKER" >"$bad_checker"
+tree="$(write_tree bad_name README.md 'Nothing to see here.')"
+bad_status=0
+bad_output="$(bash "$bad_checker" "$tree" 2>&1)" || bad_status=$?
+if [[ "$bad_status" -eq 2 && "$bad_output" == *"not a plain ERE literal"* ]]; then
+  echo "PASS: a private repo name with an ERE metacharacter exits 2"
+  PASSED=$((PASSED + 1))
+else
+  echo "FAIL: a private repo name with an ERE metacharacter exits 2 (got $bad_status)" >&2
+  echo "      output: $bad_output" >&2
+  FAILED=$((FAILED + 1))
+fi
+
+tree="$(write_tree bare_concept docs/notes.md \
+  'The shared contract comes from a private sibling repository originally.')"
+expect_exit "concept-level prose naming no private repo passes" 0 "$tree"
 
 tree="$(write_tree self_exclusion scripts/check-no-private-repo-references.sh \
   'PRIVATE_REPOS=("VibeCoding")')"
