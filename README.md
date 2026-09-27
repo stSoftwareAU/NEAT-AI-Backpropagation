@@ -1102,6 +1102,15 @@ it fails if the step is missing or pinned to a movable tag, if the
 passes `include-dependency-review: false`, or if no caller reaches the
 reusable workflow on a `pull_request` event.
 
+`rustsec/audit-check` compiles `cargo-audit` from source (~186s) whenever the
+binary is missing from `PATH`, so `security.yml` first installs the prebuilt,
+checksum-verified binary with `taiki-e/install-action` — the same action
+`ci.yml` uses for `cargo-deny`. The audit itself, its `token:` and its failure
+on an advisory are unchanged. `scripts/check-cargo-audit-workflow.sh` gates
+that shape in `quality.sh` and CI: it fails if the audit step is removed,
+unpinned or loses its `token:`, or if the SHA-pinned `cargo-audit` install is
+missing or runs after the audit (issue #204).
+
 ## Code scanning
 
 `security.yml` only asks whether a *dependency* carries a known advisory.

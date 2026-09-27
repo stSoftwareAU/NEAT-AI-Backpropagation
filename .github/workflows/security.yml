@@ -27,6 +27,13 @@ jobs:
       - name: Set up the Rust workspace (pinned toolchain)
         uses: ./.github/actions/setup-rust-workspace
 
+      # audit-check only runs `cargo install cargo-audit` (~186s) when the binary
+      # is missing from PATH; the prebuilt one skips that compile (Issue #204).
+      - name: Install cargo-audit (prebuilt binary)
+        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912  # v2.81.10
+        with:
+          tool: cargo-audit
+
       - name: Cargo Security Audit (rustsec/audit-check)
         uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432  # v2 (master HEAD, Node 24)
         env:
