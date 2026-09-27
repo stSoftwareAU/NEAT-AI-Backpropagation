@@ -107,6 +107,10 @@ echo "Validating dependency review is enabled on pull requests..."
 ./scripts/test-check-dependency-review.sh
 ./scripts/check-dependency-review.sh
 
+echo "Validating cargo-audit installs a prebuilt binary..."
+./scripts/test-check-cargo-audit-workflow.sh
+./scripts/check-cargo-audit-workflow.sh
+
 echo "Validating default-branch protection policy..."
 ./scripts/test-check-branch-protection.sh
 if command -v gh &>/dev/null && gh auth status &>/dev/null; then

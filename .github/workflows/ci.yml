@@ -249,6 +249,12 @@ jobs:
           ./scripts/test-check-dependency-review.sh
           ./scripts/check-dependency-review.sh
 
+      - name: Validate cargo-audit installs a prebuilt binary
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-cargo-audit-workflow.sh
+          ./scripts/check-cargo-audit-workflow.sh
+
       - name: Validate default-branch protection policy
         env:
           GH_TOKEN: ${{ github.token }}

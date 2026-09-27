@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `security.yml` installs the prebuilt, checksum-verified `cargo-audit` with
+  `taiki-e/install-action` before `rustsec/audit-check`, which otherwise
+  compiles it from source (~186s) on every run. The audit, its `token:` and its
+  failure on an advisory are unchanged. `scripts/check-cargo-audit-workflow.sh`
+  (with `scripts/test-check-cargo-audit-workflow.sh`) gates the shape in
+  `quality.sh` and CI (issue #204).
+
 - `scripts/check-no-private-repo-references.sh` (with
   `scripts/test-check-no-private-repo-references.sh`) fails CI when a tracked
   file cites a private fleet repository — either a `github.com` URL or the
