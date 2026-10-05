@@ -64,7 +64,7 @@ parent/
   NEAT-AI-scorer/     # optional rust_scorer
 ```
 
-Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.98.0`).
+Toolchain: [`rust-toolchain.toml`](./rust-toolchain.toml) (`1.99.0`).
 
 ### Installed artefacts (`scripts/runlib.sh`)
 
