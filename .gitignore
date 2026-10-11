@@ -11,6 +11,8 @@
 !.markdownlint-cli2.yaml
 !.cargo/
 !.cargo/config.toml
+# OSS Scanner build image and threat-model brief
+!.oss-scanner
 
 /target/
 **/*.rs.bk
