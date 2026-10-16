@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Per-task wall-clock deadline for the `train` epoch loop (issue #4073).
+  `train --deadline-epoch-ms <MS>` and the C ABI request field
+  `deadlineEpochMs` take an absolute time in ms since the Unix epoch. It is
+  checked before each epoch, so once it is reached no further epoch starts;
+  the best-so-far creature is still written. A stopped run journals one
+  `{"kind":"timedOut","completedEpochs":N,"deadlineEpochMs":D}` line and
+  reports `timed_out` on the trainer result, the CLI, and the ABI response's
+  `timedOut`. Omitting the deadline keeps the previous behaviour.
+
 - `security.yml` installs the prebuilt, checksum-verified `cargo-audit` with
   `taiki-e/install-action` before `rustsec/audit-check`, which otherwise
   compiles it from source (~186s) on every run. The audit, its `token:` and its
@@ -411,6 +420,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `quality.sh` runs it on every PR.
 
 ### Changed
+
+- C ABI `NEAT_BACKPROP_ABI_VERSION` is now `2` (issue #4073). The request
+  gained the optional `deadlineEpochMs` field and the response gained
+  `timedOut`, which is always present. Callers that refuse a library built
+  against a different ABI revision must accept `2`.
+- Crate version bumped to `0.1.48` for the build-affecting change (issue #4073).
 
 - `CONTRIBUTING.md`'s "Version bumping" section describes the shared
   version-marker convention at concept level and links this repository's own

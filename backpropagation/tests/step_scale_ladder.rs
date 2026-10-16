@@ -204,6 +204,7 @@ fn train_within(
 ) -> Result<TrainResult, String> {
     let out = fixture.root.join(out_name);
     run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(&fixture.creature),
         training_data: &fixture.data,
         config: &BackpropConfig::default(),

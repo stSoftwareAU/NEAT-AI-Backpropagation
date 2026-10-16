@@ -328,6 +328,25 @@ corpus, seed and epoch budget through both searches and prints each one's
 accepted epochs, scorer gain, wall clock and wins/hour. Point it at production
 with `CREATURE=` / `DATA_DIR=` to repeat the comparison on real GRQ history.
 
+### Train wall-clock deadline (issue #4073)
+
+`train --deadline-epoch-ms MS` takes an **absolute** deadline in
+milliseconds since the Unix epoch, the same meaning as the C ABI's
+`deadlineEpochMs`. The deadline is checked before each epoch, the first
+included: once it is reached no further epoch starts. The epoch already
+under way runs to its end, and everything accepted so far is kept, so
+`best.json` and `journal.jsonl` are still written.
+
+When the deadline stops the run, the journal gains one line and the CLI
+prints `train: timed_out=true` to stderr:
+
+```json
+{"kind":"timedOut","completedEpochs":3,"deadlineEpochMs":1781600000000}
+```
+
+No such line is written when the deadline was not reached. Omitting the
+flag (or passing `null` over the ABI) means no deadline.
+
 ### Train step size (issue #39)
 
 Every gene's proposal is computed as if the other genes hold still, so
@@ -923,7 +942,7 @@ the implementation is `backpropagation/src/ffi.rs`.
 
 | Symbol | Purpose |
 | ------ | ------- |
-| `neat_backprop_abi_version() -> uint32_t` | Wire-contract revision (currently `1`) |
+| `neat_backprop_abi_version() -> uint32_t` | Wire-contract revision (currently `2`) |
 | `neat_backprop_version() -> const char *` | Static NUL-terminated crate version |
 | `neat_backprop_train(request, request_len, out) -> int32_t` | One `trainDir` run |
 | `neat_backprop_buffer_free(buffer)` | Release a buffer the library produced |
@@ -942,7 +961,7 @@ flag — `epochs`, `maxRecords`, `seed`, `disableRandomSamples`,
 `maximumWeightAdjustmentScale`, `stepScale`, `trustRegion`,
 `stepScaleLadder`, `outputsOnly`, `hiddenOnly`, `acceptance`,
 `minScoreImprovement`, `msePreScreen`, `acceptAlways`, `maxBacktracks`,
-`scorer`, `traceStore` — so the sampling (#77), trace-store (#78),
+`scorer`, `traceStore`, `deadlineEpochMs` — so the sampling (#77), trace-store (#78),
 scorer-guided acceptance (#104), step-scale ladder (#106) and
 trust-region budget (#109) work is reachable from the ABI, not only from
 the CLI. An unknown field is rejected rather than ignored.
@@ -950,7 +969,9 @@ the CLI. An unknown field is rejected rather than ignored.
 The response carries `bestCreatureJson` (the exact bytes written to
 `best.json`), `baselineMse`, `bestMse`, `acceptedEpochs`, the `bestPath` /
 `journalPath` written, the trace artefact paths when a store was
-requested, and the scorer results when a scorer was supplied.
+requested, the scorer results when a scorer was supplied, and `timedOut`
+(always present; `true` when `deadlineEpochMs` stopped the run early — see
+[Train wall-clock deadline](#train-wall-clock-deadline-issue-4073)).
 
 Failure is loud at every step: a null pointer, non-UTF-8 bytes, malformed
 JSON, a trainer error, or a panic caught at the boundary all return a

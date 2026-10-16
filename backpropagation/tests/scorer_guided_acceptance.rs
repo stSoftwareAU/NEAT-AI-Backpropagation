@@ -149,6 +149,7 @@ fn train_with_backtracks(
 ) -> Result<TrainResult, String> {
     let out = fixture.root.join(out_name);
     run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(&fixture.creature),
         training_data: &fixture.data,
         config: &BackpropConfig::default(),
@@ -501,6 +502,7 @@ fn accept_always_is_refused_under_scorer_guided_acceptance() {
     let out = fixture.root.join("out");
 
     let err = run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(&fixture.creature),
         training_data: &fixture.data,
         config: &BackpropConfig::default(),
@@ -573,6 +575,7 @@ fn a_failing_scorer_fails_the_run() {
 
     let out = fixture.root.join("out");
     let err = run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(&fixture.creature),
         training_data: &fixture.data,
         config: &BackpropConfig::default(),

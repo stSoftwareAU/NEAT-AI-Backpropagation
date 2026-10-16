@@ -27,6 +27,7 @@ use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default apply step scale for a `train` run (#39).
 ///
@@ -148,6 +149,20 @@ pub struct TrainJournalHeader {
     pub baseline_score: Option<f64>,
 }
 
+/// The journal line written when the deadline stopped the epoch loop (#4073).
+///
+/// Shape: `{"kind":"timedOut","completedEpochs":N,"deadlineEpochMs":D}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrainTimedOutRecord {
+    /// Discriminator, always `"timedOut"`.
+    pub kind: String,
+    /// Epochs that ran to completion before the deadline was reached.
+    pub completed_epochs: u64,
+    /// The absolute deadline the run was given, in ms since the Unix epoch.
+    pub deadline_epoch_ms: u64,
+}
+
 /// One epoch line in the journal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -260,6 +275,9 @@ pub struct TrainResult {
     pub best_mse: f64,
     /// Epochs that accepted an apply.
     pub accepted_epochs: u64,
+    /// True when the deadline stopped the epoch loop before every requested
+    /// epoch ran (#4073). Everything accepted before the stop is kept.
+    pub timed_out: bool,
     /// Optional baseline scorer result.
     pub baseline_score: Option<ScoreResult>,
     /// Optional best-creature scorer result.
@@ -289,6 +307,12 @@ pub struct TrainRequest<'a> {
     pub disable_random_samples: bool,
     /// Output directory for journal + best creature.
     pub output_dir: &'a Path,
+    /// Absolute wall-clock deadline in ms since the Unix epoch (#4073).
+    ///
+    /// Checked before each epoch, the first included. Once it is reached no
+    /// further epoch starts; the run keeps what it has accepted, writes
+    /// `best.json`, and journals a `timedOut` line. `None` = no deadline.
+    pub deadline_epoch_ms: Option<u64>,
     /// Optional `rust_scorer` binary. When set, scores baseline and best.
     ///
     /// Required — not optional — under [`AcceptanceMode::Scorer`], where the
@@ -512,8 +536,21 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     let mut accepted_epochs = 0u64;
     let mut rng = StdRng::seed_from_u64(req.seed);
     let mut previous_mse: Option<f64> = None;
+    let mut timed_out: Option<TrainTimedOutRecord> = None;
 
     for epoch in 1..=req.epochs {
+        // Issue #4073: the deadline gates the start of every epoch, so an epoch
+        // already under way runs to its end and nothing new is begun after it.
+        if let Some(deadline) = req.deadline_epoch_ms
+            && epoch_millis_now() >= deadline
+        {
+            timed_out = Some(TrainTimedOutRecord {
+                kind: "timedOut".into(),
+                completed_epochs: epoch - 1,
+                deadline_epoch_ms: deadline,
+            });
+            break;
+        }
         // Resolve the epoch's rate from the configured strategy (#39): fixed
         // holds steady, decay / warm-restart follow the epoch index, adaptive
         // reacts to the last epoch's MSE movement.
@@ -784,6 +821,13 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         }
     }
 
+    // Issue #4073: the timed-out line is written only when the deadline cut the
+    // loop short, so a run that finished inside its budget journals nothing new.
+    if let Some(record) = &timed_out {
+        journal.push_str(&serde_json::to_string(record).map_err(|e| e.to_string())?);
+        journal.push('\n');
+    }
+
     // Issue #94 — the output gate. Once per completed run, never per epoch:
     // the intermediate `candidate.json` dumps above are working state, while
     // this is the creature the run hands back. Everything downstream (the
@@ -848,9 +892,22 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         baseline_mse,
         best_mse,
         accepted_epochs,
+        timed_out: timed_out.is_some(),
         baseline_score,
         best_score,
     })
+}
+
+/// Wall-clock now, in ms since the Unix epoch (#4073).
+///
+/// A clock set before 1970 reads as `0`, which is never at or past a deadline,
+/// so it cannot stop a run early.
+fn epoch_millis_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 /// Default output directory name.
@@ -895,6 +952,7 @@ mod tests {
         .unwrap();
         let out = dir.path().join("out");
         run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
@@ -951,6 +1009,7 @@ mod tests {
         .unwrap();
         let out = dir.path().join("out");
         run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
@@ -1011,6 +1070,7 @@ mod tests {
         let out = dir.path().join("out");
         let cfg = BackpropConfig::default();
         let result = run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &cfg,
@@ -1062,6 +1122,7 @@ mod tests {
         .unwrap();
         let out = dir.path().join("out");
         let result = run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
@@ -1126,6 +1187,7 @@ mod tests {
         };
         let out_no_ls = dir.path().join("out-no-ls");
         let baseline = run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &cfg,
@@ -1146,6 +1208,7 @@ mod tests {
         .unwrap();
         let out_ls = dir.path().join("out-ls");
         let with_ls = run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &cfg,
@@ -1243,6 +1306,7 @@ mod tests {
             ..BackpropConfig::default()
         };
         run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(creature),
             training_data: data,
             config: &cfg,
@@ -1338,6 +1402,7 @@ mod tests {
         };
         let out = dir.path().join("out");
         run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &cfg,
@@ -1394,6 +1459,7 @@ mod tests {
         .unwrap();
         let out = dir.path().join("out");
         run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),
@@ -1462,6 +1528,7 @@ mod tests {
         )
         .unwrap();
         let err = run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&creature_path),
             training_data: &data,
             config: &BackpropConfig::default(),

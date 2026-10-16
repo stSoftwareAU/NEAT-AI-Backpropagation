@@ -134,6 +134,7 @@ fn train_rejects_a_recurrent_creature() {
     let (dir, creature_path, data) = fixture(RECURRENT);
     let cfg = BackpropConfig::default();
     let err = run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(&creature_path),
         training_data: &data,
         config: &cfg,

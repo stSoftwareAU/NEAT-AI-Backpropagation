@@ -70,6 +70,7 @@ fn train(
     accept_always: bool,
 ) -> Result<TrainResult, String> {
     run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(creature_path),
         training_data: data,
         config,

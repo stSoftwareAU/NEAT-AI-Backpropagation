@@ -264,6 +264,13 @@ enum Commands {
         /// Epochs to run.
         #[arg(long, default_value_t = 1)]
         epochs: u64,
+        /// Absolute wall-clock deadline in ms since the Unix epoch (#4073).
+        ///
+        /// Checked before each epoch: once reached, no further epoch starts.
+        /// The best creature so far is still written, and the journal gains a
+        /// `timedOut` line. Omit for no deadline.
+        #[arg(long)]
+        deadline_epoch_ms: Option<u64>,
         #[command(flatten)]
         corpus: CorpusArgs,
         /// Take each file's leading records for --max-records instead of a
@@ -534,6 +541,7 @@ fn run() -> Result<(), String> {
             creature,
             training_data,
             epochs,
+            deadline_epoch_ms,
             corpus,
             disable_random_samples,
             rate,
@@ -583,6 +591,7 @@ fn run() -> Result<(), String> {
                 training_data: &training_data,
                 config: &cfg,
                 epochs,
+                deadline_epoch_ms,
                 max_records: corpus.max_records,
                 seed: corpus.seed,
                 disable_random_samples,
@@ -604,6 +613,11 @@ fn run() -> Result<(), String> {
                 "train: baseline_mse={:.12} best_mse={:.12} accepted_epochs={}",
                 result.baseline_mse, result.best_mse, result.accepted_epochs
             );
+            if result.timed_out {
+                eprintln!(
+                    "train: timed_out=true (the deadline stopped the run before every epoch ran)"
+                );
+            }
             if let (Some(b), Some(a)) = (&result.baseline_score, &result.best_score) {
                 eprintln!(
                     "scorer: baseline={:.12} best={:.12} Δ={:+.6e}",

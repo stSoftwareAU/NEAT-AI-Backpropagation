@@ -39,7 +39,7 @@ use std::ptr;
 ///
 /// Bumped whenever a released request/response field changes meaning or is
 /// removed, so a caller can refuse a library it was not built against.
-pub const NEAT_BACKPROP_ABI_VERSION: u32 = 1;
+pub const NEAT_BACKPROP_ABI_VERSION: u32 = 2;
 
 /// The call succeeded; the out buffer holds the response JSON.
 pub const NEAT_BACKPROP_OK: i32 = 0;
@@ -263,6 +263,12 @@ pub struct TrainAbiRequest {
     /// Optional NEAT-AI `traceStore` directory for `CreatureTrace` artefacts.
     #[serde(default)]
     pub trace_store: Option<PathBuf>,
+    /// Absolute wall-clock deadline in ms since the Unix epoch (#4073).
+    ///
+    /// Checked before each epoch. Absent or `null` means no deadline. When it
+    /// stops the run, the response carries `timedOut: true`.
+    #[serde(default)]
+    pub deadline_epoch_ms: Option<u64>,
 }
 
 impl Default for TrainAbiRequest {
@@ -293,6 +299,7 @@ impl Default for TrainAbiRequest {
             max_backtracks: default_max_backtracks(),
             scorer: None,
             trace_store: None,
+            deadline_epoch_ms: None,
         }
     }
 }
@@ -327,6 +334,8 @@ pub struct TrainAbiResponse {
     pub baseline_score: Option<ScoreResult>,
     /// Best-creature scorer result, when a scorer was supplied.
     pub best_score: Option<ScoreResult>,
+    /// True when the deadline stopped the run before every epoch ran (#4073).
+    pub timed_out: bool,
 }
 
 /// Run one `trainDir` epoch loop described by a JSON request.
@@ -380,6 +389,7 @@ pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
         max_backtracks: request.max_backtracks,
         step_scale_ladder: &request.step_scale_ladder,
         trace_store: request.trace_store.as_deref(),
+        deadline_epoch_ms: request.deadline_epoch_ms,
     })?;
 
     // Only a run that asked for a trace store can claim these artefacts —
@@ -407,6 +417,7 @@ pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
         failed_trace_dir: failed_trace_dir.filter(|dir| dir.is_dir()),
         baseline_score: result.baseline_score,
         best_score: result.best_score,
+        timed_out: result.timed_out,
     })
 }
 

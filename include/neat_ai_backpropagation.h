@@ -96,7 +96,11 @@ const char *neat_backprop_version(void);
  *     "acceptAlways": false,        // refused together with "scorer"
  *     "maxBacktracks": 6,
  *     "scorer": null,        // optional rust_scorer binary
- *     "traceStore": null     // optional NEAT-AI traceStore directory
+ *     "traceStore": null,    // optional NEAT-AI traceStore directory
+ *     // Absolute wall-clock deadline, ms since the Unix epoch (#4073). Checked
+ *     // before each epoch; once reached no further epoch starts and the run
+ *     // keeps what it has accepted. null = no deadline.
+ *     "deadlineEpochMs": null
  *   }
  *
  * Omitted fields take the CLI `train` defaults shown above. An unknown field is
@@ -105,7 +109,7 @@ const char *neat_backprop_version(void);
  * On NEAT_BACKPROP_OK, `*out` holds the response JSON:
  *
  *   {
- *     "abiVersion": 1,
+ *     "abiVersion": 2,
  *     "version": "0.1.17",
  *     "bestCreatureJson": "<UUID-only creature JSON>",
  *     "baselineMse": 0.0,
@@ -117,7 +121,8 @@ const char *neat_backprop_version(void);
  *     "bestTracePath": null,
  *     "failedTraceDir": null,
  *     "baselineScore": null,
- *     "bestScore": null
+ *     "bestScore": null,
+ *     "timedOut": false      // true when deadlineEpochMs stopped the run early
  *   }
  *
  * On any other status, `*out` holds the error message.

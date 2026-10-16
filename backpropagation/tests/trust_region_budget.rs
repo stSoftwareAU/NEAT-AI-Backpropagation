@@ -111,6 +111,7 @@ impl Fixture {
             ..BackpropConfig::default()
         };
         run_train(TrainRequest {
+            deadline_epoch_ms: None,
             creature: TrainCreature::Path(&self.creature),
             training_data: &self.data,
             config: &config,

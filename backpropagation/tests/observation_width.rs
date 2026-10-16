@@ -85,6 +85,7 @@ fn fixture(creature: &str) -> (TempDir, PathBuf, PathBuf) {
 
 fn train(creature_path: &Path, data: &Path, out: &Path) -> Result<TrainResult, String> {
     run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(creature_path),
         training_data: data,
         config: &BackpropConfig::default(),

@@ -76,6 +76,7 @@ fn train_baseline_mse(
     disable_random_samples: bool,
 ) -> f64 {
     run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(creature),
         training_data: data,
         config: &BackpropConfig::default(),

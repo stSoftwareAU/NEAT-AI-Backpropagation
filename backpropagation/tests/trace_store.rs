@@ -69,6 +69,7 @@ fn train(
         ..BackpropConfig::default()
     };
     run_train(TrainRequest {
+        deadline_epoch_ms: None,
         creature: TrainCreature::Path(creature),
         training_data: data,
         config: &config,
