@@ -13,7 +13,7 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - Develop
       - "milestone/**"
@@ -32,6 +32,7 @@ env:
 
 jobs:
   quality:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Quality Checks
     needs: [validation]
     runs-on: ubuntu-latest
@@ -96,7 +97,7 @@ jobs:
       checks: write
       pull-requests: write
     uses: ./.github/workflows/security.yml
-    if: github.event_name == 'pull_request'
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
     with:
       # Enabled deliberately (Issue #28): audit-check scans the resolved graph,
       # dependency review is the only gate on the crates *this PR* adds.
@@ -104,6 +105,7 @@ jobs:
       include-dependency-review: true
 
   validation:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Project Validation
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -267,6 +269,7 @@ jobs:
             || echo "::warning::Develop branch protection does not satisfy the policy in CONTRIBUTING.md — a repository administrator must apply it (Issue #21)"
 
   shell-checks:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Shell Script Quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -308,6 +311,7 @@ jobs:
           shellcheck --severity=warning "${scripts[@]}"
 
   spell-check:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Spell Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -325,6 +329,7 @@ jobs:
         run: ./scripts/spell-check.sh
 
   workflow-lint:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Workflow Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -362,7 +367,7 @@ jobs:
   ci-required:
     name: CI Required Checks
     needs: [validation, quality, security, shell-checks, spell-check, workflow-lint]
-    if: always()
+    if: ${{ (always()) && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

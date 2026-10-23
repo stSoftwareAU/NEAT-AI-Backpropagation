@@ -17,7 +17,7 @@ name: Version Increment
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - Develop
     paths:
@@ -52,7 +52,7 @@ jobs:
     name: Auto-increment Versions
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ (github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
 
     steps:
       - name: Checkout PR branch
