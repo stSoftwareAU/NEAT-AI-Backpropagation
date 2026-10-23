@@ -30,7 +30,7 @@ name: Family Sync
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - Develop
       - "milestone/**"
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Forks get no push credential, so the sync would fail on every fork PR.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: (github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     permissions:
       contents: write
     env:
