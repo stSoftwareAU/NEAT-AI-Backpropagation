@@ -55,7 +55,7 @@ flowchart LR
 ## Evidence
 
 Backend-only change; no UI files. Evidence is the test run below and the mutation checks in the Test
-Plan. `./quality.sh` passed on the final head (exit 0, "All quality checks passed!").
+Plan. `./quality.sh` passed on the previous PR head (exit 0, "All quality checks passed!").
 
 ## Reproduction
 
@@ -75,7 +75,7 @@ Plan. `./quality.sh` passed on the final head (exit 0, "All quality checks passe
 - **met** — Separate tests reach expiry during initial evaluation, accumulation and candidate evaluation; each fails when only its interruption check is removed — evidence: `backpropagation/tests/train_deadline.rs::expiry_during_the_initial_evaluation`, `::accumulation_expiring_before_any_record_journals_nothing`, `::expiry_during_candidate_evaluation` — reviewer: met
 - **met** — A productive first-epoch fixture stops before completing that epoch and returns valid weights different from its input. An interruption in a later epoch retains earlier accepted learning — evidence: `backpropagation/tests/train_deadline.rs::expiry_during_accumulation_in_the_first_epoch_keeps_useful_partial_learning`, `::a_later_epoch_interruption_retains_earlier_accepted_learning` — reviewer: met
 - **met** — Expiry before useful work returns unchanged weights with explicit timeout and no-progress/measurement status, without fabricated improvement or error values — evidence: `backpropagation/tests/train_deadline.rs::an_already_expired_deadline_returns_the_input_unchanged_with_no_measurement`, `::expiry_on_the_very_first_tick_measures_nothing` — reviewer: met
-- **met** — Deadline handling also bounds retries/backtracking and finalisation. Tests exercise these paths; no post-timeout whole-corpus rescore is required to return — evidence: `backpropagation/tests/train_deadline.rs::expiry_between_backtracking_attempts_stops_the_retry_loop`, `::finalisation_launches_no_scorer_after_expiry`, `::finalisation_does_not_launch_the_best_scorer_after_expiry` — reviewer: partial — reason: the reviewer found the ladder's rung scans uninterruptible; fixed in this diff (ladder rungs use `compute_mse_until`; `::a_ladder_rung_is_interrupted_inside_its_scan`)
+- **met** — Deadline handling also bounds retries/backtracking and finalisation. Tests exercise these paths; no post-timeout whole-corpus rescore is required to return — evidence: `backpropagation/tests/train_deadline.rs::expiry_between_backtracking_attempts_stops_the_retry_loop`, `::finalisation_launches_no_scorer_after_expiry`, `::finalisation_does_not_launch_the_best_scorer_after_expiry`, `::post_deadline_verification_is_capped_for_large_corpus` — reviewer: partial — reason: the reviewer found the ladder's rung scans uninterruptible; fixed in this diff (ladder rungs use `compute_mse_until`; `::a_ladder_rung_is_interrupted_inside_its_scan`)
 - **met** — No-deadline calls retain existing training acceptance and validation behaviour; relevant tests and the repository quality gate pass — evidence: whole `cargo test` plus `./quality.sh` exit 0 on the final head; `::a_distant_deadline_matches_the_unbounded_run` — reviewer: partial — reason: reviewer could not run the gate; it was run here and passed
 
 ## Standards Review
@@ -88,7 +88,7 @@ Plan. `./quality.sh` passed on the final head (exit 0, "All quality checks passe
 
 ## Test Plan
 
-- Added `backpropagation/tests/train_deadline.rs` (19 tests, deterministic via an injected counting
+- Added `backpropagation/tests/train_deadline.rs` (21 tests, deterministic via an injected counting
   clock; each phase test scans expiry ticks and panics if no tick reaches its phase, so removing
   only its check turns it red) and unit tests in `src/deadline.rs` (including `the_deadline_reports_the_instant_it_was_built_with`, which pins `Deadline::epoch_ms`), `src/mse.rs` and
   `src/propagate_layout.rs`.
@@ -109,7 +109,8 @@ Plan. `./quality.sh` passed on the final head (exit 0, "All quality checks passe
   `backpropagation/src/train.rs:557` exempt (untestable): `Ok(Default::default())` for `run_train` does not
   compile because `TrainResult` has no `Default`, so cargo-mutants reports it unviable; `run_train` is
   also exercised by the existing `src/train.rs` and `tests/` callers.
-- `./quality.sh` on the final head: passed.
+- Review follow-up: removing the verification cap and changing the partial trace comparison to `>` or `<=` each failed `backpropagation/tests/train_deadline.rs::post_deadline_verification_is_capped_for_large_corpus` or `::partial_trace_classifies_improvement_and_ties`, respectively. Changing completed-epoch `+=` to `*=` or `-=` failed `::expiry_at_the_top_of_a_later_epoch_is_reported_as_epoch_start`. The obsolete test condition accepted any positive completed count; the remaining behaviour requires exactly one at the first later epoch boundary, covered by that same test.
+- `./quality.sh` passed on the previous PR head. The review follow-up ran formatting, Clippy and the deadline tests; the local full gate could not create its shell-fixture temporary directory in the sandbox.
 - Callers of the changed `TrainResult` checked: `src/ffi.rs`, `src/main.rs`; `run_ladder_epoch`'s only
   caller is `src/train.rs`. Related docs updated: README "Train deadline and partial results",
   CHANGELOG.

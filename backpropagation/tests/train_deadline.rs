@@ -13,8 +13,8 @@ use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig};
 use neat_ai_backpropagation::deadline::{Deadline, TimeoutPhase};
 use neat_ai_backpropagation::mse::compute_mse;
 use neat_ai_backpropagation::train::{
-    AcceptanceMode, ScorerAcceptance, TrainCreature, TrainEpochRecord, TrainRequest, TrainResult,
-    TrainStatus, run_train, run_train_until,
+    AcceptanceMode, PARTIAL_VERIFY_RECORDS, ScorerAcceptance, TrainCreature, TrainEpochRecord,
+    TrainRequest, TrainResult, TrainStatus, run_train, run_train_until,
 };
 use neat_ai_backpropagation::trust_region::TrustRegion;
 use neat_ai_backpropagation::validate::TrainedTopology;
@@ -59,9 +59,13 @@ const SCAN_CHECKS: u64 = (RECORDS as u64).div_ceil(BATCH_RECORDS);
 /// Corpus of `(x, 2x)` pairs with `x` cycling through `0.1 ..= 1.0`. Every
 /// input is positive, so one gradient direction improves the whole corpus.
 fn corpus() -> TempDir {
+    corpus_with_records(RECORDS)
+}
+
+fn corpus_with_records(records: u32) -> TempDir {
     let dir = tempdir().unwrap();
     let mut f = fs::File::create(dir.path().join("0.bin")).unwrap();
-    for i in 0..RECORDS {
+    for i in 0..records {
         let x = (i % 10 + 1) as f32 * 0.1;
         f.write_all(&x.to_le_bytes()).unwrap();
         f.write_all(&(2.0 * x).to_le_bytes()).unwrap();
@@ -77,6 +81,7 @@ struct Setup {
     apply: ApplyOptions,
     max_backtracks: u32,
     scorer: Option<PathBuf>,
+    trace_store: Option<PathBuf>,
     acceptance: AcceptanceMode,
     ladder: Vec<f64>,
 }
@@ -92,6 +97,7 @@ impl Default for Setup {
             },
             max_backtracks: 0,
             scorer: None,
+            trace_store: None,
             acceptance: AcceptanceMode::Mse,
             ladder: Vec::new(),
         }
@@ -138,7 +144,7 @@ fn request<'a>(
         accept_always: false,
         max_backtracks: setup.max_backtracks,
         step_scale_ladder: setup.ladder.as_slice(),
-        trace_store: None,
+        trace_store: setup.trace_store.as_deref(),
     }
 }
 
@@ -414,6 +420,42 @@ fn accumulation_expiring_before_any_record_journals_nothing() {
 }
 
 #[test]
+fn post_deadline_verification_is_capped_for_large_corpus() {
+    const LARGE_CORPUS: u32 = 300;
+    assert!(PARTIAL_VERIFY_RECORDS < u64::from(LARGE_CORPUS));
+    let data = corpus_with_records(LARGE_CORPUS);
+    let setup = Setup::default();
+    let (accumulation_start, _) = first_tick(
+        "start of accumulation",
+        data.path(),
+        &setup,
+        timed_out_in(TimeoutPhase::Accumulation),
+    );
+    let (candidate_tick, candidate) = first_tick(
+        "first candidate batch",
+        data.path(),
+        &setup,
+        timed_out_in(TimeoutPhase::CandidateEvaluation),
+    );
+    // Two reads earlier is in accumulation, after more than the cap.
+    assert!(candidate_tick - 2 - accumulation_start > PARTIAL_VERIFY_RECORDS);
+    let accumulation = run_at_tick(data.path(), &setup, candidate_tick - 2);
+    assert_eq!(status_of(&accumulation).0, TimeoutPhase::Accumulation);
+    for run in [&candidate, &accumulation] {
+        let epochs = epoch_lines(run);
+        assert_eq!(epochs.len(), 1);
+        assert_eq!(epochs[0]["partial"], true);
+        assert_eq!(epochs[0]["accepted"], true);
+        assert_eq!(epochs[0]["records"].as_u64(), Some(PARTIAL_VERIFY_RECORDS));
+        assert!(
+            matches!(run.result.best, ErrorMeasure::Partial { records, .. } if records == PARTIAL_VERIFY_RECORDS),
+            "best was {:?}",
+            run.result.best
+        );
+    }
+}
+
+#[test]
 fn expiry_during_candidate_evaluation() {
     let data = corpus();
     let setup = Setup::default();
@@ -435,7 +477,7 @@ fn expiry_during_candidate_evaluation() {
     assert_eq!(epoch["partial"], true, "{epoch}");
     assert_eq!(
         epoch["records"].as_u64(),
-        Some(u64::from(RECORDS).min(256)),
+        Some(u64::from(RECORDS).min(PARTIAL_VERIFY_RECORDS)),
         "verification window: {epoch}"
     );
     let accepted = epoch["accepted"] == true;
@@ -551,9 +593,9 @@ fn expiry_at_the_top_of_a_later_epoch_is_reported_as_epoch_start() {
             run.result.status,
             TrainStatus::TimedOut {
                 phase: TimeoutPhase::EpochStart,
-                completed_epochs,
+                weights_changed: true,
                 ..
-            } if completed_epochs >= 1
+            }
         )
     });
     let (phase, completed, weights_changed) = status_of(&run);
@@ -562,7 +604,7 @@ fn expiry_at_the_top_of_a_later_epoch_is_reported_as_epoch_start() {
         (TimeoutPhase::EpochStart, true),
         "tick {tick}"
     );
-    assert!(completed >= 1);
+    assert_eq!(completed, 1);
     let epochs = epoch_lines(&run);
     assert_eq!(
         epochs.len() as u64,
@@ -1143,4 +1185,26 @@ fn a_partial_epoch_that_only_ties_the_incumbent_is_rejected() {
         parameters(&run.result.creature),
         parameters(&input_creature())
     );
+}
+
+#[test]
+fn partial_trace_classifies_improvement_and_ties() {
+    let traces = tempdir().unwrap();
+    let setup = Setup {
+        trace_store: Some(traces.path().to_path_buf()),
+        ..Setup::default()
+    };
+    let improving = corpus();
+    let (_, run) = first_tick("improving partial", improving.path(), &setup, |run| {
+        timed_out_in(TimeoutPhase::Accumulation)(run) && !epoch_lines(run).is_empty()
+    });
+    assert!(run.out.path().join("best-trace.json").is_file());
+    assert!(!traces.path().join("failed/epoch-1.json").exists());
+
+    let tied = perfect_corpus();
+    let (_, run) = first_tick("tied partial", tied.path(), &setup, |run| {
+        timed_out_in(TimeoutPhase::Accumulation)(run) && !epoch_lines(run).is_empty()
+    });
+    assert!(!run.out.path().join("best-trace.json").exists());
+    assert!(traces.path().join("failed/epoch-1.json").is_file());
 }

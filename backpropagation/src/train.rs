@@ -325,8 +325,8 @@ pub struct TrainResult {
 ///
 /// A partial epoch verifies its candidate against the incumbent over at most
 /// this many records, so the post-deadline work is at most 2 × 256 forward
-/// passes and never a whole-corpus scan.
-const PARTIAL_VERIFY_RECORDS: u64 = 256;
+/// passes, including when the corpus is larger than this limit.
+pub const PARTIAL_VERIFY_RECORDS: u64 = 256;
 
 /// Arguments for [`run_train`].
 pub struct TrainRequest<'a> {
