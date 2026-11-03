@@ -19,7 +19,7 @@ use crate::backprop::{
 };
 use crate::creature_io::ObservationWidth;
 use crate::deadline::{Deadline, TimeoutPhase};
-use crate::mse::compute_mse_selected;
+use crate::mse::{ErrorMeasure, compute_mse_until};
 use crate::sampling::RecordSelection;
 use crate::scorer::{ScoreResult, score_creatures};
 use crate::train::TrainCandidateRecord;
@@ -129,8 +129,9 @@ pub(crate) struct LadderEpochRequest<'a> {
     pub settings: ScorerAcceptance,
     /// Incumbent fitness every rung is judged against.
     pub incumbent_fitness: f64,
-    /// Deadline checked before each rung's apply and before the batch scorer
-    /// launch (#213). `None` runs the epoch to completion.
+    /// Deadline checked before each rung's apply, inside each rung's slice-MSE
+    /// scan, and before the batch scorer launch (#213). `None` runs the epoch to
+    /// completion.
     pub deadline: Option<&'a Deadline<'a>>,
 }
 
@@ -230,8 +231,19 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderRun,
         let applied = apply_at(step_scale)?;
         let candidate = applied.candidate;
         let mut net = compile_creature(&candidate).map_err(|e| e.to_string())?;
-        let (mse, _) =
-            compute_mse_selected(&candidate, &mut net, req.training_data, req.selection)?;
+        let measured = compute_mse_until(
+            &candidate,
+            &mut net,
+            req.training_data,
+            req.selection,
+            req.deadline,
+        )?;
+        // A rung is ranked only on a complete scan: a partial slice MSE cannot
+        // be compared with the other rungs, so an interrupted rung ends the
+        // epoch and the incumbent is kept (#213).
+        let ErrorMeasure::Full { mse, .. } = measured else {
+            return Ok(LadderRun::TimedOut(TimeoutPhase::CandidateEvaluation));
+        };
         // The pre-screen is the issue's "optional catastrophic rejection": off
         // by default, MSE is only a diagnostic and every rung is scored.
         // "Did not improve" is the negation of the line search's own `<` test,

@@ -267,7 +267,8 @@ pub struct TrainTimedOutRecord {
     pub kind: String,
     /// The step at which expiry was observed.
     pub phase: TimeoutPhase,
-    /// Epochs fully finished before the stop.
+    /// Journalled non-partial epochs, including one whose backtracking search
+    /// the deadline cut short.
     pub completed_epochs: u64,
     /// Whether at least one epoch (full or partial) was accepted.
     pub weights_changed: bool,
@@ -285,7 +286,8 @@ pub enum TrainStatus {
     TimedOut {
         /// The step at which expiry was observed.
         phase: TimeoutPhase,
-        /// Epochs fully finished (journalled, not partial) before the stop.
+        /// Journalled non-partial epochs, including one whose backtracking
+        /// search the deadline cut short.
         completed_epochs: u64,
         /// Whether at least one epoch (full or partial) was accepted.
         weights_changed: bool,
@@ -317,13 +319,6 @@ pub struct TrainResult {
     pub best_score: Option<ScoreResult>,
     /// Whether the run completed or stopped at a deadline (#213).
     pub status: TrainStatus,
-}
-
-impl TrainResult {
-    /// Whether the run stopped at a deadline rather than completing.
-    pub fn timed_out(&self) -> bool {
-        matches!(self.status, TrainStatus::TimedOut { .. })
-    }
 }
 
 /// Upper bound on the post-deadline comparison scan (#213).
@@ -577,9 +572,11 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
 ///
 /// On expiry the run keeps every epoch it accepted, journals a final `timedOut`
 /// line, and finalises without re-evaluating the corpus. An epoch the deadline
-/// cut short during accumulation is applied once and verified over at most 256
-/// records; its journal line has `partial: true`, and `best` then reports only
-/// that verified window. `baseline` and `best` are `Full` unless a timeout
+/// cut short during accumulation, or while its single candidate was measured
+/// under plain MSE, is applied once and verified over at most 256 records; its
+/// journal line has `partial: true`, and `best` then reports only that verified
+/// window. A ladder rung or scorer-judged candidate cut short is never judged,
+/// so the incumbent is kept. `baseline` and `best` are `Full` unless a timeout
 /// intervened.
 pub fn run_train_until(
     req: TrainRequest<'_>,
@@ -754,10 +751,6 @@ pub fn run_train_until(
                     .as_ref()
                     .map(|scored| scored.score)
                     .ok_or("scorer-guided acceptance has no baseline score")?;
-                if expired() {
-                    timeout = Some(TimeoutPhase::CandidateEvaluation);
-                    break;
-                }
                 match run_ladder_epoch(LadderEpochRequest {
                     epoch,
                     incumbent: &incumbent,
@@ -883,8 +876,23 @@ pub fn run_train_until(
                         )?);
                     }
                     ErrorMeasure::Unmeasured => {
+                        // Nothing of the candidate was measured, but the
+                        // accumulation completed, so plain MSE still verifies the
+                        // candidate over the records that accumulation covered,
+                        // bounded by `PARTIAL_VERIFY_RECORDS` (#213).
                         timeout = Some(TimeoutPhase::CandidateEvaluation);
-                        break None;
+                        if scorer_acceptance.is_some() {
+                            break None;
+                        }
+                        break Some(partial_outcome(
+                            &incumbent,
+                            applied,
+                            report.records,
+                            req.training_data,
+                            selection,
+                            req.config,
+                            req.accept_always,
+                        )?);
                     }
                 };
                 let candidate = applied.candidate;
@@ -1177,7 +1185,9 @@ pub fn run_train_until(
             phase,
             completed_epochs,
             weights_changed: accepted_epochs > 0,
-            deadline_epoch_ms: deadline.map_or(0, |d| d.epoch_ms()),
+            deadline_epoch_ms: deadline
+                .map(Deadline::epoch_ms)
+                .ok_or("internal: timeout recorded without a deadline")?,
         };
         journal.push_str(&serde_json::to_string(&stopped).map_err(|e| e.to_string())?);
         journal.push('\n');

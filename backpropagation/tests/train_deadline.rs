@@ -7,6 +7,8 @@
 //! phase under test. Because the scan only lands on a tick where that phase's
 //! own check exists, each test fails when only that check is removed.
 
+#![cfg(unix)]
+
 use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig};
 use neat_ai_backpropagation::deadline::{Deadline, TimeoutPhase};
 use neat_ai_backpropagation::mse::compute_mse;
@@ -45,6 +47,14 @@ const RECORDS: u32 = 100;
 
 /// Largest expiry tick the phase scans try before giving up.
 const MAX_TICK: u64 = 5000;
+
+/// Records per batch in a slice-MSE scan. Mirrors `DEADLINE_CHECK_RECORDS` in
+/// `src/mse.rs`: the clock is read before each batch.
+const BATCH_RECORDS: u64 = 32;
+
+/// Clock reads one rung's slice-MSE scan makes over [`RECORDS`]: one before each
+/// batch, so `ceil(100 / 32) = 4`.
+const SCAN_CHECKS: u64 = (RECORDS as u64).div_ceil(BATCH_RECORDS);
 
 /// Corpus of `(x, 2x)` pairs with `x` cycling through `0.1 ..= 1.0`. Every
 /// input is positive, so one gradient direction improves the whole corpus.
@@ -243,13 +253,34 @@ fn assert_valid_topology(creature: &CreatureExport) {
         .unwrap();
 }
 
-/// A stub scorer that counts its launches in `calls` and reports a fixed score.
+/// A stub for `rust_scorer <creature dir> <training data>`, the boundary
+/// contract in `backpropagation/src/scorer.rs` (`score_creature` writes the
+/// candidate as `trained.json` into the directory it passes, and the training
+/// data path is passed through unchanged) and `backpropagation/tests/scorer_boundary.rs`,
+/// which fakes the same boundary.
+///
+/// The stub exits non-zero with a stderr message unless it gets exactly two
+/// arguments, a creature directory holding `trained.json`, and a training-data
+/// directory. Each launch is tallied in `calls`; a valid launch reports a score
+/// of `1.0`.
 fn write_stub_scorer(dir: &Path, calls: &Path) -> PathBuf {
     let path = dir.join("stub-scorer");
     let body = format!(
         r#"#!/bin/sh
 set -eu
 printf 'call\n' >> '{calls}'
+if [ "$#" -ne 2 ]; then
+  echo "stub scorer: expected <creature dir> <training data>, got $# argument(s)" >&2
+  exit 2
+fi
+if [ ! -d "$1" ] || [ ! -f "$1/trained.json" ]; then
+  echo "stub scorer: $1 is not a creature directory holding trained.json" >&2
+  exit 3
+fi
+if [ ! -d "$2" ]; then
+  echo "stub scorer: training data $2 is not a directory" >&2
+  exit 4
+fi
 printf '{{"trained":{{"score":1.0,"error":0.0}}}}\n'
 "#,
         calls = calls.display(),
@@ -388,32 +419,65 @@ fn expiry_during_candidate_evaluation() {
     let setup = Setup::default();
     let input = input_creature();
 
-    // Expiry before the first candidate batch: nothing measured, nothing kept.
+    // Expiry before the first candidate batch: nothing of the candidate was
+    // measured, but the accumulation completed, so plain MSE still verifies the
+    // single candidate over the records it covers (min(100, 256) = 100) and keeps
+    // or rejects its learning on that verdict (#213).
     let (_, run) = first_tick(
         "CandidateEvaluation",
         data.path(),
         &setup,
         timed_out_in(TimeoutPhase::CandidateEvaluation),
     );
+    let epochs = epoch_lines(&run);
+    assert_eq!(epochs.len(), 1, "one partial epoch line");
+    let epoch = epochs[0];
+    assert_eq!(epoch["partial"], true, "{epoch}");
+    assert_eq!(
+        epoch["records"].as_u64(),
+        Some(u64::from(RECORDS).min(256)),
+        "verification window: {epoch}"
+    );
+    let accepted = epoch["accepted"] == true;
+    let before = epoch["beforeMse"].as_f64().unwrap();
+    let after = epoch["afterMse"].as_f64().unwrap();
     assert_eq!(
         status_of(&run),
-        (TimeoutPhase::CandidateEvaluation, 0, false)
+        (TimeoutPhase::CandidateEvaluation, 0, accepted)
     );
-    assert!(epoch_lines(&run).is_empty(), "no epoch line");
-    assert_eq!(parameters(&run.result.creature), parameters(&input));
+    assert_eq!(run.result.accepted_epochs, u64::from(accepted));
     assert!(run.result.baseline.is_full());
+    if accepted {
+        assert!(after < before, "accepted must verify better: {epoch}");
+        assert_ne!(parameters(&run.result.creature), parameters(&input));
+        assert!(
+            matches!(run.result.best, ErrorMeasure::Partial { records, .. } if records == 100),
+            "best was {:?}",
+            run.result.best
+        );
+    } else {
+        assert!(after >= before, "rejected must not verify better: {epoch}");
+        assert_eq!(parameters(&run.result.creature), parameters(&input));
+        assert_eq!(run.result.best, run.result.baseline);
+    }
+    assert_eq!(run.journal.last().unwrap()["kind"], "timedOut");
     assert_valid_topology(&run.result.creature);
 
-    // Expiry after at least one candidate batch: a verified partial epoch.
+    // Expiry after at least one candidate batch: a verified partial epoch over
+    // the records measured so far, which is fewer than the corpus.
     let (_, run) = first_tick(
         "CandidateEvaluation (verified partial epoch)",
         data.path(),
         &setup,
         |run| {
             timed_out_in(TimeoutPhase::CandidateEvaluation)(run)
-                && epoch_lines(run)
-                    .iter()
-                    .any(|l| l["partial"] == true && l["accepted"] == true)
+                && epoch_lines(run).iter().any(|l| {
+                    l["partial"] == true
+                        && l["accepted"] == true
+                        && l["records"]
+                            .as_u64()
+                            .is_some_and(|r| r < u64::from(RECORDS))
+                })
         },
     );
     let epoch = epoch_lines(&run)[0].clone();
@@ -467,6 +531,51 @@ fn a_later_epoch_interruption_retains_earlier_accepted_learning() {
         completed,
         "earlier epoch lines present"
     );
+    assert_valid_topology(&run.result.creature);
+}
+
+/// Expiry at the top of a later epoch, before its accumulation starts, is
+/// reported as `EpochStart`. The completed epochs stay, and no partial line is
+/// journalled for the epoch that never began.
+#[test]
+fn expiry_at_the_top_of_a_later_epoch_is_reported_as_epoch_start() {
+    let data = corpus();
+    let setup = Setup {
+        epochs: 5,
+        ..Setup::default()
+    };
+    let input = input_creature();
+
+    let (tick, run) = first_tick("EpochStart", data.path(), &setup, |run| {
+        matches!(
+            run.result.status,
+            TrainStatus::TimedOut {
+                phase: TimeoutPhase::EpochStart,
+                completed_epochs,
+                ..
+            } if completed_epochs >= 1
+        )
+    });
+    let (phase, completed, weights_changed) = status_of(&run);
+    assert_eq!(
+        (phase, weights_changed),
+        (TimeoutPhase::EpochStart, true),
+        "tick {tick}"
+    );
+    assert!(completed >= 1);
+    let epochs = epoch_lines(&run);
+    assert_eq!(
+        epochs.len() as u64,
+        completed,
+        "one line per completed epoch"
+    );
+    assert!(
+        epochs.iter().all(|l| l["partial"] == false),
+        "no partial epoch after the stop"
+    );
+    assert!(run.result.accepted_epochs >= 1);
+    assert_ne!(parameters(&run.result.creature), parameters(&input));
+    assert_eq!(run.journal.last().unwrap()["kind"], "timedOut");
     assert_valid_topology(&run.result.creature);
 }
 
@@ -550,6 +659,43 @@ fn finalisation_launches_no_scorer_after_expiry() {
     assert_eq!(run.journal.last().unwrap()["kind"], "timedOut");
 }
 
+/// Plain MSE acceptance with a scorer: expiry after the baseline finalisation
+/// scan has launched must not launch the best creature's scan (#213). With no
+/// epochs the only scorer launch is the baseline one, so the expiry lands between
+/// it and the best-score scan.
+#[test]
+fn finalisation_does_not_launch_the_best_scorer_after_expiry() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let calls = stub_dir.path().join("calls.txt");
+    let stub = write_stub_scorer(stub_dir.path(), &calls);
+    let setup = Setup {
+        epochs: 0,
+        scorer: Some(stub),
+        ..Setup::default()
+    };
+
+    let (tick, run, _) = first_scored_tick(
+        "Scoring before the best-creature scan",
+        data.path(),
+        &setup,
+        &calls,
+        |_, run, count| count == 1 && timed_out_in(TimeoutPhase::Scoring)(run),
+    );
+    assert_eq!(
+        status_of(&run),
+        (TimeoutPhase::Scoring, 0, false),
+        "tick {tick}"
+    );
+    assert_eq!(launches(&calls), 1, "only the baseline scan launched");
+    assert!(
+        run.result.baseline_score.is_some(),
+        "the baseline was scored"
+    );
+    assert!(run.result.best_score.is_none(), "no best-creature score");
+    assert_eq!(run.journal.last().unwrap()["kind"], "timedOut");
+}
+
 #[test]
 fn an_already_expired_deadline_returns_the_input_unchanged_with_no_measurement() {
     let data = corpus();
@@ -625,8 +771,9 @@ fn an_epoch_line_without_the_partial_key_reads_as_complete() {
     assert!(!record.partial, "an old journal line is a complete epoch");
 }
 
-/// Three rungs: the ladder has one check before the first rung, one before each
-/// rung after the first, and one before the batch.
+/// Three rungs. Each rung reads the clock on entry and once before each of its
+/// [`SCAN_CHECKS`] record batches; the batch scorer's check is read straight
+/// after the last rung's scan.
 const LADDER: [f64; 3] = [0.001, 0.005, 0.01];
 
 /// Scorer-guided acceptance with the default epsilon and no MSE pre-screen.
@@ -634,15 +781,34 @@ fn scorer_guided() -> AcceptanceMode {
     AcceptanceMode::Scorer(ScorerAcceptance::default())
 }
 
-/// A batch stand-in for `rust_scorer <dir> <data>`: it scores every creature
-/// file in the directory it is handed, one `"stem"` entry each, and appends a
-/// line to `calls` per invocation. Every score is `1.0`.
+/// A batch stand-in for `rust_scorer <creature dir> <training data>`, the
+/// contract in `backpropagation/src/scorer.rs` (`score_creatures` writes one
+/// `<stem>.json` per candidate into the directory it passes, and the training
+/// data path is passed through unchanged) and `backpropagation/tests/scorer_boundary.rs`.
+///
+/// It scores every creature file in the directory, one `"stem"` entry each, as
+/// the real scorer does. It exits non-zero with a stderr message unless it gets
+/// exactly two arguments, a creature directory holding at least one `.json`
+/// file, and a training-data directory. Each launch is tallied in `calls`; every
+/// score is `1.0`.
 fn write_batch_stub_scorer(dir: &Path, calls: &Path) -> PathBuf {
     let path = dir.join("batch-stub-scorer");
     let body = format!(
         r#"#!/bin/sh
 set -eu
 printf 'call\n' >> '{calls}'
+if [ "$#" -ne 2 ]; then
+  echo "batch stub scorer: expected <creature dir> <training data>, got $# argument(s)" >&2
+  exit 2
+fi
+if [ ! -d "$1" ]; then
+  echo "batch stub scorer: $1 is not a creature directory" >&2
+  exit 3
+fi
+if [ ! -d "$2" ]; then
+  echo "batch stub scorer: training data $2 is not a directory" >&2
+  exit 4
+fi
 out=''
 for candidate in "$1"/*.json; do
   [ -e "$candidate" ] || continue
@@ -652,6 +818,10 @@ for candidate in "$1"/*.json; do
   fi
   out="$out\"$stem\":{{\"score\":1.0,\"error\":0.0}}"
 done
+if [ -z "$out" ]; then
+  echo "batch stub scorer: $1 holds no creature .json files" >&2
+  exit 5
+fi
 printf '{{%s}}\n' "$out"
 "#,
         calls = calls.display(),
@@ -711,13 +881,12 @@ fn first_scored_tick(
     panic!("no expiry tick reaches phase {phase}");
 }
 
-/// The first tick at which a ladder run stops in `CandidateEvaluation` with only
-/// the baseline launched. Reads after the baseline run in this order: the
-/// pre-ladder check, then the rung-0 check, which still precedes the first
-/// apply. So this is the pre-ladder tick.
-fn pre_ladder_tick(data: &Path, setup: &Setup, calls: &Path) -> u64 {
+/// The tick of the ladder's first clock read: rung 0's entry check, which
+/// precedes its apply. It is the first tick at which a ladder run stops in
+/// `CandidateEvaluation` with only the baseline launched.
+fn ladder_entry_tick(data: &Path, setup: &Setup, calls: &Path) -> u64 {
     first_scored_tick(
-        "CandidateEvaluation before the ladder",
+        "CandidateEvaluation at rung 0's entry",
         data,
         setup,
         calls,
@@ -803,20 +972,21 @@ fn a_ladder_run_stops_between_rungs() {
     let (setup, calls) = scorer_setup(stub_dir.path(), &LADDER);
     let input = input_creature();
 
-    let pre_ladder = pre_ladder_tick(data.path(), &setup, &calls);
-    // The rung-1 check is the first one that follows a measured rung, so a
-    // tick past the pre-ladder and rung-0 checks stops between rungs.
+    let entry = ladder_entry_tick(data.path(), &setup, &calls);
+    // Rung 0's scan reads the clock SCAN_CHECKS times, so the first tick past it
+    // is rung 1's entry check: the first stop between rungs.
     let (tick, run, _) = first_scored_tick(
         "CandidateEvaluation between rungs",
         data.path(),
         &setup,
         &calls,
         |tick, run, count| {
-            tick > pre_ladder + 1
+            tick > entry + SCAN_CHECKS
                 && count == 1
                 && timed_out_in(TimeoutPhase::CandidateEvaluation)(run)
         },
     );
+    assert_eq!(tick, entry + SCAN_CHECKS + 1, "rung 1's entry check");
     assert_eq!(
         status_of(&run),
         (TimeoutPhase::CandidateEvaluation, 0, false),
@@ -837,6 +1007,51 @@ fn a_ladder_run_stops_between_rungs() {
     assert_valid_topology(&run.result.creature);
 }
 
+/// Expiry inside rung 0's slice-MSE scan stops the ladder there (#213). The last
+/// in-scan batch check of the first rung is a `CandidateEvaluation` stop with
+/// only the baseline launched, and no rung is judged or journalled. Without the
+/// in-scan check the scan runs to completion, so no tick at or after this one
+/// stops before the batch launch, and the scan finds none.
+#[test]
+fn a_ladder_rung_is_interrupted_inside_its_scan() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let (setup, calls) = scorer_setup(stub_dir.path(), &LADDER);
+    let input = input_creature();
+
+    let entry = ladder_entry_tick(data.path(), &setup, &calls);
+    let (tick, run, _) = first_scored_tick(
+        "CandidateEvaluation inside rung 0's scan",
+        data.path(),
+        &setup,
+        &calls,
+        |tick, run, count| {
+            tick >= entry + SCAN_CHECKS
+                && count == 1
+                && timed_out_in(TimeoutPhase::CandidateEvaluation)(run)
+        },
+    );
+    assert_eq!(
+        tick,
+        entry + SCAN_CHECKS,
+        "the last batch check of rung 0's scan"
+    );
+    assert_eq!(
+        status_of(&run),
+        (TimeoutPhase::CandidateEvaluation, 0, false),
+        "tick {tick}"
+    );
+    assert_eq!(launches(&calls), 1, "only the baseline launched");
+    assert_eq!(run.result.accepted_epochs, 0);
+    assert_eq!(parameters(&run.result.creature), parameters(&input));
+    assert!(epoch_lines(&run).is_empty(), "no epoch line");
+    assert!(
+        run.journal.iter().all(|l| l["kind"] != "candidate"),
+        "no rung may be journalled"
+    );
+    assert_valid_topology(&run.result.creature);
+}
+
 /// Expiry at the ladder's batch check launches no `rust_scorer` batch, even
 /// though every rung was applied and measured before it.
 #[test]
@@ -846,7 +1061,7 @@ fn a_ladder_run_does_not_launch_its_batch_scorer_after_expiry() {
     let (setup, calls) = scorer_setup(stub_dir.path(), &LADDER);
     let input = input_creature();
 
-    let pre_ladder = pre_ladder_tick(data.path(), &setup, &calls);
+    let entry = ladder_entry_tick(data.path(), &setup, &calls);
     let (batch, run, _) = first_scored_tick(
         "Scoring before the ladder batch",
         data.path(),
@@ -868,10 +1083,16 @@ fn a_ladder_run_does_not_launch_its_batch_scorer_after_expiry() {
     );
     assert_valid_topology(&run.result.creature);
 
-    // The between-rung checks are the reads before the batch check. Each one
-    // stops with only the baseline launched, and all of them come before the
-    // batch tick, which is the read after the last rung's check.
-    let between: Vec<u64> = (pre_ladder + 2..batch)
+    // Every ladder read, the rung entries and the in-scan batch checks alike,
+    // stops with only the baseline launched. The batch check is the read straight
+    // after the last rung's scan.
+    let ladder_reads = LADDER.len() as u64 * (1 + SCAN_CHECKS);
+    assert_eq!(
+        batch,
+        entry + ladder_reads,
+        "the batch check follows the last rung's scan"
+    );
+    let between: Vec<u64> = (entry..batch)
         .filter(|&tick| {
             let _ = fs::remove_file(&calls);
             let stopped = run_at_tick(data.path(), &setup, tick);
@@ -879,9 +1100,8 @@ fn a_ladder_run_does_not_launch_its_batch_scorer_after_expiry() {
         })
         .collect();
     assert_eq!(
-        between.len(),
-        LADDER.len() - 1,
-        "between-rung ticks {between:?} before the batch tick {batch}"
+        between.len() as u64,
+        ladder_reads,
+        "ladder ticks {between:?} before the batch tick {batch}"
     );
-    assert!(between.iter().all(|&tick| tick < batch));
 }
