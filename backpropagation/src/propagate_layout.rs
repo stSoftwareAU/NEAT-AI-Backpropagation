@@ -6,6 +6,7 @@
 //! creature/training-data bridge (issue #2).
 
 use crate::backprop::{BackpropConfig, LearningSignal};
+use crate::deadline::Deadline;
 use crate::sampling::{RecordCursor, RecordSelection};
 use neat_core::{
     CompiledNetwork, CreatureExport, NEURON_TYPE_CONSTANT, NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT,
@@ -487,6 +488,19 @@ pub struct AccumulateReport {
     pub records: u64,
 }
 
+/// Outcome of [`accumulate_creature_learning_until`].
+#[derive(Debug, Clone)]
+pub enum Accumulation {
+    /// Every selected record was read and accumulated.
+    Complete(AccumulateReport),
+    /// The deadline expired after at least one record. The report's `learning`,
+    /// `mse` and `records` describe only those records.
+    Partial(AccumulateReport),
+    /// The deadline expired before any record, so there is no learning and no
+    /// measurement.
+    Expired,
+}
+
 /// Accumulate a full-creature [`LearningSignal`] over training records.
 ///
 /// Analyse-without-apply: the creature and network weights are not mutated.
@@ -545,6 +559,44 @@ pub fn accumulate_creature_learning_selected(
     selection: RecordSelection<'_>,
     rng: &mut impl Rng,
 ) -> Result<AccumulateReport, String> {
+    match accumulate_creature_learning_until(
+        creature,
+        network,
+        training_data,
+        config,
+        selection,
+        rng,
+        None,
+    )? {
+        Accumulation::Complete(report) => Ok(report),
+        Accumulation::Partial(_) | Accumulation::Expired => {
+            Err("accumulate: deadline expired although no deadline was set".into())
+        }
+    }
+}
+
+/// [`accumulate_creature_learning_selected`] that checks a deadline between
+/// records.
+///
+/// The clock is read after each record is read and before it is used. When the
+/// deadline has expired, that record is discarded and the pass stops: the
+/// result is [`Accumulation::Partial`] if at least one record was accumulated,
+/// otherwise [`Accumulation::Expired`]. A selection that is drained is never an
+/// expiry, so it is [`Accumulation::Complete`]. With `deadline` `None` no clock
+/// is read.
+///
+/// # Errors
+/// `"no training records read"` when the selection yields no record and the
+/// deadline did not interrupt the pass.
+pub fn accumulate_creature_learning_until(
+    creature: &CreatureExport,
+    network: &mut CompiledNetwork,
+    training_data: &Path,
+    config: &BackpropConfig,
+    selection: RecordSelection<'_>,
+    rng: &mut impl Rng,
+    deadline: Option<&Deadline<'_>>,
+) -> Result<Accumulation, String> {
     let layout = PropagateLayout::from_creature(creature)?;
     let sparse = select_sparse(creature, &layout, config, rng);
     let mut learning = LearningSignal::new(creature.neurons.len(), creature.synapses.len());
@@ -563,7 +615,12 @@ pub fn accumulate_creature_learning_selected(
     let mut count = 0u64;
     let mut mse_sum = 0.0f64;
 
+    let mut interrupted = false;
     while cursor.next_into(&mut record)? {
+        if deadline.is_some_and(Deadline::expired) {
+            interrupted = true;
+            break;
+        }
         let traced = network.activate_and_trace(&record.inputs, creature.output);
         // `traced` leads with `creature.output` activations, then activations,
         // hint values and aggregate trace data — only the leading slice is the
@@ -654,13 +711,21 @@ pub fn accumulate_creature_learning_selected(
     }
 
     if count == 0 {
+        if interrupted {
+            return Ok(Accumulation::Expired);
+        }
         return Err("no training records read".into());
     }
-    Ok(AccumulateReport {
+    let report = AccumulateReport {
         learning,
         neuron_traces,
         mse: mse_sum / count as f64,
         records: count,
+    };
+    Ok(if interrupted {
+        Accumulation::Partial(report)
+    } else {
+        Accumulation::Complete(report)
     })
 }
 
@@ -671,6 +736,7 @@ mod tests {
     use neat_core::{compile_creature, parse_creature_json};
     use rand::SeedableRng;
     use rand::rngs::StdRng;
+    use std::cell::Cell;
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -965,5 +1031,155 @@ mod tests {
         let lr = calculate_learning_rate(&cfg, 0, None);
         let applied = apply_learnings(&creature, &learning, &cfg, lr);
         assert_ne!(applied.neurons[1].bias, creature.neurons[1].bias);
+    }
+
+    /// Six records `(i, i + 1)` for the deadline tests.
+    fn six_record_dir() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        let pairs: Vec<(f32, f32)> = (1..=6).map(|i| (i as f32, i as f32 + 1.0)).collect();
+        write_records(dir.path(), &pairs);
+        dir
+    }
+
+    #[test]
+    fn expiry_on_the_first_check_yields_expired() {
+        let dir = six_record_dir();
+        let creature = parse_creature_json(TINY_CHAIN).unwrap();
+        let mut network = compile_creature(&creature).unwrap();
+        let reads = Cell::new(0u64);
+        let deadline = Deadline::with_clock(1, || {
+            reads.set(reads.get() + 1);
+            reads.get()
+        });
+        let mut rng = StdRng::seed_from_u64(7);
+        let outcome = accumulate_creature_learning_until(
+            &creature,
+            &mut network,
+            dir.path(),
+            &BackpropConfig::default(),
+            RecordSelection::Prefix(None),
+            &mut rng,
+            Some(&deadline),
+        )
+        .unwrap();
+        assert!(matches!(outcome, Accumulation::Expired), "{outcome:?}");
+        assert_eq!(reads.get(), 1);
+    }
+
+    #[test]
+    fn expiry_on_the_fourth_check_keeps_the_first_three_records() {
+        let dir = six_record_dir();
+        let creature = parse_creature_json(TINY_CHAIN).unwrap();
+        let cfg = BackpropConfig::default();
+        let mut network = compile_creature(&creature).unwrap();
+        let reads = Cell::new(0u64);
+        let deadline = Deadline::with_clock(4, || {
+            reads.set(reads.get() + 1);
+            reads.get()
+        });
+        let mut rng = StdRng::seed_from_u64(7);
+        let outcome = accumulate_creature_learning_until(
+            &creature,
+            &mut network,
+            dir.path(),
+            &cfg,
+            RecordSelection::Prefix(None),
+            &mut rng,
+            Some(&deadline),
+        )
+        .unwrap();
+        assert_eq!(reads.get(), 4, "one check per record until expiry");
+        let Accumulation::Partial(report) = outcome else {
+            panic!("expected Partial, got {outcome:?}");
+        };
+        assert_eq!(report.records, 3);
+
+        let mut reference_network = compile_creature(&creature).unwrap();
+        let mut reference_rng = StdRng::seed_from_u64(7);
+        let reference = accumulate_creature_learning(
+            &creature,
+            &mut reference_network,
+            dir.path(),
+            &cfg,
+            Some(3),
+            &mut reference_rng,
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{:?}", report.learning),
+            format!("{reference:?}"),
+            "partial learning must equal the three-record capped pass"
+        );
+    }
+
+    #[test]
+    fn a_never_expiring_deadline_completes_like_the_selected_pass() {
+        let dir = six_record_dir();
+        let creature = parse_creature_json(TINY_CHAIN).unwrap();
+        let cfg = BackpropConfig::default();
+        let mut network = compile_creature(&creature).unwrap();
+        let never = Deadline::with_clock(u64::MAX, || 0);
+        let mut rng = StdRng::seed_from_u64(7);
+        let outcome = accumulate_creature_learning_until(
+            &creature,
+            &mut network,
+            dir.path(),
+            &cfg,
+            RecordSelection::Prefix(None),
+            &mut rng,
+            Some(&never),
+        )
+        .unwrap();
+        let Accumulation::Complete(report) = outcome else {
+            panic!("expected Complete, got {outcome:?}");
+        };
+
+        let mut reference_network = compile_creature(&creature).unwrap();
+        let mut reference_rng = StdRng::seed_from_u64(7);
+        let reference = accumulate_creature_learning_selected(
+            &creature,
+            &mut reference_network,
+            dir.path(),
+            &cfg,
+            RecordSelection::Prefix(None),
+            &mut reference_rng,
+        )
+        .unwrap();
+        assert_eq!(report.records, reference.records);
+        assert_eq!(report.mse, reference.mse);
+        assert_eq!(
+            format!("{:?}", report.learning),
+            format!("{:?}", reference.learning)
+        );
+    }
+
+    /// A drained selection is never an expiry: the clock is not read after the
+    /// last record, so a deadline that would expire later still completes.
+    #[test]
+    fn a_drained_selection_is_complete_even_after_the_deadline_passes() {
+        let dir = six_record_dir();
+        let creature = parse_creature_json(TINY_CHAIN).unwrap();
+        let mut network = compile_creature(&creature).unwrap();
+        let reads = Cell::new(0u64);
+        let deadline = Deadline::with_clock(7, || {
+            reads.set(reads.get() + 1);
+            reads.get()
+        });
+        let mut rng = StdRng::seed_from_u64(7);
+        let outcome = accumulate_creature_learning_until(
+            &creature,
+            &mut network,
+            dir.path(),
+            &BackpropConfig::default(),
+            RecordSelection::Prefix(None),
+            &mut rng,
+            Some(&deadline),
+        )
+        .unwrap();
+        assert_eq!(reads.get(), 6);
+        let Accumulation::Complete(report) = outcome else {
+            panic!("expected Complete, got {outcome:?}");
+        };
+        assert_eq!(report.records, 6);
     }
 }

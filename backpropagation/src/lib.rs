@@ -12,6 +12,7 @@ pub mod blocks;
 pub mod blockwise;
 pub mod compare;
 pub mod creature_io;
+pub mod deadline;
 pub mod ffi;
 pub mod gene_facets;
 pub mod gradient_check;
@@ -48,6 +49,7 @@ pub use creature_io::{
     FORWARD_ONLY_REQUIRED, ObservationWidth, check_observation_width, load_forward_only_creature,
     parse_forward_only_creature,
 };
+pub use deadline::{Deadline, TimeoutPhase, system_epoch_ms};
 pub use ffi::{
     AbiAcceptanceMode, AbiLearningRateStrategy, NEAT_BACKPROP_ABI_VERSION,
     NEAT_BACKPROP_ERR_INVALID_ARGUMENT, NEAT_BACKPROP_ERR_PANIC, NEAT_BACKPROP_ERR_TRAIN_FAILED,
@@ -67,10 +69,13 @@ pub use ladder::{
     DEFAULT_STEP_SCALE_LADDER, DEFAULT_STEP_SCALE_LADDER_CSV, parse_step_scale_ladder,
     validate_step_scale_ladder,
 };
-pub use mse::{compute_mse, compute_mse_selected};
+pub use mse::{
+    ErrorMeasure, compute_mse, compute_mse_first, compute_mse_selected, compute_mse_until,
+};
 pub use propagate_layout::{
-    AccumulateReport, NeuronTraceStats, PropagateLayout, accumulate_creature_learning,
-    accumulate_creature_learning_report, accumulate_creature_learning_selected,
+    AccumulateReport, Accumulation, NeuronTraceStats, PropagateLayout,
+    accumulate_creature_learning, accumulate_creature_learning_report,
+    accumulate_creature_learning_selected, accumulate_creature_learning_until,
 };
 pub use sampling::{
     FileSample, RecordCursor, RecordSample, RecordSelection, plan_record_sample,
