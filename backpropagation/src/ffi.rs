@@ -341,6 +341,11 @@ pub fn train_from_json(request: &str) -> Result<String, String> {
     serde_json::to_string(&response).map_err(|e| format!("failed to encode train response: {e}"))
 }
 
+/// Refusal when an FFI run reports a non-`Full` error figure. The ABI passes no
+/// deadline, so this is a broken invariant, and it fails loudly rather than
+/// shipping a partial figure as a comparable number (#213).
+const FFI_FULL_MEASURE: &str = "train: error figure was not fully measured, which an FFI run without a deadline must not produce";
+
 /// Run one `trainDir` epoch loop from a decoded request.
 pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
     // Refuses a scorer knob on an MSE run rather than ignoring it (#104).
@@ -397,8 +402,8 @@ pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
         abi_version: NEAT_BACKPROP_ABI_VERSION,
         version: env!("CARGO_PKG_VERSION").to_string(),
         best_creature_json: result.best_json,
-        baseline_mse: result.baseline_mse,
-        best_mse: result.best_mse,
+        baseline_mse: result.baseline.full_mse().ok_or(FFI_FULL_MEASURE)?,
+        best_mse: result.best.full_mse().ok_or(FFI_FULL_MEASURE)?,
         accepted_epochs: result.accepted_epochs,
         epochs: request.epochs,
         best_path: request.output_dir.join("best.json"),

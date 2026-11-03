@@ -186,7 +186,7 @@ fn mse_only_mode_still_accepts_on_slice_mse_alone() {
         result.accepted_epochs, 1,
         "the fixture's candidate must lower slice MSE for the rest of this suite to mean anything"
     );
-    assert!(result.best_mse < result.baseline_mse);
+    assert!(result.best.full_mse().unwrap() < result.baseline.full_mse().unwrap());
     // Scoring stays a post-loop report in MSE mode — baseline, then best.
     assert_eq!(fixture.scorer_calls(), 2);
     let epochs = fixture.journal_lines(&fixture.root.join("out"), "epoch");
@@ -211,7 +211,7 @@ fn scorer_guided_rolls_back_a_candidate_whose_score_falls() {
 
     assert_eq!(result.accepted_epochs, 0, "a lower score is not a win");
     // MSE is still measured and reported — it just does not decide.
-    assert!((result.best_mse - result.baseline_mse).abs() < 1e-15);
+    assert!((result.best.full_mse().unwrap() - result.baseline.full_mse().unwrap()).abs() < 1e-15);
     let out = fixture.root.join("out");
     let candidates = fixture.journal_lines(&out, "candidate");
     assert_eq!(candidates.len(), 1);

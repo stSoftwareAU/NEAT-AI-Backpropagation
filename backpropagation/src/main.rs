@@ -600,9 +600,13 @@ fn run() -> Result<(), String> {
                 step_scale_ladder: &ladder,
                 trace_store: trace_store.as_deref(),
             })?;
+            let show =
+                |mse: Option<f64>| mse.map_or_else(|| "n/a".to_string(), |v| format!("{v:.12}"));
             eprintln!(
-                "train: baseline_mse={:.12} best_mse={:.12} accepted_epochs={}",
-                result.baseline_mse, result.best_mse, result.accepted_epochs
+                "train: baseline_mse={} best_mse={} accepted_epochs={}",
+                show(result.baseline.full_mse()),
+                show(result.best.full_mse()),
+                result.accepted_epochs
             );
             if let (Some(b), Some(a)) = (&result.baseline_score, &result.best_score) {
                 eprintln!(

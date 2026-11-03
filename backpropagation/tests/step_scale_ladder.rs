@@ -362,7 +362,7 @@ fn no_rung_beating_the_incumbent_leaves_it_unchanged() {
     assert_eq!(result.accepted_epochs, 0);
     assert_eq!(result.best_score.expect("best scored").score, 0.5);
     // MSE fell on every rung and still nothing was kept — the scorer decides.
-    assert!((result.best_mse - result.baseline_mse).abs() < 1e-15);
+    assert!((result.best.full_mse().unwrap() - result.baseline.full_mse().unwrap()).abs() < 1e-15);
     assert_eq!(
         result.best_json,
         fs::read_to_string(fixture.root.join("out").join("best.json")).expect("best.json")
@@ -449,7 +449,9 @@ fn a_single_rung_ladder_matches_the_line_search_candidate() {
     let with_search = train(&search_run, "out", scorer_guided(), &[], 1).expect("train");
 
     assert_eq!(with_ladder.accepted_epochs, with_search.accepted_epochs);
-    assert!((with_ladder.best_mse - with_search.best_mse).abs() < 1e-15);
+    assert!(
+        (with_ladder.best.full_mse().unwrap() - with_search.best.full_mse().unwrap()).abs() < 1e-15
+    );
     assert_eq!(with_ladder.best_json, with_search.best_json);
     let ladder_epoch = ladder_run.epoch(&ladder_run.root.join("out"));
     let search_epoch = search_run.epoch(&search_run.root.join("out"));

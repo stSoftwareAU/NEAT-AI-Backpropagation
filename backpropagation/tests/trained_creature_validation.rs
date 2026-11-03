@@ -148,7 +148,7 @@ fn a_healthy_train_run_passes_the_gate_unchanged() {
     assert_eq!(written.synapses.len(), source.synapses.len());
     assert!(written.neurons.iter().all(|n| n.bias.is_finite()));
     assert!(written.synapses.iter().all(|s| s.weight.is_finite()));
-    assert!(result.best_mse <= result.baseline_mse);
+    assert!(result.best.full_mse().unwrap() <= result.baseline.full_mse().unwrap());
 
     // And the run is still deterministic under the gate: the same request
     // produces byte-identical output.
