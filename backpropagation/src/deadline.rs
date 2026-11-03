@@ -117,4 +117,9 @@ mod tests {
     fn a_one_millisecond_deadline_is_expired_on_the_system_clock() {
         assert!(Deadline::at_epoch_ms(1).expired());
     }
+
+    #[test]
+    fn the_deadline_reports_the_instant_it_was_built_with() {
+        assert_eq!(Deadline::with_clock(123, || 0).epoch_ms(), 123);
+    }
 }

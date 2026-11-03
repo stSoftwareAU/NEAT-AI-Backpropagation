@@ -1105,3 +1105,42 @@ fn a_ladder_run_does_not_launch_its_batch_scorer_after_expiry() {
         "ladder ticks {between:?} before the batch tick {batch}"
     );
 }
+
+/// Corpus of `(x, x)` pairs: the identity chain already fits it exactly, so
+/// every gradient is zero and any candidate ties the incumbent.
+fn perfect_corpus() -> TempDir {
+    let dir = tempdir().unwrap();
+    let mut f = fs::File::create(dir.path().join("0.bin")).unwrap();
+    for i in 0..RECORDS {
+        let x = (i % 10 + 1) as f32 * 0.1;
+        f.write_all(&x.to_le_bytes()).unwrap();
+        f.write_all(&x.to_le_bytes()).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn a_partial_epoch_that_only_ties_the_incumbent_is_rejected() {
+    let data = perfect_corpus();
+    let setup = Setup::default();
+
+    let (_, run) = first_tick(
+        "Accumulation (tied partial epoch)",
+        data.path(),
+        &setup,
+        |run| timed_out_in(TimeoutPhase::Accumulation)(run) && !epoch_lines(run).is_empty(),
+    );
+
+    let epochs = epoch_lines(&run);
+    assert_eq!(epochs.len(), 1, "one partial epoch line");
+    assert_eq!(epochs[0]["partial"], true);
+    assert_eq!(
+        epochs[0]["accepted"], false,
+        "a tie is not an improvement under plain MSE"
+    );
+    assert_eq!(run.result.accepted_epochs, 0);
+    assert_eq!(
+        parameters(&run.result.creature),
+        parameters(&input_creature())
+    );
+}

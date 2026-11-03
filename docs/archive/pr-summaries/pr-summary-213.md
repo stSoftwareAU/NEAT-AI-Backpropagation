@@ -88,9 +88,9 @@ Plan. `./quality.sh` passed on the final head (exit 0, "All quality checks passe
 
 ## Test Plan
 
-- Added `backpropagation/tests/train_deadline.rs` (18 tests, deterministic via an injected counting
+- Added `backpropagation/tests/train_deadline.rs` (19 tests, deterministic via an injected counting
   clock; each phase test scans expiry ticks and panics if no tick reaches its phase, so removing
-  only its check turns it red) and unit tests in `src/deadline.rs`, `src/mse.rs` and
+  only its check turns it red) and unit tests in `src/deadline.rs` (including `the_deadline_reports_the_instant_it_was_built_with`, which pins `Deadline::epoch_ms`), `src/mse.rs` and
   `src/propagate_layout.rs`.
 - Mutation checks (one check disabled at a time, test went red, check restored): baseline-scan
   deadline, accumulation deadline, candidate-scan deadline, backtracking check, finalisation scorer
@@ -101,6 +101,14 @@ Plan. `./quality.sh` passed on the final head (exit 0, "All quality checks passe
   place of `baseline_mse` / `best_mse` (`src/train.rs` tests, `tests/record_sampling.rs`,
   `tests/scorer_guided_acceptance.rs`, `tests/step_scale_ladder.rs`,
   `tests/trained_creature_validation.rs`); no assertion was removed or weakened.
+- Mutation survivors from the gate: `deadline.rs:60` (`epoch_ms` -> 0/1) is killed by
+  `the_deadline_reports_the_instant_it_was_built_with`; `train.rs:535` (`<` -> `>` / `<=` in
+  `partial_outcome`) is killed by `train_deadline.rs::a_partial_epoch_that_only_ties_the_incumbent_is_rejected`
+  (a perfect-fit corpus makes the partial candidate tie the incumbent, so only `<` rejects it). Re-run with
+  `cargo mutants` filtered to `partial_outcome` and `epoch_ms`: all viable mutants caught.
+  `backpropagation/src/train.rs:557` exempt (untestable): `Ok(Default::default())` for `run_train` does not
+  compile because `TrainResult` has no `Default`, so cargo-mutants reports it unviable; `run_train` is
+  also exercised by the existing `src/train.rs` and `tests/` callers.
 - `./quality.sh` on the final head: passed.
 - Callers of the changed `TrainResult` checked: `src/ffi.rs`, `src/main.rs`; `run_ladder_epoch`'s only
   caller is `src/train.rs`. Related docs updated: README "Train deadline and partial results",
