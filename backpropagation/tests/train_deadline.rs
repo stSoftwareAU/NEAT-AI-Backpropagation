@@ -1208,3 +1208,43 @@ fn partial_trace_classifies_improvement_and_ties() {
     assert!(!run.out.path().join("best-trace.json").exists());
     assert!(traces.path().join("failed/epoch-1.json").is_file());
 }
+
+#[test]
+fn partial_trace_compares_against_the_verified_window_not_the_full_corpus() {
+    let data = tempdir().unwrap();
+    let mut file = fs::File::create(data.path().join("0.bin")).unwrap();
+    for i in 0..RECORDS {
+        let x = 1.0_f32;
+        let target = if i == 0 { 1.1_f32 } else { 10.0_f32 };
+        file.write_all(&x.to_le_bytes()).unwrap();
+        file.write_all(&target.to_le_bytes()).unwrap();
+    }
+    let traces = tempdir().unwrap();
+    let setup = Setup {
+        learning_rate: 10.0,
+        apply: ApplyOptions {
+            step_scale: 1.0,
+            ..ApplyOptions::default()
+        },
+        trace_store: Some(traces.path().to_path_buf()),
+        ..Setup::default()
+    };
+    let (_, run) = first_tick("partial trace baseline", data.path(), &setup, |run| {
+        timed_out_in(TimeoutPhase::Accumulation)(run) && !epoch_lines(run).is_empty()
+    });
+    let epochs = epoch_lines(&run);
+    let epoch = epochs[0];
+    let before = epoch["beforeMse"].as_f64().unwrap();
+    let after = epoch["afterMse"].as_f64().unwrap();
+    assert_eq!(epoch["accepted"], false);
+    assert!(
+        after > before,
+        "candidate must be worse on the verification window"
+    );
+    assert!(
+        after < run.result.baseline.full_mse().unwrap(),
+        "candidate must still beat the full-corpus baseline"
+    );
+    assert!(traces.path().join("failed/epoch-1.json").is_file());
+    assert!(!run.out.path().join("best-trace.json").exists());
+}

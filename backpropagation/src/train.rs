@@ -163,12 +163,13 @@ pub struct TrainEpochRecord {
     pub before_mse: f64,
     /// Forward MSE of the candidate after apply.
     pub after_mse: f64,
-    /// Records used this epoch.
+    /// Records used this epoch, or for a partial epoch the verification window
+    /// shared by before/after MSE (at most [`PARTIAL_VERIFY_RECORDS`]).
     pub records: u64,
-    /// True when the epoch's learning and before/after errors cover only the
-    /// first `records` records, because the deadline cut the epoch short. Its
-    /// before/after figures are comparable to each other but not to
-    /// full-corpus figures (#213).
+    /// True when the deadline cut the epoch short. The before/after errors cover
+    /// the same first `records` records, but the applied learning may cover more.
+    /// These figures are comparable to each other but not to full-corpus
+    /// figures (#213).
     #[serde(default)]
     pub partial: bool,
     /// Learning rate this epoch resolved from the configured strategy (#39).
