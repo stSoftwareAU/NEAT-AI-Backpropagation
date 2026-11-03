@@ -236,7 +236,7 @@ fn sampled_mse(
 ///
 /// With `deadline` `None` this is exactly [`compute_mse_selected`], wrapped as
 /// [`ErrorMeasure::Full`]. With `Some`, the selection is scanned in batches of
-/// [`DEADLINE_CHECK_RECORDS`]; the clock is read before each non-empty batch,
+/// 32 records; the clock is read before each non-empty batch,
 /// and an expired clock stops the scan before that batch is processed.
 ///
 /// A scan interrupted after at least one record is [`ErrorMeasure::Partial`];

@@ -11,8 +11,8 @@ use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig};
 use neat_ai_backpropagation::deadline::{Deadline, TimeoutPhase};
 use neat_ai_backpropagation::mse::compute_mse;
 use neat_ai_backpropagation::train::{
-    AcceptanceMode, TrainCreature, TrainEpochRecord, TrainRequest, TrainResult, TrainStatus,
-    run_train, run_train_until,
+    AcceptanceMode, ScorerAcceptance, TrainCreature, TrainEpochRecord, TrainRequest, TrainResult,
+    TrainStatus, run_train, run_train_until,
 };
 use neat_ai_backpropagation::trust_region::TrustRegion;
 use neat_ai_backpropagation::validate::TrainedTopology;
@@ -67,6 +67,8 @@ struct Setup {
     apply: ApplyOptions,
     max_backtracks: u32,
     scorer: Option<PathBuf>,
+    acceptance: AcceptanceMode,
+    ladder: Vec<f64>,
 }
 
 impl Default for Setup {
@@ -80,6 +82,8 @@ impl Default for Setup {
             },
             max_backtracks: 0,
             scorer: None,
+            acceptance: AcceptanceMode::Mse,
+            ladder: Vec::new(),
         }
     }
 }
@@ -120,10 +124,10 @@ fn request<'a>(
         scorer: setup.scorer.as_deref(),
         apply: setup.apply,
         trust_region: TrustRegion::default(),
-        acceptance: AcceptanceMode::Mse,
+        acceptance: setup.acceptance,
         accept_always: false,
         max_backtracks: setup.max_backtracks,
-        step_scale_ladder: &[],
+        step_scale_ladder: setup.ladder.as_slice(),
         trace_store: None,
     }
 }
@@ -619,4 +623,265 @@ fn an_epoch_line_without_the_partial_key_reads_as_complete() {
     line.as_object_mut().unwrap().remove("partial");
     let record: TrainEpochRecord = serde_json::from_value(line).unwrap();
     assert!(!record.partial, "an old journal line is a complete epoch");
+}
+
+/// Three rungs: the ladder has one check before the first rung, one before each
+/// rung after the first, and one before the batch.
+const LADDER: [f64; 3] = [0.001, 0.005, 0.01];
+
+/// Scorer-guided acceptance with the default epsilon and no MSE pre-screen.
+fn scorer_guided() -> AcceptanceMode {
+    AcceptanceMode::Scorer(ScorerAcceptance::default())
+}
+
+/// A batch stand-in for `rust_scorer <dir> <data>`: it scores every creature
+/// file in the directory it is handed, one `"stem"` entry each, and appends a
+/// line to `calls` per invocation. Every score is `1.0`.
+fn write_batch_stub_scorer(dir: &Path, calls: &Path) -> PathBuf {
+    let path = dir.join("batch-stub-scorer");
+    let body = format!(
+        r#"#!/bin/sh
+set -eu
+printf 'call\n' >> '{calls}'
+out=''
+for candidate in "$1"/*.json; do
+  [ -e "$candidate" ] || continue
+  stem=$(basename "$candidate" .json)
+  if [ -n "$out" ]; then
+    out="$out,"
+  fi
+  out="$out\"$stem\":{{\"score\":1.0,\"error\":0.0}}"
+done
+printf '{{%s}}\n' "$out"
+"#,
+        calls = calls.display(),
+    );
+    fs::write(&path, body).expect("write batch stub scorer");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod batch stub scorer");
+    path
+}
+
+/// A scorer-guided setup whose scorer tallies its launches in the returned
+/// `calls` file. A non-empty `ladder` gets the batch stub, which the ladder's
+/// single batch call needs; otherwise the single-creature stub is used.
+fn scorer_setup(stub_dir: &Path, ladder: &[f64]) -> (Setup, PathBuf) {
+    let calls = stub_dir.join("calls.txt");
+    let scorer = if ladder.is_empty() {
+        write_stub_scorer(stub_dir, &calls)
+    } else {
+        write_batch_stub_scorer(stub_dir, &calls)
+    };
+    let setup = Setup {
+        acceptance: scorer_guided(),
+        scorer: Some(scorer),
+        ladder: ladder.to_vec(),
+        ..Setup::default()
+    };
+    (setup, calls)
+}
+
+/// Scorer launches tallied in `calls`. A missing tally is zero launches.
+fn launches(calls: &Path) -> usize {
+    match fs::read_to_string(calls) {
+        Ok(text) => text.lines().count(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(e) => panic!("cannot read {}: {e}", calls.display()),
+    }
+}
+
+/// [`first_tick`] for the scorer tests. Each run starts with an empty tally, so
+/// `wanted` sees exactly that run's launches, and it also receives the tick.
+/// Panics with a clear message when no tick up to [`MAX_TICK`] matches, which
+/// is what a removed check causes.
+fn first_scored_tick(
+    phase: &str,
+    data: &Path,
+    setup: &Setup,
+    calls: &Path,
+    wanted: impl Fn(u64, &Run, usize) -> bool,
+) -> (u64, Run, usize) {
+    for tick in 1..=MAX_TICK {
+        let _ = fs::remove_file(calls);
+        let run = run_at_tick(data, setup, tick);
+        let count = launches(calls);
+        if wanted(tick, &run, count) {
+            return (tick, run, count);
+        }
+    }
+    panic!("no expiry tick reaches phase {phase}");
+}
+
+/// The first tick at which a ladder run stops in `CandidateEvaluation` with only
+/// the baseline launched. Reads after the baseline run in this order: the
+/// pre-ladder check, then the rung-0 check, which still precedes the first
+/// apply. So this is the pre-ladder tick.
+fn pre_ladder_tick(data: &Path, setup: &Setup, calls: &Path) -> u64 {
+    first_scored_tick(
+        "CandidateEvaluation before the ladder",
+        data,
+        setup,
+        calls,
+        |_, run, count| count == 1 && timed_out_in(TimeoutPhase::CandidateEvaluation)(run),
+    )
+    .0
+}
+
+/// Scorer-guided acceptance: a run that expires before the baseline scorer
+/// launches must not launch it, and must score and judge nothing.
+#[test]
+fn scorer_baseline_is_not_launched_after_expiry() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let (setup, calls) = scorer_setup(stub_dir.path(), &[]);
+    let input = input_creature();
+
+    let (tick, run, _) = first_scored_tick(
+        "Scoring before the baseline launch",
+        data.path(),
+        &setup,
+        &calls,
+        |_, run, count| count == 0 && timed_out_in(TimeoutPhase::Scoring)(run),
+    );
+    assert_eq!(
+        status_of(&run),
+        (TimeoutPhase::Scoring, 0, false),
+        "tick {tick}"
+    );
+    assert!(run.result.baseline.is_full(), "the baseline pass finished");
+    assert!(run.result.baseline_score.is_none());
+    assert!(run.result.best_score.is_none());
+    assert_eq!(run.result.accepted_epochs, 0);
+    assert_eq!(parameters(&run.result.creature), parameters(&input));
+    assert!(epoch_lines(&run).is_empty(), "no epoch line");
+    assert_eq!(run.journal.last().unwrap()["kind"], "timedOut");
+    assert_valid_topology(&run.result.creature);
+}
+
+/// Scorer-guided acceptance: a run that expires after the baseline is scored
+/// but before the candidate launches must not score the candidate, and must
+/// keep the incumbent.
+#[test]
+fn scorer_candidate_is_not_launched_after_expiry() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let (setup, calls) = scorer_setup(stub_dir.path(), &[]);
+    let input = input_creature();
+
+    let (tick, run, _) = first_scored_tick(
+        "Scoring before the candidate launch",
+        data.path(),
+        &setup,
+        &calls,
+        |_, run, count| count == 1 && timed_out_in(TimeoutPhase::Scoring)(run),
+    );
+    assert_eq!(
+        status_of(&run),
+        (TimeoutPhase::Scoring, 0, false),
+        "tick {tick}"
+    );
+    assert!(
+        run.result.baseline_score.is_some(),
+        "the baseline was scored"
+    );
+    assert_eq!(run.result.best, run.result.baseline);
+    assert_eq!(run.result.accepted_epochs, 0);
+    assert_eq!(parameters(&run.result.creature), parameters(&input));
+    assert!(epoch_lines(&run).is_empty(), "no epoch line");
+    assert!(
+        run.journal.iter().all(|l| l["kind"] != "candidate"),
+        "a candidate that never launched was judged"
+    );
+    assert_valid_topology(&run.result.creature);
+}
+
+/// Expiry between two rungs of a ladder stops the epoch there: no rung is
+/// scored, the incumbent stays, and nothing is journalled for the epoch.
+#[test]
+fn a_ladder_run_stops_between_rungs() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let (setup, calls) = scorer_setup(stub_dir.path(), &LADDER);
+    let input = input_creature();
+
+    let pre_ladder = pre_ladder_tick(data.path(), &setup, &calls);
+    // The rung-1 check is the first one that follows a measured rung, so a
+    // tick past the pre-ladder and rung-0 checks stops between rungs.
+    let (tick, run, _) = first_scored_tick(
+        "CandidateEvaluation between rungs",
+        data.path(),
+        &setup,
+        &calls,
+        |tick, run, count| {
+            tick > pre_ladder + 1
+                && count == 1
+                && timed_out_in(TimeoutPhase::CandidateEvaluation)(run)
+        },
+    );
+    assert_eq!(
+        status_of(&run),
+        (TimeoutPhase::CandidateEvaluation, 0, false),
+        "tick {tick}"
+    );
+    assert!(
+        run.result.baseline_score.is_some(),
+        "the baseline was scored"
+    );
+    assert_eq!(run.result.best, run.result.baseline);
+    assert_eq!(run.result.accepted_epochs, 0);
+    assert_eq!(parameters(&run.result.creature), parameters(&input));
+    assert!(epoch_lines(&run).is_empty(), "no epoch line");
+    assert!(
+        run.journal.iter().all(|l| l["kind"] != "candidate"),
+        "no ladder rung may be journalled"
+    );
+    assert_valid_topology(&run.result.creature);
+}
+
+/// Expiry at the ladder's batch check launches no `rust_scorer` batch, even
+/// though every rung was applied and measured before it.
+#[test]
+fn a_ladder_run_does_not_launch_its_batch_scorer_after_expiry() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let (setup, calls) = scorer_setup(stub_dir.path(), &LADDER);
+    let input = input_creature();
+
+    let pre_ladder = pre_ladder_tick(data.path(), &setup, &calls);
+    let (batch, run, _) = first_scored_tick(
+        "Scoring before the ladder batch",
+        data.path(),
+        &setup,
+        &calls,
+        |_, run, count| count == 1 && timed_out_in(TimeoutPhase::Scoring)(run),
+    );
+    assert_eq!(
+        status_of(&run),
+        (TimeoutPhase::Scoring, 0, false),
+        "tick {batch}"
+    );
+    assert_eq!(run.result.accepted_epochs, 0);
+    assert_eq!(parameters(&run.result.creature), parameters(&input));
+    assert!(epoch_lines(&run).is_empty(), "no epoch line");
+    assert!(
+        run.journal.iter().all(|l| l["kind"] != "candidate"),
+        "no rung may be journalled"
+    );
+    assert_valid_topology(&run.result.creature);
+
+    // The between-rung checks are the reads before the batch check. Each one
+    // stops with only the baseline launched, and all of them come before the
+    // batch tick, which is the read after the last rung's check.
+    let between: Vec<u64> = (pre_ladder + 2..batch)
+        .filter(|&tick| {
+            let _ = fs::remove_file(&calls);
+            let stopped = run_at_tick(data.path(), &setup, tick);
+            launches(&calls) == 1 && timed_out_in(TimeoutPhase::CandidateEvaluation)(&stopped)
+        })
+        .collect();
+    assert_eq!(
+        between.len(),
+        LADDER.len() - 1,
+        "between-rung ticks {between:?} before the batch tick {batch}"
+    );
+    assert!(between.iter().all(|&tick| tick < batch));
 }
