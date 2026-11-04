@@ -736,9 +736,11 @@ pub fn run_train_until(
                 break;
             }
         };
-        // A partial epoch's candidate is judged only by plain MSE: a scorer or
-        // ladder verdict needs the full learning, so the incumbent is kept (#213).
-        if partial_epoch && (scorer_acceptance.is_some() || !req.step_scale_ladder.is_empty()) {
+        // A partial epoch's candidate is judged only by plain MSE: a scorer verdict
+        // needs the full learning, so the incumbent is kept (#213). A step-scale
+        // ladder is accepted only with scorer acceptance (see
+        // `resolve_scorer_acceptance`), so this covers ladder runs too.
+        if partial_epoch && scorer_acceptance.is_some() {
             timeout = Some(TimeoutPhase::Accumulation);
             break;
         }

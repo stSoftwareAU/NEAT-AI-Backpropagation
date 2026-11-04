@@ -1162,6 +1162,152 @@ fn a_ladder_run_does_not_launch_its_batch_scorer_after_expiry() {
     );
 }
 
+/// A scorer-guided or ladder run cut inside the epoch has no scorer verdict for
+/// its partial candidate, so it must keep the incumbent: no epoch or candidate
+/// line, nothing accepted, parameters unchanged, `weights_changed` false.
+fn assert_incumbent_kept(run: &Run, phase: TimeoutPhase, tick: u64) {
+    assert_eq!(status_of(run), (phase, 0, false), "tick {tick}");
+    assert_eq!(run.result.accepted_epochs, 0, "tick {tick}");
+    assert_eq!(
+        parameters(&run.result.creature),
+        parameters(&input_creature()),
+        "tick {tick}"
+    );
+    assert!(epoch_lines(run).is_empty(), "no epoch line at tick {tick}");
+    assert!(
+        run.journal.iter().all(|l| l["kind"] != "candidate"),
+        "no candidate line at tick {tick}"
+    );
+    assert_valid_topology(&run.result.creature);
+}
+
+/// Positive control for the scorer tests below: plain-MSE acceptance at `tick`
+/// writes a partial epoch line, so the same stop in a scorer-guided or ladder run
+/// reaches the partial path that the guard under test refuses.
+fn assert_mse_run_judges_a_partial_epoch(data: &Path, tick: u64) {
+    let run = run_at_tick(data, &Setup::default(), tick);
+    let epochs = epoch_lines(&run);
+    assert_eq!(
+        epochs.len(),
+        1,
+        "plain MSE judges a partial epoch at {tick}"
+    );
+    assert_eq!(epochs[0]["partial"], true);
+}
+
+/// The first accumulation stop with a record already accumulated, for a
+/// scorer-guided run whose baseline was launched: one tick past the stop before
+/// any record. Returns the tick and its plain-MSE counterpart, which has no
+/// baseline scorer check so reads the clock one tick earlier.
+fn scorer_accumulation_stop(data: &Path, setup: &Setup, calls: &Path) -> (u64, u64) {
+    let (first, _, _) = first_scored_tick(
+        "Accumulation before any record",
+        data,
+        setup,
+        calls,
+        |_, run, count| count == 1 && timed_out_in(TimeoutPhase::Accumulation)(run),
+    );
+    let (mse_first, _) = first_tick(
+        "Accumulation (plain MSE)",
+        data,
+        &Setup::default(),
+        timed_out_in(TimeoutPhase::Accumulation),
+    );
+    assert_eq!(first, mse_first + 1, "one baseline scorer check earlier");
+    (first + 1, mse_first + 1)
+}
+
+/// Expiry mid-accumulation in a scorer-guided run keeps the incumbent: the
+/// partial learning has no scorer verdict, so plain MSE must not accept it.
+#[test]
+fn a_scorer_guided_run_cut_mid_accumulation_keeps_the_incumbent() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let (setup, calls) = scorer_setup(stub_dir.path(), &[]);
+
+    let (tick, mse_tick) = scorer_accumulation_stop(data.path(), &setup, &calls);
+    assert_mse_run_judges_a_partial_epoch(data.path(), mse_tick);
+    let _ = fs::remove_file(&calls);
+    let run = run_at_tick(data.path(), &setup, tick);
+    assert_eq!(launches(&calls), 1, "only the baseline launched");
+    assert_incumbent_kept(&run, TimeoutPhase::Accumulation, tick);
+}
+
+/// The same stop with a step-scale ladder configured: the ladder half of the
+/// partial-accumulation guard.
+#[test]
+fn a_ladder_run_cut_mid_accumulation_keeps_the_incumbent() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let (setup, calls) = scorer_setup(stub_dir.path(), &LADDER);
+
+    let (tick, mse_tick) = scorer_accumulation_stop(data.path(), &setup, &calls);
+    assert_mse_run_judges_a_partial_epoch(data.path(), mse_tick);
+    let _ = fs::remove_file(&calls);
+    let run = run_at_tick(data.path(), &setup, tick);
+    assert_eq!(launches(&calls), 1, "only the baseline launched");
+    assert_incumbent_kept(&run, TimeoutPhase::Accumulation, tick);
+}
+
+/// Expiry inside the scorer-guided candidate scan keeps the incumbent, both at
+/// the first candidate batch (nothing measured) and after a later one (partly
+/// measured). Only the baseline may have launched.
+#[test]
+fn a_scorer_guided_run_cut_mid_candidate_scan_keeps_the_incumbent() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let (setup, calls) = scorer_setup(stub_dir.path(), &[]);
+
+    let (first, _, _) = first_scored_tick(
+        "CandidateEvaluation at the first candidate batch",
+        data.path(),
+        &setup,
+        &calls,
+        |_, run, count| count == 1 && timed_out_in(TimeoutPhase::CandidateEvaluation)(run),
+    );
+    let (mse_first, _) = first_tick(
+        "CandidateEvaluation (plain MSE)",
+        data.path(),
+        &Setup::default(),
+        timed_out_in(TimeoutPhase::CandidateEvaluation),
+    );
+    assert_eq!(first, mse_first + 1, "one baseline scorer check earlier");
+
+    // `first` measures nothing of the candidate; the later stops follow at least
+    // one scanned batch, so the candidate is only partly measured.
+    for (offset, mse_offset) in [(0, 0), (1, 1), (SCAN_CHECKS - 1, SCAN_CHECKS - 1)] {
+        assert_mse_run_judges_a_partial_epoch(data.path(), mse_first + mse_offset);
+        let tick = first + offset;
+        let _ = fs::remove_file(&calls);
+        let run = run_at_tick(data.path(), &setup, tick);
+        assert_eq!(launches(&calls), 1, "only the baseline launched at {tick}");
+        assert_incumbent_kept(&run, TimeoutPhase::CandidateEvaluation, tick);
+    }
+}
+
+/// The partial-accumulation guard applies only to a partial epoch: a scorer-guided
+/// or ladder run whose accumulation completes must still run its scorer path and
+/// journal a complete (non-partial) epoch.
+#[test]
+fn a_scorer_guided_run_that_completes_accumulation_is_not_cut_short() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    for ladder in [&[][..], &LADDER[..]] {
+        let (setup, calls) = scorer_setup(stub_dir.path(), ladder);
+        let _ = fs::remove_file(&calls);
+        let run = run_until(data.path(), &setup, None);
+        assert!(
+            matches!(run.result.status, TrainStatus::Completed),
+            "ladder {ladder:?}: {:?}",
+            run.result.status
+        );
+        assert!(launches(&calls) >= 2, "baseline and candidate were scored");
+        let epochs = epoch_lines(&run);
+        assert_eq!(epochs.len(), 1, "one complete epoch line");
+        assert_ne!(epochs[0]["partial"], true, "{}", epochs[0]);
+    }
+}
+
 /// Corpus of `(x, x)` pairs: the identity chain already fits it exactly, so
 /// every gradient is zero and any candidate ties the incumbent.
 fn perfect_corpus() -> TempDir {
