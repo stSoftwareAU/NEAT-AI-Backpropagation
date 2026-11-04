@@ -748,6 +748,54 @@ fn the_productive_fixture_outlasts_the_deadline_and_the_grace_window() {
     );
 }
 
+/// An exact prediction forces the deterministic first epoch to be rejected.
+fn rejected_epoch_corpus() -> TempDir {
+    let dir = tempdir().unwrap();
+    let mut file = fs::File::create(dir.path().join("0.bin")).unwrap();
+    file.write_all(&1.0f32.to_le_bytes()).unwrap();
+    file.write_all(&1.0f32.to_le_bytes()).unwrap();
+    dir
+}
+
+fn assert_rejected_epoch_count(response: &TrainAbiResponse, out: &Path) {
+    let journal = fs::read_to_string(out.join("journal.jsonl")).unwrap();
+    let epochs: Vec<Value> = journal
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|record: &Value| record["kind"] == "epoch")
+        .collect();
+    assert_eq!(epochs.len(), 1);
+    assert_eq!(epochs[0]["accepted"], false);
+    assert!(!response.timed_out);
+    assert_eq!(response.epochs, 5);
+    assert_eq!(response.completed_epochs, epochs.len() as u64);
+}
+
+#[test]
+fn ffi_reports_actual_epochs_after_rejection() {
+    let data = rejected_epoch_corpus();
+    let out = tempdir().unwrap();
+    let request = json!({"creatureJson": CHAIN3, "trainingData": data.path(),
+        "outputDir": out.path(), "epochs": 5, "maxRecords": 1, "seed": 1});
+    assert_rejected_epoch_count(&train_ok(&request), out.path());
+}
+
+#[test]
+fn cli_reports_actual_epochs_after_rejection() {
+    let data = rejected_epoch_corpus();
+    let work = tempdir().unwrap();
+    let creature = write_creature(work.path(), CHAIN3);
+    let out = work.path().join("out");
+    let output = run_cli(&train_args(
+        &creature,
+        data.path(),
+        &out,
+        &["--epochs", "5"],
+    ));
+    assert!(output.status.success(), "exit {:?}", output.status);
+    assert_rejected_epoch_count(&read_result(&out), &out);
+}
+
 #[test]
 fn ffi_omitted_deadline_runs_to_completion_with_full_measures() {
     let data = write_corpus(SMALL_RECORDS);

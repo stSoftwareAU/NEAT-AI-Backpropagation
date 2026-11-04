@@ -2,6 +2,8 @@
 
 Exposes the #213 cooperative deadline through both native entry points. The C ABI request takes `deadlineEpochMs`; the CLI `train` takes `--deadline-epoch-ms`. Both use the core's unit (whole milliseconds since the Unix epoch) and expiry rule (`clock >= deadline`), and both call `run_train_until` with `Deadline::at_epoch_ms`, so the absolute budget is never restarted. Responses carry `timedOut`, a `timeout` object, `completedEpochs` and explicit `baselineMeasure` / `bestMeasure`. `baselineMse` / `bestMse` are numbers only for a full measure and `null` otherwise. `neat_backprop_capabilities()` and the CLI `capabilities` subcommand let NEAT-AI probe for deadline support. The CLI also writes `result.json` (the same object as the FFI response). Version bump: `Cargo.toml` updated for this change; the merged commit records the final version. Closes #214.
 
+Completed runs now report the core's actual journalled non-partial epoch count, including rejected epochs, rather than the requested count when deterministic rejection stops training early. The requested count remains in `epochs`; timeout counts retain the same meaning. Covered by `backpropagation/tests/native_deadline.rs::ffi_reports_actual_epochs_after_rejection` and `backpropagation/tests/native_deadline.rs::cli_reports_actual_epochs_after_rejection`.
+
 ```mermaid
 flowchart LR
     A[NEAT-AI] -->|deadlineEpochMs| F[neat_backprop_train]

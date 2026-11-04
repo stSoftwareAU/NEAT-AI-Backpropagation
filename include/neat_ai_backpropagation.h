@@ -155,7 +155,7 @@ const char *neat_backprop_capabilities(void);
  *     "baselineMeasure": { "kind": "full", "mse": 0.0, "records": 0 },
  *     "bestMeasure": { "kind": "full", "mse": 0.0, "records": 0 },
  *     "acceptedEpochs": 0,
- *     "completedEpochs": 0,
+ *     "completedEpochs": 1,        // journalled non-partial epochs, even if rejected
  *     "epochs": 1,
  *     "timedOut": false,
  *     "timeout": null,  // or {"phase": "start", "completedEpochs": 0,

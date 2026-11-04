@@ -1020,7 +1020,9 @@ Every response and every `train` run carries the new fields:
 - `timedOut` (bool) and `timeout`, which is `null` unless the run timed out.
   Otherwise `timeout` is `{"phase", "completedEpochs", "weightsChanged",
   "deadlineEpochMs"}`.
-- `completedEpochs`.
+- `completedEpochs` counts journalled non-partial epochs, including rejected
+  epochs and an epoch whose backtracking was cut short by the deadline. A
+  deterministic rejected epoch can stop a run before the requested count.
 - `baselineMeasure` and `bestMeasure`, each one of the kinds below.
 
 | Measure | Meaning | `baselineMse` / `bestMse` |

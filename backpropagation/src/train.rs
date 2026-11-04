@@ -280,7 +280,7 @@ pub struct TrainTimedOutRecord {
 /// How a run ended (#213).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrainStatus {
-    /// Every requested epoch ran to completion.
+    /// Training finished without timing out, possibly after an early stop.
     Completed,
     /// The deadline expired at `phase`; the run kept the learning it had
     /// accepted and finalised without further corpus work.
@@ -314,6 +314,8 @@ pub struct TrainResult {
     pub best: ErrorMeasure,
     /// Epochs that accepted an apply.
     pub accepted_epochs: u64,
+    /// Journalled non-partial epochs, including a rejected epoch.
+    pub completed_epochs: u64,
     /// Optional baseline scorer result.
     pub baseline_score: Option<ScoreResult>,
     /// Optional best-creature scorer result.
@@ -1216,6 +1218,7 @@ pub fn run_train_until(
         baseline,
         best,
         accepted_epochs,
+        completed_epochs,
         baseline_score,
         best_score,
         status,

@@ -423,8 +423,8 @@ pub struct TrainAbiResponse {
     pub timed_out: bool,
     /// Where and how the deadline cut the run short; `null` when it completed.
     pub timeout: Option<TimeoutReport>,
-    /// Epochs completed: the requested count for a completed run, or the count
-    /// journalled at the deadline for a timed-out one.
+    /// Journalled non-partial epochs, including rejected epochs and one whose
+    /// backtracking search was cut short by a deadline.
     pub completed_epochs: u64,
 }
 
@@ -519,7 +519,7 @@ pub fn build_train_response(
     });
     let failed_trace_dir = trace_store.map(|store| store.join(FAILED_TRACE_DIR));
     let (timed_out, timeout, completed_epochs) = match result.status {
-        TrainStatus::Completed => (false, None, epochs),
+        TrainStatus::Completed => (false, None, result.completed_epochs),
         TrainStatus::TimedOut {
             phase,
             completed_epochs,
