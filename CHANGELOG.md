@@ -24,8 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `neat_backprop_capabilities()` symbol and `capabilities` subcommand report the
   `deadline` capability (version 1). The ABI version stays `1`, because the
   change is additive. Old callers and old engines keep the legacy behaviour, and
-  `backpropagation/tests/native_deadline.rs` runs the real C ABI and CLI against
-  one productive fixture under an outer timeout (issue #214).
+  `backpropagation/tests/native_deadline.rs` runs the real C ABI, the built
+  `cdylib` (loaded with `dlopen` in a child process) and the CLI against one
+  productive fixture under an outer timeout (issue #214).
 
 - `run_train_until(req, deadline: Option<&Deadline>)` bounds native training by
   a cooperative wall-clock deadline. `Deadline` (module `deadline`) is an

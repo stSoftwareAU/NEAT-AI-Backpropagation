@@ -3,9 +3,11 @@
 //! `--deadline-epoch-ms`; each must stop the run cooperatively, keep the learning
 //! it already accepted, and say so in the response or `result.json`.
 //!
-//! These tests call the exported `extern "C"` symbols and the built binary
-//! directly. A missing library or binary fails the build or the test; nothing is
-//! skipped.
+//! These tests call the exported `extern "C"` symbols, the built shared library
+//! and the built binary directly. The shared library is loaded with `dlopen` in a
+//! child process, as a Deno FFI caller loads it; the CLI also runs as a child
+//! process. Both are killed on an overrun. A missing library or binary fails the
+//! build or the test; nothing is skipped.
 //!
 //! Why the productive fixture is sized as it is. The timings below are indicative
 //! only, for a debug build: the baseline error scan takes about 0.2 s and one
@@ -18,6 +20,8 @@
 //! window, so the bound does catch a run that ignores the deadline. The journal
 //! evidence is what proves the cut happened inside epoch 1: exactly one epoch
 //! line, marked partial, then a `timedOut` line, with `completedEpochs` at 0.
+//! `the_productive_fixture_outlasts_the_deadline_and_the_grace_window` measures
+//! the uninterrupted fixture, so those sizing claims are asserted, not assumed.
 
 #![cfg(unix)]
 
@@ -30,7 +34,7 @@ use neat_ai_backpropagation::ffi::{
 use neat_ai_backpropagation::nearly_equal;
 use neat_core::{CreatureExport, parse_creature_json};
 use serde_json::{Value, json};
-use std::ffi::{CStr, OsStr};
+use std::ffi::{CStr, OsStr, c_char, c_int, c_void};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -208,36 +212,46 @@ fn call_train_bounded(request: String) -> (i32, String, Duration) {
     }
 }
 
-/// Runs the CLI with stdin closed and both streams piped. The child is waited on
-/// by a helper thread, so an overrun is killed rather than left running.
-fn run_cli_bounded<S: AsRef<OsStr>>(args: &[S]) -> (Output, Duration) {
+/// Runs `command` with stdin closed and both streams piped, and waits at most
+/// [`outer_bound`]. The child is waited on by a helper thread, so an overrun is
+/// killed rather than left running.
+fn run_bounded(mut command: Command, what: &str) -> (Output, Duration) {
     let started = Instant::now();
-    let child = Command::new(CLI)
-        .args(args)
+    let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn the CLI binary");
+        .unwrap_or_else(|e| panic!("spawn the {what}: {e}"));
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _ = tx.send(child.wait_with_output());
     });
     match rx.recv_timeout(outer_bound()) {
-        Ok(output) => (output.expect("wait for the CLI"), started.elapsed()),
+        Ok(output) => (
+            output.unwrap_or_else(|e| panic!("wait for the {what}: {e}")),
+            started.elapsed(),
+        ),
         Err(RecvTimeoutError::Timeout) => {
             // Best effort: the panic below reports the overrun either way.
             let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
             panic!(
-                "native call overran its deadline + grace: CLI pid {pid} killed after {:?}",
+                "native call overran its deadline + grace: {what} pid {pid} killed after {:?}",
                 started.elapsed()
             );
         }
         Err(RecvTimeoutError::Disconnected) => {
-            panic!("CLI wait thread ended without a result")
+            panic!("{what} wait thread ended without a result")
         }
     }
+}
+
+/// Runs the CLI under [`run_bounded`].
+fn run_cli_bounded<S: AsRef<OsStr>>(args: &[S]) -> (Output, Duration) {
+    let mut command = Command::new(CLI);
+    command.args(args);
+    run_bounded(command, "CLI")
 }
 
 /// Runs the CLI to completion with stdin closed.
@@ -480,6 +494,257 @@ fn cli_deadline_stops_a_productive_first_epoch_mid_epoch() {
     eprintln!(
         "cli productive: elapsed {} ms, partial records {records}",
         elapsed.as_millis()
+    );
+}
+
+/// Set to the cdylib path in the child process that loads it.
+const CHILD_LIB_ENV: &str = "NATIVE_DEADLINE_CDYLIB";
+
+/// Set to the file holding the request the child sends.
+const CHILD_REQUEST_ENV: &str = "NATIVE_DEADLINE_REQUEST";
+
+/// Set to the file the child writes its result to.
+const CHILD_RESULT_ENV: &str = "NATIVE_DEADLINE_RESULT";
+
+const RTLD_NOW: c_int = 2;
+
+unsafe extern "C" {
+    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dlerror() -> *const c_char;
+}
+
+type TrainFn = unsafe extern "C" fn(*const u8, usize, *mut NeatBackpropBuffer) -> i32;
+type FreeFn = unsafe extern "C" fn(*mut NeatBackpropBuffer);
+type AbiVersionFn = extern "C" fn() -> u32;
+
+/// The built shared library, next to the CLI binary in the target directory.
+fn cdylib_path() -> PathBuf {
+    let extension = if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    Path::new(CLI)
+        .parent()
+        .expect("the CLI binary has a parent directory")
+        .join(format!("libneat_ai_backpropagation.{extension}"))
+}
+
+/// Builds the shared library, then returns its path.
+///
+/// `cargo test` links the rlib but does not refresh the cdylib, so a library
+/// left over from an earlier build would be tested instead of the code under
+/// test. The build is a no-op when the library is current. A failed build, or a
+/// library missing afterwards, fails the test.
+fn built_cdylib() -> PathBuf {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut build = Command::new(cargo);
+    build
+        .args(["build", "--lib", "--manifest-path"])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .stdin(Stdio::null());
+    if !cfg!(debug_assertions) {
+        build.arg("--release");
+    }
+    let status = build.status().expect("run cargo to build the cdylib");
+    assert!(status.success(), "building the cdylib failed: {status}");
+    let library = cdylib_path();
+    assert!(
+        library.is_file(),
+        "the cdylib was not built at {}",
+        library.display()
+    );
+    library
+}
+
+/// Resolves `name` in the loaded library, or panics with the loader's message.
+///
+/// # Safety
+/// `handle` must come from a successful `dlopen`.
+unsafe fn resolve(handle: *mut c_void, name: &CStr) -> *mut c_void {
+    // SAFETY: `handle` is live and `name` is NUL-terminated.
+    let symbol = unsafe { dlsym(handle, name.as_ptr()) };
+    if symbol.is_null() {
+        // SAFETY: `dlerror` returns null or a NUL-terminated message.
+        let reason = unsafe { dlerror().as_ref() }.map(|first| {
+            unsafe { CStr::from_ptr(first) }
+                .to_string_lossy()
+                .into_owned()
+        });
+        panic!("symbol {name:?} not found in the cdylib: {reason:?}");
+    }
+    symbol
+}
+
+/// The child half of the cdylib tests. It does nothing unless the parent test
+/// sets [`CHILD_LIB_ENV`]; the parent then fails if the result file is missing,
+/// so a child that did nothing cannot pass.
+///
+/// The child loads the built shared library with `dlopen` and calls its
+/// `neat_backprop_*` symbols, which is what a Deno FFI caller does. The symbols
+/// are resolved from the library handle, so they are the cdylib's own copies and
+/// not the ones this test binary links from the rlib.
+#[test]
+fn cdylib_child_entry() {
+    let Some(library) = std::env::var_os(CHILD_LIB_ENV) else {
+        return;
+    };
+    let request = fs::read(std::env::var_os(CHILD_REQUEST_ENV).expect("request path")).unwrap();
+    let result_path = std::env::var_os(CHILD_RESULT_ENV).expect("result path");
+
+    let library = std::ffi::CString::new(library.as_encoded_bytes()).unwrap();
+    // SAFETY: `library` is NUL-terminated.
+    let handle = unsafe { dlopen(library.as_ptr(), RTLD_NOW) };
+    assert!(!handle.is_null(), "dlopen failed for {library:?}");
+
+    // SAFETY: `handle` is live, and each symbol has the signature the header
+    // declares for it.
+    let (train, free, abi_version) = unsafe {
+        (
+            std::mem::transmute::<*mut c_void, TrainFn>(resolve(handle, c"neat_backprop_train")),
+            std::mem::transmute::<*mut c_void, FreeFn>(resolve(
+                handle,
+                c"neat_backprop_buffer_free",
+            )),
+            std::mem::transmute::<*mut c_void, AbiVersionFn>(resolve(
+                handle,
+                c"neat_backprop_abi_version",
+            )),
+        )
+    };
+    assert_ne!(
+        train as *const (), neat_backprop_train as *const (),
+        "the child must call the cdylib's symbol, not the rlib copy"
+    );
+
+    let mut out = NeatBackpropBuffer {
+        data: std::ptr::null_mut(),
+        len: 0,
+        capacity: 0,
+    };
+    // SAFETY: `request` outlives the call and `out` is a live buffer that owns
+    // nothing yet.
+    let status = unsafe { train(request.as_ptr(), request.len(), &raw mut out) };
+    assert!(!out.data.is_null(), "every call populates the out buffer");
+    // SAFETY: the library reported `out.len` readable bytes at `out.data`.
+    let payload = unsafe { std::slice::from_raw_parts(out.data, out.len) }.to_vec();
+    // SAFETY: `out` was produced by this library and has not been freed.
+    unsafe { free(&raw mut out) };
+
+    let result = json!({
+        "status": status,
+        "abiVersion": abi_version(),
+        "payload": String::from_utf8(payload).expect("payload is UTF-8"),
+    });
+    fs::write(result_path, result.to_string()).unwrap();
+}
+
+/// Sends `request` to the built cdylib from a child process and waits at most
+/// [`outer_bound`]; an overrun kills the child. Returns the status, the payload,
+/// the ABI version the library reported and the wall-clock time of the child.
+fn call_train_via_cdylib(library: &Path, request: &str) -> (i32, String, u32, Duration) {
+    let work = tempdir().unwrap();
+    let request_path = work.path().join("request.json");
+    let result_path = work.path().join("child-result.json");
+    fs::write(&request_path, request).unwrap();
+
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "cdylib_child_entry", "--nocapture"])
+        .env(CHILD_LIB_ENV, library)
+        .env(CHILD_REQUEST_ENV, &request_path)
+        .env(CHILD_RESULT_ENV, &result_path);
+    let (output, elapsed) = run_bounded(command, "cdylib child");
+    assert!(
+        output.status.success(),
+        "cdylib child exit {:?}: {}{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_str(
+        &fs::read_to_string(&result_path).expect("the cdylib child wrote no result"),
+    )
+    .unwrap();
+    (
+        i32::try_from(result["status"].as_i64().unwrap()).unwrap(),
+        result["payload"].as_str().unwrap().to_string(),
+        u32::try_from(result["abiVersion"].as_u64().unwrap()).unwrap(),
+        elapsed,
+    )
+}
+
+#[test]
+fn cdylib_deadline_stops_a_productive_first_epoch_mid_epoch() {
+    let (data, creature) = productive_fixture();
+    let out = tempdir().unwrap();
+    // Build first: the deadline is absolute, so a build after it would eat the budget.
+    let library = built_cdylib();
+
+    let deadline = system_epoch_ms() + DEADLINE_MS;
+    let request = json!({
+        "creatureJson": creature,
+        "trainingData": data.path(),
+        "outputDir": out.path(),
+        "epochs": 100,
+        "learningRate": 0.01,
+        "stepScale": 0.01,
+        "maxBacktracks": 0,
+        "seed": 7,
+        "deadlineEpochMs": deadline,
+    });
+    let (status, payload, abi_version, elapsed) =
+        call_train_via_cdylib(&library, &request.to_string());
+    assert_eq!(status, NEAT_BACKPROP_OK, "train failed: {payload}");
+    assert_eq!(abi_version, NEAT_BACKPROP_ABI_VERSION);
+    let response: TrainAbiResponse = serde_json::from_str(&payload).unwrap();
+
+    let records = assert_productive_response(&response, deadline, out.path());
+    assert_within_deadline_and_grace(elapsed);
+    eprintln!(
+        "cdylib productive: elapsed {} ms, partial records {records}",
+        elapsed.as_millis()
+    );
+}
+
+/// The fixture's sizing, measured: with no deadline, one epoch takes longer than
+/// the deadline, and the 100 epochs the productive tests request take longer
+/// than deadline plus grace. Without this the productive tests could pass on a
+/// fixture a deadline never interrupts.
+#[test]
+fn the_productive_fixture_outlasts_the_deadline_and_the_grace_window() {
+    let (data, creature) = productive_fixture();
+    let out = tempdir().unwrap();
+    let request = json!({
+        "creatureJson": creature,
+        "trainingData": data.path(),
+        "outputDir": out.path(),
+        "epochs": 1,
+        "learningRate": 0.01,
+        "stepScale": 0.01,
+        "maxBacktracks": 0,
+        "seed": 7,
+    });
+    let started = Instant::now();
+    let response = train_ok(&request);
+    let one_epoch = started.elapsed();
+
+    assert!(!response.timed_out, "no deadline was set");
+    assert_eq!(response.completed_epochs, 1);
+    assert!(
+        one_epoch > Duration::from_millis(2 * DEADLINE_MS),
+        "one epoch took {one_epoch:?}; a {DEADLINE_MS} ms deadline would not land inside it"
+    );
+    let requested = one_epoch * 100;
+    assert!(
+        requested > Duration::from_millis(DEADLINE_MS + GRACE_MS),
+        "100 epochs would take about {requested:?}, inside the deadline plus grace"
+    );
+    eprintln!(
+        "productive fixture: one uninterrupted epoch {} ms, 100 epochs about {} s",
+        one_epoch.as_millis(),
+        requested.as_secs()
     );
 }
 

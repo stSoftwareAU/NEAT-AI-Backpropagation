@@ -1075,8 +1075,9 @@ flowchart TD
 ```
 
 Native coverage: `backpropagation/tests/native_deadline.rs` runs the real C
-ABI and the real CLI against one productive fixture, each under an outer
-timeout, so a hang fails the test rather than stalling the suite.
+ABI, the built `cdylib` (loaded with `dlopen` in a child process) and the real
+CLI against one productive fixture, each under an outer timeout, so a hang
+fails the test rather than stalling the suite.
 
 ## C ABI — in-process `trainDir` (issue #84)
 
