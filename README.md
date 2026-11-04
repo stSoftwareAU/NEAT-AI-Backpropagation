@@ -966,6 +966,11 @@ epoch. In ladder mode, each rung's candidate error scan is also interrupted per
 figure, so the epoch is dropped and the incumbent kept. Previously accepted
 weights are always retained.
 
+When a scorer is configured but a timeout leaves changed weights without a
+best-creature score, `best.json` removes the input's `score`, `error` and
+`backpropagation` tags. Other tags are preserved; the old measurements do not
+describe the changed weights.
+
 `TrainResult` carries `baseline` and `best`, each an `ErrorMeasure`, in
 place of `baseline_mse` and `best_mse`:
 

@@ -398,6 +398,69 @@ fn expiry_during_accumulation_in_the_first_epoch_keeps_useful_partial_learning()
 }
 
 #[test]
+fn timed_out_changed_creature_drops_stale_scorer_tags() {
+    let data = corpus();
+    let stub_dir = tempdir().unwrap();
+    let calls = stub_dir.path().join("calls.txt");
+    let setup = Setup {
+        scorer: Some(write_stub_scorer(stub_dir.path(), &calls)),
+        ..Setup::default()
+    };
+    let (tick, _) = first_tick(
+        "accepted partial accumulation",
+        data.path(),
+        &setup,
+        |run| {
+            matches!(
+                run.result.status,
+                TrainStatus::TimedOut {
+                    phase: TimeoutPhase::Accumulation,
+                    completed_epochs: 0,
+                    weights_changed: true
+                }
+            )
+        },
+    );
+    let mut tagged: Value = serde_json::from_str(VALID).unwrap();
+    tagged["tags"] = serde_json::json!([
+        {"name":"score", "value":"0.34"},
+        {"name":"error", "value":"0.66"},
+        {"name":"backpropagation", "value":"old run"},
+        {"name":"lamarck", "value":"keep"}
+    ]);
+    let tagged = tagged.to_string();
+    let out = tempdir().unwrap();
+    let config = config_for(&setup);
+    let mut req = request(data.path(), out.path(), &config, &setup);
+    req.creature = TrainCreature::Json(&tagged);
+    let reads = Cell::new(0u64);
+    let deadline = Deadline::with_clock(tick, || {
+        reads.set(reads.get() + 1);
+        reads.get()
+    });
+    let result = run_train_until(req, Some(&deadline)).unwrap();
+    assert_eq!(result.accepted_epochs, 1);
+    assert!(result.best_score.is_none());
+    assert_ne!(parameters(&result.creature), parameters(&input_creature()));
+    let best_text = fs::read_to_string(out.path().join("best.json")).unwrap();
+    let best_creature = parse_creature_json(&best_text).unwrap();
+    assert_eq!(parameters(&best_creature), parameters(&result.creature));
+    let best: Value = serde_json::from_str(&best_text).unwrap();
+    let tags = best["tags"].as_array().unwrap();
+    for name in ["score", "error", "backpropagation"] {
+        assert!(
+            tags.iter().all(|tag| tag["name"] != name),
+            "stale {name}: {tags:?}"
+        );
+    }
+    assert!(
+        tags.iter()
+            .any(|tag| tag["name"] == "lamarck" && tag["value"] == "keep")
+    );
+    assert_eq!(launches(&calls), 0);
+}
+
+#[test]
 fn accumulation_expiring_before_any_record_journals_nothing() {
     let data = corpus();
     let setup = Setup::default();

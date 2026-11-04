@@ -1176,6 +1176,11 @@ pub fn run_train_until(
                 error: best.error,
                 opening_score: baseline.score,
             });
+        } else if timeout.is_some() && accepted_epochs > 0 && best_score.is_none() {
+            // The input's measurements describe different weights from the
+            // retained, unscored creature. Preserve unrelated pedigree tags.
+            meta.tags
+                .retain(|tag| !matches!(tag.name.as_str(), "score" | "error" | "backpropagation"));
         }
     }
 
