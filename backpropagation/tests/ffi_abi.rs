@@ -98,8 +98,10 @@ fn train_round_trips_a_tiny_creature_and_bin_dir() {
     assert_eq!(response.abi_version, NEAT_BACKPROP_ABI_VERSION);
     assert_eq!(response.version, env!("CARGO_PKG_VERSION"));
     assert_eq!(response.epochs, 1);
-    assert!(response.baseline_mse > 0.0);
-    assert!(response.best_mse <= response.baseline_mse);
+    let baseline_mse = response.baseline_mse.expect("full measure");
+    let best_mse = response.best_mse.expect("full measure");
+    assert!(baseline_mse > 0.0);
+    assert!(best_mse <= baseline_mse);
     assert!(response.baseline_score.is_none());
     assert!(response.best_score.is_none());
     assert!(response.best_trace_path.is_none());
@@ -133,15 +135,15 @@ fn train_accepts_an_improving_epoch() {
     assert_eq!(status, NEAT_BACKPROP_OK, "train failed: {payload}");
 
     let response: TrainAbiResponse = serde_json::from_str(&payload).unwrap();
+    let baseline_mse = response.baseline_mse.expect("full measure");
+    let best_mse = response.best_mse.expect("full measure");
     assert!(
         response.accepted_epochs > 0,
         "a learnable corpus must accept at least one epoch"
     );
     assert!(
-        response.best_mse < response.baseline_mse,
-        "accepted epochs must lower MSE: {} -> {}",
-        response.baseline_mse,
-        response.best_mse
+        best_mse < baseline_mse,
+        "accepted epochs must lower MSE: {baseline_mse} -> {best_mse}"
     );
 }
 
@@ -212,7 +214,9 @@ fn apply_filters_are_forwarded() {
 
     let response: TrainAbiResponse = serde_json::from_str(&payload).unwrap();
     assert_eq!(response.accepted_epochs, 0);
-    assert!((response.best_mse - response.baseline_mse).abs() < 1e-12);
+    let baseline_mse = response.baseline_mse.expect("full measure");
+    let best_mse = response.best_mse.expect("full measure");
+    assert!((best_mse - baseline_mse).abs() < 1e-12);
 }
 
 /// The whole-creature update budget is reachable over the ABI, not only from
