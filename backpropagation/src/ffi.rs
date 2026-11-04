@@ -17,23 +17,32 @@
 //! neat_backprop_version()     -> *const char  crate version, NUL-terminated
 //! neat_backprop_train(req, req_len, out) -> i32
 //! neat_backprop_buffer_free(out)
+//! neat_backprop_capabilities() -> *const char  capability JSON, NUL-terminated
 //! ```
+//!
+//! `neat_backprop_capabilities` is absent from older trainers, which have no
+//! deadline support (#214). A caller probes for it before sending
+//! `deadlineEpochMs`.
 //!
 //! See [`include/neat_ai_backpropagation.h`](../../../include/neat_ai_backpropagation.h)
 //! for the C declarations.
 
 use crate::backprop::{ApplyOptions, BackpropConfig, LearningRateStrategy};
+use crate::deadline::{Deadline, TimeoutPhase};
+use crate::mse::ErrorMeasure;
 use crate::scorer::ScoreResult;
 use crate::train::{
     BEST_TRACE_FILE, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, FAILED_TRACE_DIR,
-    TrainCreature, TrainRequest, resolve_acceptance, run_train,
+    TrainCreature, TrainRequest, TrainResult, TrainStatus, resolve_acceptance, run_train_until,
 };
 use crate::trust_region::TrustRegion;
+use serde::de::{Deserializer, Error as _};
 use serde::{Deserialize, Serialize};
-use std::ffi::c_char;
+use std::ffi::{CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::OnceLock;
 
 /// Revision of the wire contract in this module.
 ///
@@ -263,6 +272,13 @@ pub struct TrainAbiRequest {
     /// Optional NEAT-AI `traceStore` directory for `CreatureTrace` artefacts.
     #[serde(default)]
     pub trace_store: Option<PathBuf>,
+    /// Absolute deadline in milliseconds since the Unix epoch (#214).
+    ///
+    /// Same unit and expiry as [`Deadline::at_epoch_ms`]. Absent or `null` runs
+    /// unbounded. Once the deadline passes the run stops, keeps the learning it
+    /// has accepted, and reports `timedOut: true` with a `timeout` record.
+    #[serde(default, deserialize_with = "deserialize_deadline_epoch_ms")]
+    pub deadline_epoch_ms: Option<u64>,
 }
 
 impl Default for TrainAbiRequest {
@@ -293,8 +309,78 @@ impl Default for TrainAbiRequest {
             max_backtracks: default_max_backtracks(),
             scorer: None,
             trace_store: None,
+            deadline_epoch_ms: None,
         }
     }
+}
+
+/// Deserialise `deadlineEpochMs`: absent or `null` is unbounded, otherwise it
+/// must be a non-negative integer number of milliseconds (#214).
+///
+/// `serde_json::Value::as_u64` accepts only a non-negative integer, so a
+/// negative, fractional, string, boolean or object value is refused here rather
+/// than silently training unbounded.
+fn deserialize_deadline_epoch_ms<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => value.as_u64().map(Some).ok_or_else(|| {
+            D::Error::custom(format!(
+                "deadlineEpochMs must be a non-negative integer number of milliseconds since the Unix epoch, got {value}"
+            ))
+        }),
+    }
+}
+
+/// How an error figure was measured, as reported on the wire (#214).
+///
+/// Only `Full` is a whole-corpus score. `Partial` covers the records scored
+/// before a deadline, and `Unmeasured` means nothing was scored at all.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MeasureReport {
+    /// No record was scored before the deadline.
+    Unmeasured,
+    /// Scored over only the first `records` records before the deadline.
+    Partial {
+        /// Mean squared error over the `records` scored records.
+        mse: f64,
+        /// Records scored before the deadline expired.
+        records: u64,
+    },
+    /// Scored over every selected record.
+    Full {
+        /// Mean squared error over every selected record.
+        mse: f64,
+        /// Records in the selection.
+        records: u64,
+    },
+}
+
+impl From<ErrorMeasure> for MeasureReport {
+    fn from(measure: ErrorMeasure) -> Self {
+        match measure {
+            ErrorMeasure::Unmeasured => Self::Unmeasured,
+            ErrorMeasure::Partial { mse, records } => Self::Partial { mse, records },
+            ErrorMeasure::Full { mse, records } => Self::Full { mse, records },
+        }
+    }
+}
+
+/// Where and how a deadline cut a run short (#214).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeoutReport {
+    /// The trainer step at which expiry was observed.
+    pub phase: TimeoutPhase,
+    /// Journalled non-partial epochs completed before the deadline.
+    pub completed_epochs: u64,
+    /// Whether at least one epoch, full or partial, was accepted.
+    pub weights_changed: bool,
+    /// The absolute deadline the run was given, in milliseconds since the Unix epoch.
+    pub deadline_epoch_ms: u64,
 }
 
 /// JSON response from a successful [`train_from_json`] call.
@@ -307,10 +393,16 @@ pub struct TrainAbiResponse {
     pub version: String,
     /// Best creature JSON — the exact bytes written to `best.json`.
     pub best_creature_json: String,
-    /// Baseline MSE before any apply.
-    pub baseline_mse: f64,
-    /// Best MSE after the run.
-    pub best_mse: f64,
+    /// Baseline MSE before any apply. Present only when it was measured over the
+    /// whole corpus (`baselineMeasure.kind == "full"`); `null` otherwise.
+    pub baseline_mse: Option<f64>,
+    /// Best MSE after the run. Present only when it was measured over the whole
+    /// corpus (`bestMeasure.kind == "full"`); `null` otherwise.
+    pub best_mse: Option<f64>,
+    /// How the baseline error was measured: full, partial or unmeasured.
+    pub baseline_measure: MeasureReport,
+    /// How the best error was measured, with the same states as `baselineMeasure`.
+    pub best_measure: MeasureReport,
     /// Epochs that accepted an apply.
     pub accepted_epochs: u64,
     /// Epochs requested.
@@ -327,6 +419,13 @@ pub struct TrainAbiResponse {
     pub baseline_score: Option<ScoreResult>,
     /// Best-creature scorer result, when a scorer was supplied.
     pub best_score: Option<ScoreResult>,
+    /// Whether the deadline stopped the run before every epoch completed.
+    pub timed_out: bool,
+    /// Where and how the deadline cut the run short; `null` when it completed.
+    pub timeout: Option<TimeoutReport>,
+    /// Epochs completed: the requested count for a completed run, or the count
+    /// journalled at the deadline for a timed-out one.
+    pub completed_epochs: u64,
 }
 
 /// Run one `trainDir` epoch loop described by a JSON request.
@@ -341,12 +440,10 @@ pub fn train_from_json(request: &str) -> Result<String, String> {
     serde_json::to_string(&response).map_err(|e| format!("failed to encode train response: {e}"))
 }
 
-/// Refusal when an FFI run reports a non-`Full` error figure. The ABI passes no
-/// deadline, so this is a broken invariant, and it fails loudly rather than
-/// shipping a partial figure as a comparable number (#213).
-const FFI_FULL_MEASURE: &str = "train: error figure was not fully measured, which an FFI run without a deadline must not produce";
-
 /// Run one `trainDir` epoch loop from a decoded request.
+///
+/// A `deadlineEpochMs` bounds the run. A run that runs out of time still returns
+/// `Ok`, with `timedOut` set on the response (#214).
 pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
     // Refuses a scorer knob on an MSE run rather than ignoring it (#104).
     let acceptance = resolve_acceptance(
@@ -364,55 +461,101 @@ pub fn train(request: &TrainAbiRequest) -> Result<TrainAbiResponse, String> {
         normalise_gradients: request.normalise_gradients,
         ..BackpropConfig::default()
     };
-    let result = run_train(TrainRequest {
-        creature: TrainCreature::Json(&request.creature_json),
-        training_data: &request.training_data,
-        config: &config,
-        epochs: request.epochs,
-        max_records: request.max_records,
-        seed: request.seed,
-        disable_random_samples: request.disable_random_samples,
-        output_dir: &request.output_dir,
-        scorer: request.scorer.as_deref(),
-        apply: ApplyOptions {
-            step_scale: request.step_scale,
-            outputs_only: request.outputs_only,
-            hidden_only: request.hidden_only,
+    let deadline = request.deadline_epoch_ms.map(Deadline::at_epoch_ms);
+    let result = run_train_until(
+        TrainRequest {
+            creature: TrainCreature::Json(&request.creature_json),
+            training_data: &request.training_data,
+            config: &config,
+            epochs: request.epochs,
+            max_records: request.max_records,
+            seed: request.seed,
+            disable_random_samples: request.disable_random_samples,
+            output_dir: &request.output_dir,
+            scorer: request.scorer.as_deref(),
+            apply: ApplyOptions {
+                step_scale: request.step_scale,
+                outputs_only: request.outputs_only,
+                hidden_only: request.hidden_only,
+            },
+            trust_region: request.trust_region,
+            acceptance,
+            accept_always: request.accept_always,
+            max_backtracks: request.max_backtracks,
+            step_scale_ladder: &request.step_scale_ladder,
+            trace_store: request.trace_store.as_deref(),
         },
-        trust_region: request.trust_region,
-        acceptance,
-        accept_always: request.accept_always,
-        max_backtracks: request.max_backtracks,
-        step_scale_ladder: &request.step_scale_ladder,
-        trace_store: request.trace_store.as_deref(),
-    })?;
+        deadline.as_ref(),
+    )?;
 
+    Ok(build_train_response(
+        result,
+        request.epochs,
+        &request.output_dir,
+        request.trace_store.as_deref(),
+        request.deadline_epoch_ms,
+    ))
+}
+
+/// Build the ABI response from a finished run (#214).
+///
+/// Infallible, since `result` is already a complete outcome. `baselineMse` and
+/// `bestMse` are `Some` only for a `Full` measure, so a partial figure is never
+/// labelled a full-corpus score. `deadline_epoch_ms` is the deadline the run was
+/// given, if any, and is echoed in `timeout` when the run timed out.
+pub fn build_train_response(
+    result: TrainResult,
+    epochs: u64,
+    output_dir: &Path,
+    trace_store: Option<&Path>,
+    deadline_epoch_ms: Option<u64>,
+) -> TrainAbiResponse {
     // Only a run that asked for a trace store can claim these artefacts —
     // otherwise a stale file left in the output directory would be reported as
     // this run's trace.
-    let best_trace_path = request.trace_store.as_ref().and_then(|_| {
-        let path = request.output_dir.join(BEST_TRACE_FILE);
+    let best_trace_path = trace_store.and_then(|_| {
+        let path = output_dir.join(BEST_TRACE_FILE);
         path.is_file().then_some(path)
     });
-    let failed_trace_dir = request
-        .trace_store
-        .as_ref()
-        .map(|store| store.join(FAILED_TRACE_DIR));
-    Ok(TrainAbiResponse {
+    let failed_trace_dir = trace_store.map(|store| store.join(FAILED_TRACE_DIR));
+    let (timed_out, timeout, completed_epochs) = match result.status {
+        TrainStatus::Completed => (false, None, epochs),
+        TrainStatus::TimedOut {
+            phase,
+            completed_epochs,
+            weights_changed,
+        } => (
+            true,
+            Some(TimeoutReport {
+                phase,
+                completed_epochs,
+                weights_changed,
+                deadline_epoch_ms: deadline_epoch_ms
+                    .expect("a run only times out under a deadline"),
+            }),
+            completed_epochs,
+        ),
+    };
+    TrainAbiResponse {
         abi_version: NEAT_BACKPROP_ABI_VERSION,
         version: env!("CARGO_PKG_VERSION").to_string(),
         best_creature_json: result.best_json,
-        baseline_mse: result.baseline.full_mse().ok_or(FFI_FULL_MEASURE)?,
-        best_mse: result.best.full_mse().ok_or(FFI_FULL_MEASURE)?,
+        baseline_mse: result.baseline.full_mse(),
+        best_mse: result.best.full_mse(),
+        baseline_measure: result.baseline.into(),
+        best_measure: result.best.into(),
         accepted_epochs: result.accepted_epochs,
-        epochs: request.epochs,
-        best_path: request.output_dir.join("best.json"),
-        journal_path: request.output_dir.join("journal.jsonl"),
+        epochs,
+        best_path: output_dir.join("best.json"),
+        journal_path: output_dir.join("journal.jsonl"),
         best_trace_path,
         failed_trace_dir: failed_trace_dir.filter(|dir| dir.is_dir()),
         baseline_score: result.baseline_score,
         best_score: result.best_score,
-    })
+        timed_out,
+        timeout,
+        completed_epochs,
+    }
 }
 
 /// ABI revision this library implements ([`NEAT_BACKPROP_ABI_VERSION`]).
@@ -428,6 +571,48 @@ pub extern "C" fn neat_backprop_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn neat_backprop_version() -> *const c_char {
     VERSION_WITH_NUL.as_ptr().cast::<c_char>()
+}
+
+/// Revision of the deadline capability advertised by [`capabilities_json`] (#214).
+pub const NEAT_BACKPROP_DEADLINE_CAPABILITY_VERSION: u32 = 1;
+
+/// File name the CLI writes the run's [`TrainAbiResponse`] to, inside the output
+/// directory, beside `best.json` (#214).
+pub const TRAIN_RESULT_FILE: &str = "result.json";
+
+/// The compact capability probe document: the ABI revision, the crate version,
+/// and the optional capabilities this build supports (#214).
+pub fn capabilities_json() -> String {
+    serde_json::json!({
+        "abiVersion": NEAT_BACKPROP_ABI_VERSION,
+        "version": env!("CARGO_PKG_VERSION"),
+        "capabilities": {
+            "deadline": {
+                "version": NEAT_BACKPROP_DEADLINE_CAPABILITY_VERSION,
+                "requestField": "deadlineEpochMs",
+                "cliFlag": "--deadline-epoch-ms",
+                "unit": "epochMilliseconds",
+                "resultFile": TRAIN_RESULT_FILE,
+            }
+        }
+    })
+    .to_string()
+}
+
+/// Capability probe: the [`capabilities_json`] document as a static
+/// NUL-terminated UTF-8 string (#214).
+///
+/// A library that does not export this symbol is an older trainer with no
+/// deadline support, so a caller must not send `deadlineEpochMs` to it. The
+/// pointer is valid for the life of the loaded library and must not be freed.
+#[unsafe(no_mangle)]
+pub extern "C" fn neat_backprop_capabilities() -> *const c_char {
+    static CAPABILITIES: OnceLock<CString> = OnceLock::new();
+    CAPABILITIES
+        .get_or_init(|| {
+            CString::new(capabilities_json()).expect("capabilities JSON holds no NUL byte")
+        })
+        .as_ptr()
 }
 
 /// Run one `trainDir` epoch loop and write the JSON response into `out`.
@@ -663,5 +848,137 @@ mod tests {
         // SAFETY: the probe hands back a static NUL-terminated string.
         let text = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str().unwrap();
         assert_eq!(text, env!("CARGO_PKG_VERSION"));
+    }
+
+    /// A request with no `deadlineEpochMs` is unbounded, as it always was (#214).
+    #[test]
+    fn deadline_epoch_ms_defaults_to_unbounded() {
+        let request: TrainAbiRequest =
+            serde_json::from_str(r#"{"creatureJson":"{}","trainingData":"d","outputDir":"o"}"#)
+                .unwrap();
+        assert_eq!(request.deadline_epoch_ms, None);
+        assert_eq!(TrainAbiRequest::default().deadline_epoch_ms, None);
+    }
+
+    #[test]
+    fn deadline_epoch_ms_parses_an_absolute_epoch_millisecond() {
+        let request: TrainAbiRequest = serde_json::from_str(
+            r#"{"creatureJson":"{}","trainingData":"d","outputDir":"o","deadlineEpochMs":1700000000000}"#,
+        )
+        .unwrap();
+        assert_eq!(request.deadline_epoch_ms, Some(1_700_000_000_000));
+    }
+
+    /// `null` is the explicit spelling of "no deadline" and must not be an error.
+    #[test]
+    fn a_null_deadline_is_unbounded() {
+        let request: TrainAbiRequest = serde_json::from_str(
+            r#"{"creatureJson":"{}","trainingData":"d","outputDir":"o","deadlineEpochMs":null}"#,
+        )
+        .unwrap();
+        assert_eq!(request.deadline_epoch_ms, None);
+    }
+
+    /// A deadline that is not a non-negative integer must fail the call rather
+    /// than train unbounded (#214).
+    #[test]
+    fn a_malformed_deadline_fails_loudly() {
+        for value in ["-5", "1.5", "\"soon\"", "true", "{}"] {
+            let text = format!(
+                r#"{{"creatureJson":"{{}}","trainingData":"d","outputDir":"o","deadlineEpochMs":{value}}}"#
+            );
+            let err = train_from_json(&text).unwrap_err();
+            assert!(
+                err.starts_with("invalid train request JSON"),
+                "unexpected error for {value}: {err}"
+            );
+            assert!(
+                err.contains("deadlineEpochMs"),
+                "unexpected error for {value}: {err}"
+            );
+        }
+    }
+
+    /// The wire report keeps the three measure states apart, and only a `Full`
+    /// figure can populate the `baselineMse` / `bestMse` scalars (#214).
+    #[test]
+    fn measure_reports_keep_partial_and_unmeasured_apart_from_full() {
+        assert_eq!(
+            MeasureReport::from(ErrorMeasure::Unmeasured),
+            MeasureReport::Unmeasured
+        );
+        assert_eq!(
+            MeasureReport::from(ErrorMeasure::Partial {
+                mse: 0.5,
+                records: 3
+            }),
+            MeasureReport::Partial {
+                mse: 0.5,
+                records: 3
+            }
+        );
+        assert_eq!(
+            MeasureReport::from(ErrorMeasure::Full {
+                mse: 0.25,
+                records: 8
+            }),
+            MeasureReport::Full {
+                mse: 0.25,
+                records: 8
+            }
+        );
+
+        assert_eq!(ErrorMeasure::Unmeasured.full_mse(), None);
+        assert_eq!(
+            ErrorMeasure::Partial {
+                mse: 0.5,
+                records: 3
+            }
+            .full_mse(),
+            None,
+            "a partial figure must not become a full-corpus score"
+        );
+        assert_eq!(
+            ErrorMeasure::Full {
+                mse: 0.25,
+                records: 8
+            }
+            .full_mse(),
+            Some(0.25)
+        );
+
+        let partial = serde_json::to_value(MeasureReport::from(ErrorMeasure::Partial {
+            mse: 0.5,
+            records: 3,
+        }))
+        .unwrap();
+        assert_eq!(
+            partial,
+            serde_json::json!({"kind": "partial", "mse": 0.5, "records": 3})
+        );
+    }
+
+    /// The capability probe parses, names this ABI and the deadline revision,
+    /// and the static C pointer hands back the same document (#214).
+    #[test]
+    fn capabilities_probe_matches_the_wire_contract() {
+        let caps: serde_json::Value = serde_json::from_str(&capabilities_json()).unwrap();
+        assert_eq!(
+            caps["abiVersion"],
+            serde_json::json!(NEAT_BACKPROP_ABI_VERSION)
+        );
+        assert_eq!(
+            caps["capabilities"]["deadline"]["version"],
+            serde_json::json!(NEAT_BACKPROP_DEADLINE_CAPABILITY_VERSION)
+        );
+        assert_eq!(
+            caps["capabilities"]["deadline"]["requestField"],
+            serde_json::json!("deadlineEpochMs")
+        );
+
+        let ptr = neat_backprop_capabilities();
+        // SAFETY: the probe returns a static NUL-terminated string.
+        let text = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str().unwrap();
+        assert_eq!(text, capabilities_json());
     }
 }

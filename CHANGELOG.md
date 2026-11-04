@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The cooperative train deadline reaches the C ABI and the CLI (issue #214). The
+  C ABI request gains an optional `"deadlineEpochMs"`, a non-negative integer in
+  whole milliseconds since the Unix epoch; `null` or omitted is unbounded. The
+  CLI gains `train --deadline-epoch-ms <MS>` with the same unit and semantics.
+  Invalid values are rejected: the C ABI returns `NEAT_BACKPROP_ERR_INVALID_ARGUMENT`
+  with a message that names `deadlineEpochMs`, and the CLI fails with a clap error
+  that names `--deadline-epoch-ms`. Every response carries `timedOut`, `timeout`,
+  `completedEpochs`, `baselineMeasure` and `bestMeasure`. `baselineMse` and
+  `bestMse` become nullable: a number only for a `full` measure, `null` for
+  `partial` or `unmeasured`. Without a deadline they stay numbers. A timed-out run
+  returns OK with the best creature found so far. Every `train` run writes
+  `<output-dir>/result.json`, the same object as the C ABI response, and a
+  timed-out CLI run prints a stderr line and exits 0. The new
+  `neat_backprop_capabilities()` symbol and `capabilities` subcommand report the
+  `deadline` capability (version 1). The ABI version stays `1`, because the
+  change is additive. Old callers and old engines keep the legacy behaviour, and
+  `backpropagation/tests/native_deadline.rs` runs the real C ABI and CLI against
+  one productive fixture under an outer timeout (issue #214).
+
 - `run_train_until(req, deadline: Option<&Deadline>)` bounds native training by
   a cooperative wall-clock deadline. `Deadline` (module `deadline`) is an
   absolute instant in milliseconds since the Unix epoch: `Deadline::at_epoch_ms`
@@ -37,9 +56,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A timed-out run ends `journal.jsonl` with a final `{"kind":"timedOut",...}`
   line, written only on a timed-out run, carrying `phase`, `completedEpochs`,
   `weightsChanged` and `deadlineEpochMs`. Epoch lines gain `partial`, which
-  defaults to `false` when absent (issue #213). The C ABI request and response
-  and the CLI flags are unchanged; the C ABI and CLI do not yet expose the
-  deadline or timeout fields.
+  defaults to `false` when absent (issue #213). The C ABI and CLI expose the
+  deadline in issue #214 (above).
 
 - `security.yml` installs the prebuilt, checksum-verified `cargo-audit` with
   `taiki-e/install-action` before `rustsec/audit-check`, which otherwise

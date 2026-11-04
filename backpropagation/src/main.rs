@@ -5,6 +5,8 @@ use neat_ai_backpropagation::backprop::{ApplyOptions, BackpropConfig, LearningRa
 use neat_ai_backpropagation::blocks::{BlockPlan, BlockStrategy};
 use neat_ai_backpropagation::blockwise::{BlocksRequest, run_blocks};
 use neat_ai_backpropagation::compare::{diff_compare_dumps, load_compare_dump, run_compare};
+use neat_ai_backpropagation::deadline::Deadline;
+use neat_ai_backpropagation::ffi::{TRAIN_RESULT_FILE, build_train_response, capabilities_json};
 use neat_ai_backpropagation::gradient_check::{
     GradientCheckRequest, run_gradient_check, summary_text,
 };
@@ -13,7 +15,7 @@ use neat_ai_backpropagation::sweep::{SweepRequest, run_sweep};
 use neat_ai_backpropagation::targets::{TargetPlan, TargetStrategy};
 use neat_ai_backpropagation::train::{
     AcceptanceMode, DEFAULT_MIN_SCORE_IMPROVEMENT, DEFAULT_STEP_SCALE, TrainCreature, TrainRequest,
-    default_output_dir, resolve_acceptance, run_train,
+    default_output_dir, resolve_acceptance, run_train_until,
 };
 use neat_ai_backpropagation::trust_region::TrustRegion;
 use std::path::PathBuf;
@@ -353,6 +355,13 @@ enum Commands {
         /// store. Omit to write no traces.
         #[arg(long)]
         trace_store: Option<PathBuf>,
+        /// Absolute deadline in milliseconds since the Unix epoch (#214).
+        ///
+        /// The same unit and expiry as the C ABI `deadlineEpochMs`. Once it
+        /// passes the run stops, keeps the learning it has accepted, and writes
+        /// `result.json` with `timedOut` set. Omit for an unbounded run.
+        #[arg(long)]
+        deadline_epoch_ms: Option<u64>,
     },
     /// Accumulate once, then apply the same learning at many step scales.
     Sweep {
@@ -462,6 +471,10 @@ enum Commands {
         #[arg(long, default_value_os_t = default_output_dir())]
         output_dir: PathBuf,
     },
+    /// Print the JSON capability probe (including deadline support) and exit (#214).
+    ///
+    /// An older build without this subcommand has no deadline support.
+    Capabilities,
 }
 
 fn main() -> ExitCode {
@@ -557,6 +570,7 @@ fn run() -> Result<(), String> {
             scorer,
             output_dir,
             trace_store,
+            deadline_epoch_ms,
         } => {
             let cfg = train_backprop_config(
                 &rate,
@@ -578,28 +592,32 @@ fn run() -> Result<(), String> {
                 trust_region_weight_l2,
                 trust_region_max_genes,
             );
-            let result = run_train(TrainRequest {
-                creature: TrainCreature::Path(&creature),
-                training_data: &training_data,
-                config: &cfg,
-                epochs,
-                max_records: corpus.max_records,
-                seed: corpus.seed,
-                disable_random_samples,
-                output_dir: &output_dir,
-                scorer: scorer.as_deref(),
-                apply: ApplyOptions {
-                    step_scale,
-                    outputs_only: scope.outputs_only,
-                    hidden_only: scope.hidden_only,
+            let deadline = deadline_epoch_ms.map(Deadline::at_epoch_ms);
+            let result = run_train_until(
+                TrainRequest {
+                    creature: TrainCreature::Path(&creature),
+                    training_data: &training_data,
+                    config: &cfg,
+                    epochs,
+                    max_records: corpus.max_records,
+                    seed: corpus.seed,
+                    disable_random_samples,
+                    output_dir: &output_dir,
+                    scorer: scorer.as_deref(),
+                    apply: ApplyOptions {
+                        step_scale,
+                        outputs_only: scope.outputs_only,
+                        hidden_only: scope.hidden_only,
+                    },
+                    trust_region,
+                    acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen)?,
+                    accept_always,
+                    max_backtracks,
+                    step_scale_ladder: &ladder,
+                    trace_store: trace_store.as_deref(),
                 },
-                trust_region,
-                acceptance: acceptance.to_config(min_score_improvement, mse_pre_screen)?,
-                accept_always,
-                max_backtracks,
-                step_scale_ladder: &ladder,
-                trace_store: trace_store.as_deref(),
-            })?;
+                deadline.as_ref(),
+            )?;
             let show =
                 |mse: Option<f64>| mse.map_or_else(|| "n/a".to_string(), |v| format!("{v:.12}"));
             eprintln!(
@@ -616,6 +634,28 @@ fn run() -> Result<(), String> {
                     a.score - b.score
                 );
             }
+            let response = build_train_response(
+                result,
+                epochs,
+                &output_dir,
+                trace_store.as_deref(),
+                deadline_epoch_ms,
+            );
+            if let Some(timeout) = &response.timeout {
+                eprintln!(
+                    "train: timed out at {:?} completed_epochs={} weights_changed={} deadline_epoch_ms={}",
+                    timeout.phase,
+                    timeout.completed_epochs,
+                    timeout.weights_changed,
+                    timeout.deadline_epoch_ms
+                );
+            }
+            let result_path = output_dir.join(TRAIN_RESULT_FILE);
+            let body = serde_json::to_string(&response)
+                .map_err(|e| format!("failed to encode train result: {e}"))?;
+            std::fs::write(&result_path, body)
+                .map_err(|e| format!("failed to write {}: {e}", result_path.display()))?;
+            eprintln!("train: wrote {}", result_path.display());
             Ok(())
         }
         Commands::Sweep {
@@ -777,6 +817,10 @@ fn run() -> Result<(), String> {
                     c.class, c.sampled, c.scored, c.sign_agree_pct
                 );
             }
+            Ok(())
+        }
+        Commands::Capabilities => {
+            println!("{}", capabilities_json());
             Ok(())
         }
     }
@@ -1425,6 +1469,58 @@ mod tests {
         assert!((cfg.maximum_weight_adjustment_scale - 3.0).abs() < 1e-12);
         assert_eq!(cfg.learning_rate_strategy, LearningRateStrategy::Fixed);
         assert!(!cfg.normalise_gradients);
+    }
+
+    /// `--deadline-epoch-ms` is an absolute Unix-epoch millisecond, and an
+    /// unbounded run is the default (#214).
+    #[test]
+    fn train_deadline_flag_parses_an_absolute_epoch_millisecond() {
+        let Commands::Train {
+            deadline_epoch_ms, ..
+        } = parse_train(&["--deadline-epoch-ms", "1700000000000"])
+        else {
+            panic!("expected train");
+        };
+        assert_eq!(deadline_epoch_ms, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn train_deadline_is_unbounded_unless_asked_for() {
+        let Commands::Train {
+            deadline_epoch_ms, ..
+        } = parse_train(&[])
+        else {
+            panic!("expected train");
+        };
+        assert_eq!(deadline_epoch_ms, None);
+    }
+
+    /// A negative or non-numeric deadline is refused by the parser, not run
+    /// unbounded (#214).
+    #[test]
+    fn train_deadline_rejects_negative_and_non_numeric_values() {
+        for value in ["--deadline-epoch-ms=-5", "--deadline-epoch-ms=abc"] {
+            let err = Cli::try_parse_from([
+                "neat_ai_backpropagation",
+                "train",
+                "creature.json",
+                "data",
+                value,
+            ])
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("--deadline-epoch-ms"),
+                "unexpected error for {value}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn capabilities_subcommand_parses() {
+        assert!(matches!(
+            Cli::parse_from(["neat_ai_backpropagation", "capabilities"]).command,
+            Commands::Capabilities
+        ));
     }
 
     #[test]

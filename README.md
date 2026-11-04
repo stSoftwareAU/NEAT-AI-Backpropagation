@@ -996,12 +996,87 @@ carrying the keys `phase`, `completedEpochs`, `weightsChanged` and
 The CLI keeps its `train: baseline_mse=… best_mse=…` line format and prints
 `n/a` where there is no full measurement.
 
-Not yet: the C ABI and the CLI do not expose the deadline or timeout fields.
-The C ABI request and response and the CLI flags are unchanged. The journal
-is not: `journal.jsonl` gains the final `timedOut` line on a timed-out run and
-the `partial` field on epoch lines. A reader that treats a missing `partial`
-as not partial sees full epochs as before. The dependent adapter work will add
-the deadline fields to the C ABI and CLI.
+#### Deadline in the C ABI and CLI (issue #214)
+
+The C ABI and the CLI expose the same absolute deadline, in whole
+milliseconds since the Unix epoch, as a non-negative integer:
+
+- C ABI: request field `"deadlineEpochMs"`. `null` or omitted is unbounded.
+- CLI: `train --deadline-epoch-ms <MS>`, same unit and semantics.
+
+The deadline is absolute, so a caller forwards it without restarting a
+budget. A value of `0` or `1` is already expired, and expiry before any work
+returns an honest no-progress result. A negative, fractional, string or other
+non-integer value is rejected. The C ABI returns
+`NEAT_BACKPROP_ERR_INVALID_ARGUMENT` with a message that begins
+`invalid train request JSON` and names `deadlineEpochMs`. The CLI fails with
+a clap error that names `--deadline-epoch-ms` and exits non-zero.
+
+The deadline is cooperative, with the same check points as the #213 section
+above. A running 32-record batch or scorer process is not preempted.
+
+Every response and every `train` run carries the new fields:
+
+- `timedOut` (bool) and `timeout`, which is `null` unless the run timed out.
+  Otherwise `timeout` is `{"phase", "completedEpochs", "weightsChanged",
+  "deadlineEpochMs"}`.
+- `completedEpochs`.
+- `baselineMeasure` and `bestMeasure`, each one of the kinds below.
+
+| Measure | Meaning | `baselineMse` / `bestMse` |
+| ------- | ------- | ------------------------- |
+| `{"kind":"full","mse","records"}` | The whole selection was measured | number |
+| `{"kind":"partial","mse","records"}` | Mean over only the first `records`; not comparable to a full-corpus figure | `null` |
+| `{"kind":"unmeasured"}` | Nothing was scored; no value is invented | `null` |
+
+Without a deadline, `baselineMse` and `bestMse` are always numbers, as before.
+A timed-out run still returns OK with the best creature found so far. Its
+`bestCreatureJson` holds the learned weights from accepted partial epochs, and
+equals the input when `weightsChanged` is false.
+
+The CLI writes `<output-dir>/result.json` on every `train` run. It holds the
+same JSON object as the C ABI response. `train` leaves stdout empty. A
+timed-out CLI run prints a line to stderr and exits `0`. A `capabilities`
+subcommand prints the capability JSON to stdout.
+
+##### Capability probe
+
+`const char *neat_backprop_capabilities(void)` returns this static JSON. The
+CLI prints the same JSON from `capabilities`:
+
+```json
+{"abiVersion":1,"version":"0.1.17","capabilities":{"deadline":{"version":1,"requestField":"deadlineEpochMs","cliFlag":"--deadline-epoch-ms","unit":"epochMilliseconds","resultFile":"result.json"}}}
+```
+
+The ABI version stays `1`, because the change is additive. A caller must not
+send `deadlineEpochMs` or `--deadline-epoch-ms` unless it has probed for the
+capability. An old library lacks the symbol and rejects unknown request
+fields. An old CLI lacks the `capabilities` subcommand and rejects unknown
+flags.
+
+##### Compatibility matrix
+
+| Caller | Engine | Deadline sent | Outcome |
+| ------ | ------ | ------------- | ------- |
+| Old | Old | No, the caller cannot send one | Legacy behaviour |
+| Old | New | No, the caller does not know the field | Legacy behaviour. The new response fields are additive and ignored |
+| New | Old | Must not be sent. The probe finds no `neat_backprop_capabilities` symbol | The old engine rejects `deadlineEpochMs` as an unknown field. The caller must probe and diagnose. The fallback lives in the NEAT-AI adapter, not in this repository |
+| New | New | Yes, once the probe reports `deadline` version `1` | A bounded run. A timed-out run returns OK with the best creature so far |
+
+```mermaid
+flowchart TD
+    P["Caller probes capability"] --> Q{"deadline v1 reported?"}
+    Q -->|no| L["Send no deadline<br/>(legacy behaviour)"]
+    Q -->|yes| R["Send absolute deadlineEpochMs"]
+    R --> S["Engine checks at the issue 213 points"]
+    S --> T{"Deadline expired?"}
+    T -->|no| U["Completed: timedOut false, timeout null"]
+    T -->|yes| V["OK with timedOut true<br/>and the best creature so far"]
+```
+
+Native coverage: `backpropagation/tests/native_deadline.rs` runs the real C
+ABI and the real CLI against one productive fixture, each under an outer
+timeout, so a hang fails the test rather than stalling the suite.
 
 ## C ABI — in-process `trainDir` (issue #84)
 
@@ -1023,6 +1098,7 @@ the implementation is `backpropagation/src/ffi.rs`.
 | ------ | ------- |
 | `neat_backprop_abi_version() -> uint32_t` | Wire-contract revision (currently `1`) |
 | `neat_backprop_version() -> const char *` | Static NUL-terminated crate version |
+| `neat_backprop_capabilities() -> const char *` | Static NUL-terminated capability JSON; probe before sending `deadlineEpochMs` (issue #214) |
 | `neat_backprop_train(request, request_len, out) -> int32_t` | One `trainDir` run |
 | `neat_backprop_buffer_free(buffer)` | Release a buffer the library produced |
 
@@ -1045,10 +1121,21 @@ scorer-guided acceptance (#104), step-scale ladder (#106) and
 trust-region budget (#109) work is reachable from the ABI, not only from
 the CLI. An unknown field is rejected rather than ignored.
 
+`deadlineEpochMs` (issue #214) is the one optional field with no CLI
+default. It is an absolute deadline in whole milliseconds since the Unix
+epoch, a non-negative integer. `null` or omitted is unbounded. Any other
+value is rejected with status `1`. See
+[Deadline in the C ABI and CLI](#deadline-in-the-c-abi-and-cli-issue-214).
+
 The response carries `bestCreatureJson` (the exact bytes written to
-`best.json`), `baselineMse`, `bestMse`, `acceptedEpochs`, the `bestPath` /
-`journalPath` written, the trace artefact paths when a store was
-requested, and the scorer results when a scorer was supplied.
+`best.json`), `acceptedEpochs`, the `bestPath` / `journalPath` written, the
+trace artefact paths when a store was requested, and the scorer results when
+a scorer was supplied. It always carries `timedOut`, `timeout`,
+`completedEpochs`, `baselineMeasure` and `bestMeasure`, and `baselineMse` and
+`bestMse`, which are nullable from issue #214. A `baselineMse` or `bestMse`
+is a number only when its measure is `full`, and is `null` for `partial` or
+`unmeasured` (see the table in the deadline section above). Without a
+deadline both are always numbers, as before.
 
 Failure is loud at every step: a null pointer, non-UTF-8 bytes, malformed
 JSON, a trainer error, or a panic caught at the boundary all return a
@@ -1061,7 +1148,7 @@ sequenceDiagram
     participant Lib as libneat_ai_backpropagation
     participant Train as run_train
     Deno->>Lib: neat_backprop_train(request JSON bytes, out)
-    Lib->>Lib: decode request (unknown field → status 1)
+    Lib->>Lib: decode request (unknown field or invalid deadlineEpochMs → status 1)
     Lib->>Train: TrainCreature::Json + TrainRequest
     Train-->>Lib: TrainResult / Err(message)
     Lib-->>Deno: status + owned buffer (response JSON or error)
@@ -1071,7 +1158,7 @@ sequenceDiagram
 | Status | Meaning |
 | ------ | ------- |
 | `0` `NEAT_BACKPROP_OK` | Buffer holds the response JSON |
-| `1` `NEAT_BACKPROP_ERR_INVALID_ARGUMENT` | Null / non-UTF-8 / malformed request |
+| `1` `NEAT_BACKPROP_ERR_INVALID_ARGUMENT` | Null / non-UTF-8 / malformed request, or an invalid `deadlineEpochMs` |
 | `2` `NEAT_BACKPROP_ERR_TRAIN_FAILED` | The trainer failed; buffer holds its message |
 | `3` `NEAT_BACKPROP_ERR_PANIC` | A panic was caught at the boundary |
 
