@@ -1045,7 +1045,7 @@ subcommand prints the capability JSON to stdout.
 CLI prints the same JSON from `capabilities`:
 
 ```json
-{"abiVersion":1,"version":"0.1.17","capabilities":{"deadline":{"version":1,"requestField":"deadlineEpochMs","cliFlag":"--deadline-epoch-ms","unit":"epochMilliseconds","resultFile":"result.json"}}}
+{"abiVersion":1,"version":"<crate version>","capabilities":{"deadline":{"version":1,"requestField":"deadlineEpochMs","cliFlag":"--deadline-epoch-ms","unit":"epochMilliseconds","resultFile":"result.json"}}}
 ```
 
 The ABI version stays `1`, because the change is additive. A caller must not

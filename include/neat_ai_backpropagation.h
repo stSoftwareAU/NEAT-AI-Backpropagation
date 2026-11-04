@@ -29,8 +29,8 @@
  *   unaffected.
  * - The CLI follows the same rule: an old CLI rejects `--deadline-epoch-ms` and
  *   has no `capabilities` subcommand.
- * - The README section "C ABI — in-process `trainDir`" has the compatibility
- *   matrix.
+ * - The README subsection "Deadline in the C ABI and CLI (issue #214)" has the
+ *   compatibility matrix.
  *
  * Copyright the NEAT-AI-Backpropagation authors. Licensed under Apache-2.0.
  */
