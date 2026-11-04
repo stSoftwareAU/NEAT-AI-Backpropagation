@@ -905,6 +905,104 @@ flowchart LR
     C --> D[consumer re-derives<br/>uuid from content]
 ```
 
+### Train deadline and partial results (issue #213)
+
+`train` can be bounded by a wall-clock deadline, so a caller gets control
+back in time instead of waiting for the whole corpus. The core entry point
+is `run_train_until(req, deadline: Option<&Deadline>)`. `run_train(req)` is
+unchanged and equals `run_train_until(req, None)`: with no deadline, the
+existing unbounded behaviour, acceptance and validation apply.
+
+`Deadline` (module `deadline`) is an absolute instant in milliseconds since
+the Unix epoch, held as a `u64`. `Deadline::at_epoch_ms(ms)` reads the system
+clock; `Deadline::with_clock(ms, clock)` injects a clock for deterministic
+tests. A deadline is expired once the clock reads `ms` or later. A system
+clock before 1970 reads `0`, so it never expires early, and overflow
+saturates.
+
+The deadline is **cooperative**. Nothing preempts a running scorer process
+or a single batch; the run notices expiry only at the check points below.
+Expiry starts no new unbounded scan, and a timed-out run never re-scores the
+corpus.
+
+The candidate branch `issue-neat-ai-4073-train-deadline` checked the deadline
+only at epoch boundaries (a check before each epoch). That is not sufficient,
+so the deadline is checked inside the epoch, at the check points below.
+
+```mermaid
+flowchart TD
+    A["check: entry"] --> B["check: each 32-record batch<br/>of baseline error"]
+    B --> C["check: epoch top"]
+    C --> D["check: each accumulated record"]
+    D --> E["check: each 32-record batch of candidate error<br/>(plain MSE and each ladder rung)"]
+    E --> F["check: before each backtracking retry"]
+    F --> G["check: before every external scorer launch"]
+    G --> H["Completed, or TimedOut<br/>with a timedOut journal line"]
+```
+
+The chain is simplified: the record, batch and retry checks repeat.
+Any check that finds the deadline expired stops the run as `TimedOut` at
+that point.
+
+When expiry cuts accumulation short under plain MSE acceptance, the learning
+from the records already read is applied **once**, with no backtracking. If
+accumulation completed but the deadline expired before or during the candidate
+error scan, the epoch's learning is applied **once** instead, again with no
+backtracking. Either way the candidate is verified over the first *N* records,
+where *N* = min(records read, 256), and the epoch is journalled with
+`partial: true`. That is a bounded comparison of two actual measurements, not
+a full-corpus figure.
+
+Under plain MSE the partial candidate is kept **only if it lowers the error on
+those same *N* records**. The one exception is `--accept-always`
+(`accept_always`), which keeps the verified candidate even when it did not
+lower the error. `--accept-always` is refused under scorer acceptance, so the
+exception does not arise there.
+
+Scorer-guided and ladder modes do not take this path. In scorer-guided
+acceptance, an interrupted candidate scan keeps the incumbent and records no
+epoch. In ladder mode, each rung's candidate error scan is also interrupted per
+32-record batch. A rung whose scan is cut short is never judged on its partial
+figure, so the epoch is dropped and the incumbent kept. Previously accepted
+weights are always retained.
+
+When a scorer is configured but a timeout leaves changed weights without a
+best-creature score, `best.json` removes the input's `score`, `error` and
+`backpropagation` tags. Other tags are preserved; the old measurements do not
+describe the changed weights.
+
+`TrainResult` carries `baseline` and `best`, each an `ErrorMeasure`, in
+place of `baseline_mse` and `best_mse`:
+
+| Variant | Meaning |
+| ------- | ------- |
+| `Full { mse, records }` | The whole selection was measured |
+| `Partial { mse, records }` | Only the first *N* records were measured; not comparable to a `Full` figure |
+| `Unmeasured` | Nothing was scored; no error value is invented |
+
+`TrainResult` also carries `status: TrainStatus`, either `Completed` or
+`TimedOut { phase, completed_epochs, weights_changed }`. The `phase` is one of
+`start`, `baselineEvaluation`, `epochStart`, `accumulation`,
+`candidateEvaluation`, `backtracking` or `scoring`. `completed_epochs` counts
+the journalled non-partial epochs, including one whose backtracking search was
+cut short; partial epochs are journalled but not counted. To tell whether a run
+timed out, read `TrainResult.status`.
+
+A timed-out run ends `journal.jsonl` with a final line `"kind":"timedOut"`
+carrying the keys `phase`, `completedEpochs`, `weightsChanged` and
+`deadlineEpochMs`. Only a timed-out run writes that line. Epoch lines gain
+`partial`, which defaults to `false` when absent.
+
+The CLI keeps its `train: baseline_mse=… best_mse=…` line format and prints
+`n/a` where there is no full measurement.
+
+Not yet: the C ABI and the CLI do not expose the deadline or timeout fields.
+The C ABI request and response and the CLI flags are unchanged. The journal
+is not: `journal.jsonl` gains the final `timedOut` line on a timed-out run and
+the `partial` field on epoch lines. A reader that treats a missing `partial`
+as not partial sees full epochs as before. The dependent adapter work will add
+the deadline fields to the C ABI and CLI.
+
 ## C ABI — in-process `trainDir` (issue #84)
 
 NEAT-AI reached this crate by **spawning** the CLI, which costs a process

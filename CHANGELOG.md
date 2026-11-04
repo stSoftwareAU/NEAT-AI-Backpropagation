@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `run_train_until(req, deadline: Option<&Deadline>)` bounds native training by
+  a cooperative wall-clock deadline. `Deadline` (module `deadline`) is an
+  absolute instant in milliseconds since the Unix epoch: `Deadline::at_epoch_ms`
+  reads the system clock and `Deadline::with_clock` injects one for tests.
+  `run_train(req)` is unchanged and equals `run_train_until(req, None)`, so runs
+  without a deadline keep the existing unbounded behaviour, acceptance and
+  validation. Expiry is checked at entry, before each 32-record batch of the
+  baseline error evaluation, at each epoch top, before each accumulated record,
+  before each 32-record batch of each candidate error evaluation (plain MSE and
+  each ladder rung), before each backtracking retry and before every external
+  scorer launch. Nothing preempts a running scorer process or a single batch,
+  and a timed-out run never re-scores the corpus (issue #213).
+
+- When expiry cuts accumulation short under plain MSE acceptance, the records
+  already read are applied once, with no backtracking. If accumulation
+  completed but expiry came before or during the candidate error scan, the
+  epoch's learning is applied once instead, again with no backtracking. Either
+  way the candidate is verified over the first N records (N = min(records read,
+  256)) and the epoch is journalled with `partial: true`. Under plain MSE the
+  partial candidate is kept only if it lowers the error on those same N
+  records, except under `--accept-always`, which keeps the verified candidate
+  even when it did not lower the error. Scorer-guided and ladder modes do not
+  take this path: an interrupted candidate scan keeps the incumbent and records
+  no epoch, and a ladder rung whose scan is cut short is never judged on its
+  partial figure. Previously accepted weights are always retained (issue #213).
+
+- A timed-out run ends `journal.jsonl` with a final `{"kind":"timedOut",...}`
+  line, written only on a timed-out run, carrying `phase`, `completedEpochs`,
+  `weightsChanged` and `deadlineEpochMs`. Epoch lines gain `partial`, which
+  defaults to `false` when absent (issue #213). The C ABI request and response
+  and the CLI flags are unchanged; the C ABI and CLI do not yet expose the
+  deadline or timeout fields.
+
 - `security.yml` installs the prebuilt, checksum-verified `cargo-audit` with
   `taiki-e/install-action` before `rustsec/audit-check`, which otherwise
   compiles it from source (~186s) on every run. The audit, its `token:` and its
@@ -411,6 +444,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `quality.sh` runs it on every PR.
 
 ### Changed
+
+- `TrainResult` replaces `baseline_mse` and `best_mse` with `baseline` and
+  `best`, each an `ErrorMeasure`: `Full { mse, records }` for the whole
+  selection, `Partial { mse, records }` for only the first N records (not
+  comparable to a `Full` figure), or `Unmeasured` when nothing was scored. It
+  also gains `status: TrainStatus`, either `Completed` or
+  `TimedOut { phase, completed_epochs, weights_changed }`; `completed_epochs`
+  counts the journalled non-partial epochs, including one whose backtracking
+  search was cut short. The CLI's
+  `train: baseline_mse=… best_mse=…` line keeps its format and prints `n/a`
+  where there is no full measurement (issue #213).
 
 - `CONTRIBUTING.md`'s "Version bumping" section describes the shared
   version-marker convention at concept level and links this repository's own

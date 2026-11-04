@@ -12,14 +12,17 @@ use crate::backprop::{
     effective_step_scale,
 };
 use crate::creature_io::{ObservationWidth, parse_forward_only_creature};
-use crate::ladder::{LadderEpochRequest, run_ladder_epoch, validate_step_scale_ladder};
-use crate::mse::compute_mse_selected;
-use crate::propagate_layout::accumulate_creature_learning_selected;
+use crate::deadline::{Deadline, TimeoutPhase};
+use crate::ladder::{
+    LadderEpochOutcome, LadderEpochRequest, LadderRun, run_ladder_epoch, validate_step_scale_ladder,
+};
+use crate::mse::{ErrorMeasure, compute_mse_first, compute_mse_until};
+use crate::propagate_layout::{Accumulation, accumulate_creature_learning_until};
 use crate::sampling::{RecordSample, RecordSelection, plan_record_sample};
 use crate::scorer::{ScoreResult, score_creature};
 use crate::tags::{BackpropProgress, CreatureMeta, serialize_creature_with_meta};
 use crate::trace::{build_creature_trace, write_creature_trace};
-use crate::trust_region::{TrustRegion, UpdateStats, apply_within_trust_region};
+use crate::trust_region::{TrustRegion, TrustRegionApply, UpdateStats, apply_within_trust_region};
 use crate::validate::TrainedTopology;
 use neat_core::{CreatureExport, TrainingDataConfig, compile_creature};
 use rand::SeedableRng;
@@ -160,8 +163,15 @@ pub struct TrainEpochRecord {
     pub before_mse: f64,
     /// Forward MSE of the candidate after apply.
     pub after_mse: f64,
-    /// Records used this epoch.
+    /// Records used this epoch, or for a partial epoch the verification window
+    /// shared by before/after MSE (at most [`PARTIAL_VERIFY_RECORDS`]).
     pub records: u64,
+    /// True when the deadline cut the epoch short. The before/after errors cover
+    /// the same first `records` records, but the applied learning may cover more.
+    /// These figures are comparable to each other but not to full-corpus
+    /// figures (#213).
+    #[serde(default)]
+    pub partial: bool,
     /// Learning rate this epoch resolved from the configured strategy (#39).
     #[serde(default)]
     pub learning_rate: f64,
@@ -247,24 +257,77 @@ impl<'a> From<&'a Path> for TrainCreature<'a> {
     }
 }
 
-/// Outcome of [`run_train`].
+/// Last line of a run that hit its deadline (#213).
+///
+/// Journalled once, after every epoch line, and only when a run timed out; a
+/// run that completes writes nothing new.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrainTimedOutRecord {
+    /// Discriminator, always `"timedOut"`.
+    pub kind: String,
+    /// The step at which expiry was observed.
+    pub phase: TimeoutPhase,
+    /// Journalled non-partial epochs, including one whose backtracking search
+    /// the deadline cut short.
+    pub completed_epochs: u64,
+    /// Whether at least one epoch (full or partial) was accepted.
+    pub weights_changed: bool,
+    /// The deadline that expired, in milliseconds since the Unix epoch.
+    pub deadline_epoch_ms: u64,
+}
+
+/// How a run ended (#213).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrainStatus {
+    /// Every requested epoch ran to completion.
+    Completed,
+    /// The deadline expired at `phase`; the run kept the learning it had
+    /// accepted and finalised without further corpus work.
+    TimedOut {
+        /// The step at which expiry was observed.
+        phase: TimeoutPhase,
+        /// Journalled non-partial epochs, including one whose backtracking
+        /// search the deadline cut short.
+        completed_epochs: u64,
+        /// Whether at least one epoch (full or partial) was accepted.
+        weights_changed: bool,
+    },
+}
+
+/// Outcome of [`run_train`] and [`run_train_until`].
 #[derive(Debug, Clone)]
 pub struct TrainResult {
     /// Best creature after the run.
     pub creature: CreatureExport,
     /// Exact JSON written to `best.json` (tagged when a scorer ran).
     pub best_json: String,
-    /// Baseline MSE (incumbent, before any apply).
-    pub baseline_mse: f64,
-    /// Best post-apply (or baseline if nothing accepted) MSE.
-    pub best_mse: f64,
+    /// Baseline error of the incumbent, before any apply.
+    ///
+    /// [`ErrorMeasure::Full`] unless a timeout intervened. A `Partial` figure
+    /// is over only the first `records` records and is not comparable to a
+    /// `Full` one; `Unmeasured` means nothing was scored.
+    pub baseline: ErrorMeasure,
+    /// Error of the best creature: the post-apply figure of the last accepted
+    /// epoch, or `baseline` when nothing was accepted. The same `Full` /
+    /// `Partial` / `Unmeasured` rules as [`Self::baseline`] apply.
+    pub best: ErrorMeasure,
     /// Epochs that accepted an apply.
     pub accepted_epochs: u64,
     /// Optional baseline scorer result.
     pub baseline_score: Option<ScoreResult>,
     /// Optional best-creature scorer result.
     pub best_score: Option<ScoreResult>,
+    /// Whether the run completed or stopped at a deadline (#213).
+    pub status: TrainStatus,
 }
+
+/// Upper bound on the post-deadline comparison scan (#213).
+///
+/// A partial epoch verifies its candidate against the incumbent over at most
+/// this many records, so the post-deadline work is at most 2 × 256 forward
+/// passes, including when the corpus is larger than this limit.
+pub const PARTIAL_VERIFY_RECORDS: u64 = 256;
 
 /// Arguments for [`run_train`].
 pub struct TrainRequest<'a> {
@@ -418,10 +481,108 @@ struct EpochOutcome {
     update_scale: f64,
     /// Genes the changed-gene budget held back (#109).
     trimmed_genes: usize,
+    /// Set when the epoch was cut short by the deadline (#213): the incumbent
+    /// and candidate were verified over the first records they share.
+    partial: Option<PartialVerification>,
+}
+
+/// Verification of a partial epoch (#213): the incumbent's error and the
+/// record count both figures cover.
+#[derive(Debug, Clone, Copy)]
+struct PartialVerification {
+    /// Incumbent error over the first `records` records.
+    before_mse: f64,
+    /// Records both figures cover.
+    records: u64,
+}
+
+/// Verdict for a plain MSE candidate: an improvement, then `accept_always`,
+/// then rejection.
+fn mse_verdict(improved: bool, accept_always: bool) -> AcceptReason {
+    if improved {
+        AcceptReason::MseImproved
+    } else if accept_always {
+        AcceptReason::AcceptAlways
+    } else {
+        AcceptReason::MseNotImproved
+    }
+}
+
+/// Finish a partial epoch (#213): judge the single applied candidate against
+/// the incumbent over the first `measured_records` records, capped at
+/// `PARTIAL_VERIFY_RECORDS`. Both figures are real measurements over the same
+/// records, so the verdict never compares a partial figure with a full one.
+fn partial_outcome(
+    incumbent: &CreatureExport,
+    applied: TrustRegionApply,
+    measured_records: u64,
+    training_data: &Path,
+    selection: RecordSelection<'_>,
+    config: &BackpropConfig,
+    accept_always: bool,
+) -> Result<EpochOutcome, String> {
+    let verify = measured_records.min(PARTIAL_VERIFY_RECORDS);
+    let mut before_net = compile_creature(incumbent).map_err(|e| e.to_string())?;
+    let (before_mse, _) =
+        compute_mse_first(incumbent, &mut before_net, training_data, selection, verify)?;
+    let mut after_net = compile_creature(&applied.candidate).map_err(|e| e.to_string())?;
+    let (after_mse, records) = compute_mse_first(
+        &applied.candidate,
+        &mut after_net,
+        training_data,
+        selection,
+        verify,
+    )?;
+    let reason = mse_verdict(after_mse < before_mse, accept_always);
+    Ok(EpochOutcome {
+        deltas: count_apply_deltas(incumbent, &applied.candidate, config.plank_constant),
+        candidate: applied.candidate,
+        after_mse,
+        score: None,
+        reason,
+        realised_step_scale: applied.realised_step_scale,
+        update: applied.realised,
+        update_scale: applied.scale,
+        trimmed_genes: applied.trimmed_genes,
+        partial: Some(PartialVerification {
+            before_mse,
+            records,
+        }),
+    })
 }
 
 /// Run the experimental trainer and write `journal.jsonl` + `best.json`.
+///
+/// Equivalent to [`run_train_until`] with no deadline.
 pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
+    run_train_until(req, None)
+}
+
+/// Run the experimental trainer under an optional cooperative deadline (#213).
+///
+/// Units and expiry semantics are documented on [`crate::deadline`].
+///
+/// # Check granularity and partial results
+///
+/// The deadline is read at entry; before every baseline-evaluation batch (32
+/// records); at each epoch top; before every accumulated record; before every
+/// candidate-evaluation batch; before each backtracking retry; and before every
+/// external scorer launch (baseline, each candidate, each ladder rung or batch,
+/// and finalisation). Nothing preempts a running scorer process or a single
+/// batch.
+///
+/// On expiry the run keeps every epoch it accepted, journals a final `timedOut`
+/// line, and finalises without re-evaluating the corpus. An epoch the deadline
+/// cut short during accumulation, or while its single candidate was measured
+/// under plain MSE, is applied once and verified over at most 256 records; its
+/// journal line has `partial: true`, and `best` then reports only that verified
+/// window. A ladder rung or scorer-judged candidate cut short is never judged,
+/// so the incumbent is kept. `baseline` and `best` are `Full` unless a timeout
+/// intervened.
+pub fn run_train_until(
+    req: TrainRequest<'_>,
+    deadline: Option<&Deadline<'_>>,
+) -> Result<TrainResult, String> {
     // Refuse an unusable acceptance configuration before any work — and before
     // the scorer is spawned — so a bad request fails loudly and cheaply (#104).
     let scorer_acceptance = resolve_scorer_acceptance(&req)?;
@@ -462,9 +623,32 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         None => RecordSelection::Prefix(None),
     };
 
+    // The step at which the deadline was first observed. Every timeout path
+    // ends in finalisation below; nothing returns early (#213).
+    let expired = || deadline.is_some_and(Deadline::expired);
+    let mut timeout: Option<TimeoutPhase> = None;
+
     let mut network = compile_creature(&incumbent).map_err(|e| e.to_string())?;
-    let (baseline_mse, _) =
-        compute_mse_selected(&incumbent, &mut network, req.training_data, selection)?;
+    let baseline = if expired() {
+        timeout = Some(TimeoutPhase::Start);
+        ErrorMeasure::Unmeasured
+    } else {
+        let measured = compute_mse_until(
+            &incumbent,
+            &mut network,
+            req.training_data,
+            selection,
+            deadline,
+        )?;
+        if !measured.is_full() {
+            timeout = Some(TimeoutPhase::BaselineEvaluation);
+        }
+        measured
+    };
+    // Only a `Full` baseline reaches the epoch loop, so the NaN fallback for an
+    // unmeasured baseline is never compared against a candidate.
+    let mut best_mse = baseline.mse().unwrap_or(f64::NAN);
+    let mut best = baseline;
 
     let score_dir = req.output_dir.join("scorer-work");
     // Scorer-guided runs establish the baseline *before* the loop: epoch 1 has a
@@ -474,15 +658,19 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     // comparison is like for like.
     let mut baseline_score = None;
     let mut incumbent_score: Option<ScoreResult> = None;
-    if let Some((scorer, _)) = scorer_acceptance {
-        let scored = score_creature(
-            scorer,
-            &width.checked_json_pretty(&incumbent)?,
-            req.training_data,
-            &score_dir.join("baseline"),
-        )?;
-        baseline_score = Some(scored.clone());
-        incumbent_score = Some(scored);
+    if let (Some((scorer, _)), None) = (scorer_acceptance, timeout) {
+        if expired() {
+            timeout = Some(TimeoutPhase::Scoring);
+        } else {
+            let scored = score_creature(
+                scorer,
+                &width.checked_json_pretty(&incumbent)?,
+                req.training_data,
+                &score_dir.join("baseline"),
+            )?;
+            baseline_score = Some(scored.clone());
+            incumbent_score = Some(scored);
+        }
     }
 
     let journal_path = req.output_dir.join("journal.jsonl");
@@ -508,12 +696,20 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     journal.push_str(&serde_json::to_string(&header).map_err(|e| e.to_string())?);
     journal.push('\n');
 
-    let mut best_mse = baseline_mse;
     let mut accepted_epochs = 0u64;
+    let mut completed_epochs = 0u64;
     let mut rng = StdRng::seed_from_u64(req.seed);
     let mut previous_mse: Option<f64> = None;
 
     for epoch in 1..=req.epochs {
+        // A timeout ends the run: no further epoch starts (#213).
+        if timeout.is_some() {
+            break;
+        }
+        if expired() {
+            timeout = Some(TimeoutPhase::EpochStart);
+            break;
+        }
         // Resolve the epoch's rate from the configured strategy (#39): fixed
         // holds steady, decay / warm-restart follow the epoch index, adaptive
         // reacts to the last epoch's MSE movement.
@@ -524,25 +720,41 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         );
         previous_mse = Some(best_mse);
         let mut net = compile_creature(&incumbent).map_err(|e| e.to_string())?;
-        let report = accumulate_creature_learning_selected(
+        let (report, partial_epoch) = match accumulate_creature_learning_until(
             &incumbent,
             &mut net,
             req.training_data,
             req.config,
             selection,
             &mut rng,
-        )?;
+            deadline,
+        )? {
+            Accumulation::Complete(report) => (report, false),
+            Accumulation::Partial(report) => (report, true),
+            Accumulation::Expired => {
+                timeout = Some(TimeoutPhase::Accumulation);
+                break;
+            }
+        };
+        // A partial epoch's candidate is judged only by plain MSE: a scorer verdict
+        // needs the full learning, so the incumbent is kept (#213). A step-scale
+        // ladder is accepted only with scorer acceptance (see
+        // `resolve_scorer_acceptance`), so this covers ladder runs too.
+        if partial_epoch && scorer_acceptance.is_some() {
+            timeout = Some(TimeoutPhase::Accumulation);
+            break;
+        }
         // Scorer-guided step-scale ladder (#106): the accumulate above is the
         // expensive part, so apply it at every configured step scale, score
         // the whole grid in one batch, and keep the best scorer improvement —
         // rather than stopping at the first step the judge happens to pass.
-        let ladder_epoch = match scorer_acceptance {
+        let ladder_epoch: Option<LadderEpochOutcome> = match scorer_acceptance {
             Some((scorer, settings)) if !req.step_scale_ladder.is_empty() => {
                 let incumbent_fitness = incumbent_score
                     .as_ref()
                     .map(|scored| scored.score)
                     .ok_or("scorer-guided acceptance has no baseline score")?;
-                Some(run_ladder_epoch(LadderEpochRequest {
+                match run_ladder_epoch(LadderEpochRequest {
                     epoch,
                     incumbent: &incumbent,
                     learning: &report.learning,
@@ -559,7 +771,14 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                     score_dir: &score_dir.join("ladder"),
                     settings,
                     incumbent_fitness,
-                })?)
+                    deadline,
+                })? {
+                    LadderRun::Done(outcome) => Some(*outcome),
+                    LadderRun::TimedOut(phase) => {
+                        timeout = Some(phase);
+                        break;
+                    }
+                }
             }
             _ => None,
         };
@@ -569,7 +788,31 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         let mut step_scale = effective_step_scale(req.apply.step_scale);
         let mut backtracks = 0u32;
         let mut ladder_rungs = None;
-        let outcome = if let Some(outcome) = ladder_epoch {
+        let outcome = if partial_epoch {
+            // A partial epoch takes one apply at the epoch's step scale, with no
+            // backtracking, and is verified over the records it covers (#213).
+            timeout = Some(TimeoutPhase::Accumulation);
+            let applied = apply_within_trust_region(
+                &incumbent,
+                &report.learning,
+                req.config,
+                lr,
+                ApplyOptions {
+                    step_scale,
+                    ..req.apply
+                },
+                req.trust_region,
+            )?;
+            Some(partial_outcome(
+                &incumbent,
+                applied,
+                report.records,
+                req.training_data,
+                selection,
+                req.config,
+                req.accept_always,
+            )?)
+        } else if let Some(outcome) = ladder_epoch {
             // Every rung is journalled — score and MSE for every step — so a
             // dry epoch is an auditable grid rather than a single line.
             for line in &outcome.journal {
@@ -578,7 +821,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             }
             step_scale = outcome.step_scale;
             ladder_rungs = Some(outcome.rungs);
-            EpochOutcome {
+            Some(EpochOutcome {
                 candidate: outcome.candidate,
                 deltas: outcome.deltas,
                 after_mse: outcome.after_mse,
@@ -588,7 +831,8 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                 update: outcome.update,
                 update_scale: outcome.update_scale,
                 trimmed_genes: outcome.trimmed_genes,
-            }
+                partial: None,
+            })
         } else {
             loop {
                 // The trust region bounds the *whole-creature* move (#109): the
@@ -606,11 +850,56 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                     },
                     req.trust_region,
                 )?;
+                let mut cand_net =
+                    compile_creature(&applied.candidate).map_err(|e| e.to_string())?;
+                let measured = compute_mse_until(
+                    &applied.candidate,
+                    &mut cand_net,
+                    req.training_data,
+                    selection,
+                    deadline,
+                )?;
+                let after_mse = match measured {
+                    ErrorMeasure::Full { mse, .. } => mse,
+                    ErrorMeasure::Partial { records, .. } => {
+                        // A partly measured candidate has no scorer verdict, so
+                        // only plain MSE finishes it as a partial epoch (#213).
+                        timeout = Some(TimeoutPhase::CandidateEvaluation);
+                        if scorer_acceptance.is_some() {
+                            break None;
+                        }
+                        break Some(partial_outcome(
+                            &incumbent,
+                            applied,
+                            records,
+                            req.training_data,
+                            selection,
+                            req.config,
+                            req.accept_always,
+                        )?);
+                    }
+                    ErrorMeasure::Unmeasured => {
+                        // Nothing of the candidate was measured, but the
+                        // accumulation completed, so plain MSE still verifies the
+                        // candidate over the records that accumulation covered,
+                        // bounded by `PARTIAL_VERIFY_RECORDS` (#213).
+                        timeout = Some(TimeoutPhase::CandidateEvaluation);
+                        if scorer_acceptance.is_some() {
+                            break None;
+                        }
+                        break Some(partial_outcome(
+                            &incumbent,
+                            applied,
+                            report.records,
+                            req.training_data,
+                            selection,
+                            req.config,
+                            req.accept_always,
+                        )?);
+                    }
+                };
                 let candidate = applied.candidate;
                 let deltas = count_apply_deltas(&incumbent, &candidate, req.config.plank_constant);
-                let mut cand_net = compile_creature(&candidate).map_err(|e| e.to_string())?;
-                let (after_mse, _) =
-                    compute_mse_selected(&candidate, &mut cand_net, req.training_data, selection)?;
                 let mse_improved = after_mse < best_mse;
                 // The fitness the candidate must beat: the run baseline until an
                 // epoch is accepted, the last accepted candidate's score after.
@@ -632,6 +921,12 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                         (None, AcceptReason::MsePreScreenRejected)
                     }
                     Some((scorer, settings)) => {
+                        // A scorer launch is not preempted, but none starts after
+                        // expiry (#213).
+                        if expired() {
+                            timeout = Some(TimeoutPhase::Scoring);
+                            break None;
+                        }
                         // One reused directory, not one per attempt: a production
                         // creature is megabytes and `--max-backtracks` defaults to
                         // 6, so per-attempt copies would grow without bound. The
@@ -677,22 +972,35 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                     journal.push_str(&serde_json::to_string(&attempt).map_err(|e| e.to_string())?);
                     journal.push('\n');
                 }
+                let attempt_outcome = EpochOutcome {
+                    candidate,
+                    deltas,
+                    after_mse,
+                    score: candidate_score,
+                    reason,
+                    realised_step_scale: applied.realised_step_scale,
+                    update: applied.realised,
+                    update_scale: applied.scale,
+                    trimmed_genes: applied.trimmed_genes,
+                    partial: None,
+                };
                 if reason.accepted() || backtracks >= req.max_backtracks {
-                    break EpochOutcome {
-                        candidate,
-                        deltas,
-                        after_mse,
-                        score: candidate_score,
-                        reason,
-                        realised_step_scale: applied.realised_step_scale,
-                        update: applied.realised,
-                        update_scale: applied.scale,
-                        trimmed_genes: applied.trimmed_genes,
-                    };
+                    break Some(attempt_outcome);
+                }
+                // A retry is a new scan: an expired clock ends the search with
+                // this rejected attempt as the epoch's verdict (#213).
+                if expired() {
+                    timeout = Some(TimeoutPhase::Backtracking);
+                    break Some(attempt_outcome);
                 }
                 backtracks += 1;
                 step_scale = next_backtrack_step(step_scale, applied.realised_step_scale);
             }
+        };
+        // A candidate that never reached a verdict leaves no epoch record and the
+        // incumbent is kept (#213).
+        let Some(outcome) = outcome else {
+            break;
         };
         let EpochOutcome {
             candidate,
@@ -704,6 +1012,7 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             update,
             update_scale,
             trimmed_genes,
+            partial,
         } = outcome;
         let accepted = reason.accepted();
         fs::write(
@@ -715,9 +1024,11 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         // worse", not off the accept flag — under --accept-always a kept but
         // worse candidate is still a failed candidate worth capturing (#78).
         // Under scorer-guided acceptance "worse" is the scorer's verdict, not
-        // the slice's (#104).
+        // the slice's (#104). A partial epoch compares its own verified window.
         let improved = if scorer_acceptance.is_some() {
             accepted
+        } else if let Some(verified) = partial {
+            after_mse < verified.before_mse
         } else {
             after_mse < best_mse
         };
@@ -737,16 +1048,31 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
             incumbent = candidate;
             best_mse = after_mse;
             accepted_epochs += 1;
+            best = match partial {
+                Some(verified) => ErrorMeasure::Partial {
+                    mse: after_mse,
+                    records: verified.records,
+                },
+                None => ErrorMeasure::Full {
+                    mse: after_mse,
+                    records: report.records,
+                },
+            };
             if let Some(scored) = candidate_score.clone() {
                 incumbent_score = Some(scored);
             }
         }
+        let (before_mse, records) = match partial {
+            Some(verified) => (verified.before_mse, verified.records),
+            None => (report.mse, report.records),
+        };
         let rec = TrainEpochRecord {
             kind: "epoch".into(),
             epoch,
-            before_mse: report.mse,
+            before_mse,
             after_mse,
-            records: report.records,
+            records,
+            partial: partial.is_some(),
             learning_rate: lr,
             accepted,
             accept_reason: reason,
@@ -773,12 +1099,18 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         };
         journal.push_str(&serde_json::to_string(&rec).map_err(|e| e.to_string())?);
         journal.push('\n');
+        if partial.is_none() {
+            completed_epochs += 1;
+        }
         // Per-epoch progress stays in journal.jsonl only — do not eprintln here.
         // Memetic / Deno FFI callers run many trainDir jobs in one process; epoch
         // spam on stderr drowns the host (NEAT-AI parallel tests / evolve).
         // With deterministic accumulation (full sparse ratio, no random
         // samples) a rejected epoch would recompute the identical learning —
         // further epochs cannot make progress, so stop early (#38).
+        if timeout.is_some() {
+            break;
+        }
         if !accepted && req.config.sparse_ratio >= 1.0 && req.config.disable_random_samples {
             break;
         }
@@ -802,16 +1134,22 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
     // Score before writing best.json so GRQ can read `score` / `backpropagation`
     // tags without a second rescore pass (GRQ #3991). Untagged best.json when
     // --scorer is omitted — callers that need the gate must pass a scorer.
+    // Finalisation scans obey the same rule as the loop: none starts once the
+    // deadline has expired, and a timed-out run never re-evaluates the corpus (#213).
     let mut best_score = None;
     let compact_best = width.checked_json_pretty(&incumbent)?;
     if let Some(scorer) = req.scorer {
         if baseline_score.is_none() {
-            baseline_score = Some(score_creature(
-                scorer,
-                &text,
-                req.training_data,
-                &score_dir.join("baseline"),
-            )?);
+            if timeout.is_none() && !expired() {
+                baseline_score = Some(score_creature(
+                    scorer,
+                    &text,
+                    req.training_data,
+                    &score_dir.join("baseline"),
+                )?);
+            } else {
+                timeout = timeout.or(Some(TimeoutPhase::Scoring));
+            }
         }
         // A scorer-guided run already scored the winner inside the loop, and
         // `incumbent_score` was measured on the identical bytes `compact_best`
@@ -819,12 +1157,16 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
         // would double the cost of every accepted epoch (#104).
         best_score = match incumbent_score {
             Some(scored) => Some(scored),
-            None => Some(score_creature(
+            None if timeout.is_none() && !expired() => Some(score_creature(
                 scorer,
                 &compact_best,
                 req.training_data,
                 &score_dir.join("best"),
             )?),
+            None => {
+                timeout = timeout.or(Some(TimeoutPhase::Scoring));
+                None
+            }
         };
         if let (Some(baseline), Some(best)) = (&baseline_score, &best_score) {
             meta.stamp_train_result(&BackpropProgress {
@@ -834,22 +1176,49 @@ pub fn run_train(req: TrainRequest<'_>) -> Result<TrainResult, String> {
                 error: best.error,
                 opening_score: baseline.score,
             });
+        } else if timeout.is_some() && accepted_epochs > 0 && best_score.is_none() {
+            // The input's measurements describe different weights from the
+            // retained, unscored creature. Preserve unrelated pedigree tags.
+            meta.tags
+                .retain(|tag| !matches!(tag.name.as_str(), "score" | "error" | "backpropagation"));
         }
     }
 
     // Refuses (and writes nothing) if the width drifted or is < 1 (#92).
     let best_json = serialize_creature_with_meta(&incumbent, &meta, width)?;
     fs::write(req.output_dir.join("best.json"), &best_json).map_err(|e| e.to_string())?;
+    if let Some(phase) = timeout {
+        let stopped = TrainTimedOutRecord {
+            kind: "timedOut".into(),
+            phase,
+            completed_epochs,
+            weights_changed: accepted_epochs > 0,
+            deadline_epoch_ms: deadline
+                .map(Deadline::epoch_ms)
+                .ok_or("internal: timeout recorded without a deadline")?,
+        };
+        journal.push_str(&serde_json::to_string(&stopped).map_err(|e| e.to_string())?);
+        journal.push('\n');
+    }
     fs::write(&journal_path, journal).map_err(|e| e.to_string())?;
 
+    let status = match timeout {
+        Some(phase) => TrainStatus::TimedOut {
+            phase,
+            completed_epochs,
+            weights_changed: accepted_epochs > 0,
+        },
+        None => TrainStatus::Completed,
+    };
     Ok(TrainResult {
         creature: incumbent,
         best_json,
-        baseline_mse,
-        best_mse,
+        baseline,
+        best,
         accepted_epochs,
         baseline_score,
         best_score,
+        status,
     })
 }
 
@@ -1029,7 +1398,7 @@ mod tests {
             disable_random_samples: false,
         })
         .unwrap();
-        assert!(result.baseline_mse > 0.0);
+        assert!(result.baseline.full_mse().unwrap() > 0.0);
         assert!(out.join("best.json").is_file());
         assert!(out.join("journal.jsonl").is_file());
     }
@@ -1166,7 +1535,7 @@ mod tests {
         .unwrap();
         // The line-search run must never do worse than the single-attempt
         // run, and when the full step overshoots it must recover an accept.
-        assert!(with_ls.best_mse <= baseline.best_mse);
+        assert!(with_ls.best.full_mse().unwrap() <= baseline.best.full_mse().unwrap());
         if baseline.accepted_epochs == 0 {
             assert_eq!(with_ls.accepted_epochs, 1);
             let journal = fs::read_to_string(out_ls.join("journal.jsonl")).unwrap();
@@ -1292,16 +1661,16 @@ mod tests {
             0.5,
         );
         assert!(
-            full.best_mse > full.baseline_mse,
+            full.best.full_mse().unwrap() > full.baseline.full_mse().unwrap(),
             "full step should overshoot: {} -> {}",
-            full.baseline_mse,
-            full.best_mse
+            full.baseline.full_mse().unwrap(),
+            full.best.full_mse().unwrap()
         );
         assert!(
-            default.best_mse < default.baseline_mse,
+            default.best.full_mse().unwrap() < default.baseline.full_mse().unwrap(),
             "sweep-informed step should improve: {} -> {}",
-            default.baseline_mse,
-            default.best_mse
+            default.baseline.full_mse().unwrap(),
+            default.best.full_mse().unwrap()
         );
     }
 

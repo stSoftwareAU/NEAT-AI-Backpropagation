@@ -94,7 +94,9 @@ fn train_baseline_mse(
         disable_random_samples,
     })
     .unwrap()
-    .baseline_mse
+    .baseline
+    .full_mse()
+    .expect("full baseline")
 }
 
 #[test]

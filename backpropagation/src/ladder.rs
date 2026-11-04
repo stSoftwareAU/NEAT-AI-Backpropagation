@@ -18,7 +18,8 @@ use crate::backprop::{
     ApplyDeltaCounts, ApplyOptions, BackpropConfig, LearningSignal, count_apply_deltas,
 };
 use crate::creature_io::ObservationWidth;
-use crate::mse::compute_mse_selected;
+use crate::deadline::{Deadline, TimeoutPhase};
+use crate::mse::{ErrorMeasure, compute_mse_until};
 use crate::sampling::RecordSelection;
 use crate::scorer::{ScoreResult, score_creatures};
 use crate::train::TrainCandidateRecord;
@@ -128,6 +129,20 @@ pub(crate) struct LadderEpochRequest<'a> {
     pub settings: ScorerAcceptance,
     /// Incumbent fitness every rung is judged against.
     pub incumbent_fitness: f64,
+    /// Deadline checked before each rung's apply, inside each rung's slice-MSE
+    /// scan, and before the batch scorer launch (#213). `None` runs the epoch to
+    /// completion.
+    pub deadline: Option<&'a Deadline<'a>>,
+}
+
+/// Result of one ladder epoch: either its outcome, or the phase at which the
+/// deadline expired (#213). A timed-out epoch journals nothing and the caller
+/// keeps the incumbent.
+pub(crate) enum LadderRun {
+    /// The epoch ran to the verdict.
+    Done(Box<LadderEpochOutcome>),
+    /// The deadline expired at this phase before the verdict.
+    TimedOut(TimeoutPhase),
 }
 
 /// What one ladder epoch decided.
@@ -191,8 +206,9 @@ struct Rung {
 /// so a rung costs an apply, a slice-MSE pass and a share of one `rust_scorer`
 /// invocation. Nothing is accepted here — the outcome carries the verdict and
 /// the caller decides what to do with it.
-pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpochOutcome, String> {
+pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderRun, String> {
     validate_step_scale_ladder(req.ladder)?;
+    let expired = || req.deadline.is_some_and(Deadline::expired);
     let apply_at = |step_scale: f64| {
         apply_within_trust_region(
             req.incumbent,
@@ -209,11 +225,25 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
 
     let mut rungs = Vec::with_capacity(req.ladder.len());
     for (index, &step_scale) in req.ladder.iter().enumerate() {
+        if expired() {
+            return Ok(LadderRun::TimedOut(TimeoutPhase::CandidateEvaluation));
+        }
         let applied = apply_at(step_scale)?;
         let candidate = applied.candidate;
         let mut net = compile_creature(&candidate).map_err(|e| e.to_string())?;
-        let (mse, _) =
-            compute_mse_selected(&candidate, &mut net, req.training_data, req.selection)?;
+        let measured = compute_mse_until(
+            &candidate,
+            &mut net,
+            req.training_data,
+            req.selection,
+            req.deadline,
+        )?;
+        // A rung is ranked only on a complete scan: a partial slice MSE cannot
+        // be compared with the other rungs, so an interrupted rung ends the
+        // epoch and the incumbent is kept (#213).
+        let ErrorMeasure::Full { mse, .. } = measured else {
+            return Ok(LadderRun::TimedOut(TimeoutPhase::CandidateEvaluation));
+        };
         // The pre-screen is the issue's "optional catastrophic rejection": off
         // by default, MSE is only a diagnostic and every rung is scored.
         // "Did not improve" is the negation of the line search's own `<` test,
@@ -256,6 +286,9 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
         }));
     }
     if !batch.is_empty() {
+        if expired() {
+            return Ok(LadderRun::TimedOut(TimeoutPhase::Scoring));
+        }
         let request: Vec<(&str, &str)> = batch
             .iter()
             .map(|(stem, json)| (stem.as_str(), *json))
@@ -332,7 +365,7 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
     // so re-applying the winning rung reproduces the exact candidate that was
     // scored without holding every rung's creature in memory at once.
     let candidate = apply_at(rung.step_scale)?.candidate;
-    Ok(LadderEpochOutcome {
+    Ok(LadderRun::Done(Box::new(LadderEpochOutcome {
         deltas: count_apply_deltas(req.incumbent, &candidate, req.config.plank_constant),
         candidate,
         after_mse: rung.mse,
@@ -345,7 +378,7 @@ pub(crate) fn run_ladder_epoch(req: LadderEpochRequest<'_>) -> Result<LadderEpoc
         trimmed_genes: rung.trimmed_genes,
         rungs: rungs.len() as u32,
         journal,
-    })
+    })))
 }
 
 /// Verdict for one rung: the winner is judged against the epsilon — by the same
