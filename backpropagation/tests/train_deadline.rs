@@ -524,6 +524,20 @@ fn expiry_during_candidate_evaluation() {
     );
     let epoch = epoch_lines(&run)[0].clone();
     assert_eq!(epoch["partial"], true);
+    let records = epoch["records"].as_u64().unwrap();
+    let before = epoch["beforeMse"].as_f64().unwrap();
+    let mut network = compile_creature(&input).unwrap();
+    let (window_mse, measured) =
+        compute_mse(&input, &mut network, data.path(), Some(records)).unwrap();
+    assert_eq!(measured, records);
+    assert!(
+        nearly_equal(before, window_mse),
+        "beforeMse must cover the verification window: {epoch}"
+    );
+    assert!(
+        !nearly_equal(before, run.result.baseline.full_mse().unwrap()),
+        "fixture must distinguish the window from the full corpus: {epoch}"
+    );
     assert!(
         epoch["beforeMse"].as_f64().unwrap() > epoch["afterMse"].as_f64().unwrap(),
         "an accepted partial candidate must verify better: {epoch}"
