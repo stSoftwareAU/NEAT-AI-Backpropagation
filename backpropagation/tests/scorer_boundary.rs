@@ -17,6 +17,7 @@ use neat_ai_backpropagation::{ScoreResult, score_creature};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use tempfile::{TempDir, tempdir};
 
 const CREATURE_JSON: &str = r#"{"semanticVersion":"4.0.0","input":1,"output":1}"#;
@@ -29,17 +30,25 @@ fn write_stub(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
+/// Serialises the tests: a stub is written (write fd open) and then executed.
+/// If a sibling test forks in that window, its child inherits the write fd until
+/// it execs, so this test's `exec` fails with ETXTBSY ("Text file busy").
+static SERIAL: Mutex<()> = Mutex::new(());
+
 /// A temp workspace plus a training-data file for the scorer's second argument.
-fn workspace() -> (TempDir, PathBuf) {
+/// The returned guard must be held for the whole test.
+fn workspace() -> (TempDir, PathBuf, MutexGuard<'static, ()>) {
+    // A panicking test must not fail the others, so recover a poisoned lock.
+    let guard = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let dir = tempdir().expect("tempdir");
     let training = dir.path().join("training.bin");
     fs::write(&training, b"training-bytes").expect("write training data");
-    (dir, training)
+    (dir, training, guard)
 }
 
 #[test]
 fn returns_the_scored_creature_from_map_stdout() {
-    let (dir, training) = workspace();
+    let (dir, training, _serial) = workspace();
     let scorer = write_stub(
         dir.path(),
         "map-scorer",
@@ -61,7 +70,7 @@ fn returns_the_scored_creature_from_map_stdout() {
 
 #[test]
 fn falls_back_to_a_single_result_object_without_a_stem_key() {
-    let (dir, training) = workspace();
+    let (dir, training, _serial) = workspace();
     let scorer = write_stub(
         dir.path(),
         "object-scorer",
@@ -79,7 +88,7 @@ fn falls_back_to_a_single_result_object_without_a_stem_key() {
 
 #[test]
 fn ignores_scorer_log_lines_printed_before_the_result() {
-    let (dir, training) = workspace();
+    let (dir, training, _serial) = workspace();
     let scorer = write_stub(
         dir.path(),
         "chatty-scorer",
@@ -94,7 +103,7 @@ fn ignores_scorer_log_lines_printed_before_the_result() {
 
 #[test]
 fn hands_the_creature_to_the_scorer_as_trained_json_in_a_candidate_directory() {
-    let (dir, training) = workspace();
+    let (dir, training, _serial) = workspace();
     // The stub echoes back what it was handed so the layout contract is
     // observable: argv[1] is a directory holding `trained.json`, argv[2] is the
     // training data.
@@ -132,7 +141,7 @@ fn hands_the_creature_to_the_scorer_as_trained_json_in_a_candidate_directory() {
 
 #[test]
 fn reports_a_non_zero_exit_with_its_status_and_stdout() {
-    let (dir, training) = workspace();
+    let (dir, training, _serial) = workspace();
     let scorer = write_stub(
         dir.path(),
         "failing-scorer",
@@ -155,7 +164,7 @@ fn reports_a_non_zero_exit_with_its_status_and_stdout() {
 
 #[test]
 fn reports_an_empty_score_map_as_no_creature_scores() {
-    let (dir, training) = workspace();
+    let (dir, training, _serial) = workspace();
     let scorer = write_stub(dir.path(), "empty-scorer", r#"printf '%s\n' '{}'"#);
 
     let err = score_creature(&scorer, CREATURE_JSON, &training, dir.path())
@@ -166,7 +175,7 @@ fn reports_an_empty_score_map_as_no_creature_scores() {
 
 #[test]
 fn reports_unparsable_stdout() {
-    let (dir, training) = workspace();
+    let (dir, training, _serial) = workspace();
     let scorer = write_stub(dir.path(), "babbling-scorer", "printf '%s\\n' 'not json'");
 
     let err = score_creature(&scorer, CREATURE_JSON, &training, dir.path())
@@ -181,7 +190,7 @@ fn reports_unparsable_stdout() {
 
 #[test]
 fn reports_a_scorer_binary_that_cannot_be_spawned() {
-    let (dir, training) = workspace();
+    let (dir, training, _serial) = workspace();
     let missing = dir.path().join("no-such-scorer");
 
     let err = score_creature(&missing, CREATURE_JSON, &training, dir.path())
