@@ -4,7 +4,7 @@ Issue #217 is stage 4H of the family compaction migration (tracker stSoftwareAU/
 
 ## Verdict — no compaction, nothing to migrate
 
-This crate neither compacts a creature nor rewrites its structure on any path. Training moves bias and weight values only, and every creature the crate writes is checked to have the same neuron and synapse counts as its source. No call was added, removed or replaced, and no dependency pin changed.
+This crate neither compacts a creature nor rewrites its structure on any path. Training moves bias and weight values only, and every creature the crate writes is checked to have the same neuron and synapse counts as its source. The audit found no compaction caller to migrate.
 
 ## Evidence
 
@@ -37,9 +37,15 @@ The search was `grep -rniE 'compact|prune|cleanup|simplif|retain|dedup'` over `b
 
 ## Dependency state on 2026-11-26
 
-neat-core is pinned at `v0.23.4` (`e86c342e72e85172b2f9e557329aca3b15bf5229`) in `backpropagation/Cargo.toml` and in the root `Cargo.lock`. The newest core release is `v0.23.11` (`9ef3668def917ffa3266c212d2990f1c77cab27d`).
+The PR bumps `neat_ai_backpropagation` from `0.1.50` to `0.1.51` and updates the neat-core pin from `v0.23.4` to `v0.23.11` in `backpropagation/Cargo.toml`. The root `Cargo.lock` resolves the tag to `9ef3668def917ffa3266c212d2990f1c77cab27d`.
 
-Core #779 (the unified `compact_creature` API) and NEAT-AI#4196 were still open, so no released shared compaction API exists yet. None is needed here because there is no caller to switch. The pin moves through the normal family-sync job (`scripts/family-pins.sh`), not through this audit.
+Core #779 and NEAT-AI#4196 were open on the audit date. This crate has no caller that depends on the shared compaction API.
+
+## Compatibility evidence
+
+The eight existing cases in `backpropagation/tests/scorer_boundary.rs` now hold a shared mutex while writing and executing their scorer stubs. This prevents concurrent tests from racing on an open executable (`ETXTBSY`). All eight cases retain their original assertions.
+
+At commit `051d2df`, CI compiled the pinned neat-core and ran `cargo test --workspace --all-features -- --test-threads=2 -q`. All 383 Rust tests passed, including the eight scorer-boundary cases. [Quality Checks job 139978579433](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/runs/139978579433)
 
 ## When to revisit
 

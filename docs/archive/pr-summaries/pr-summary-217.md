@@ -7,8 +7,7 @@ compaction or duplicated structural rewrites. None exists: every path changes
 bias and weight values only, and the `TrainedTopology` output gate refuses any
 creature whose neuron or synapse count differs from its source. Per the issue's
 "if no duplicate exists, record evidence and close with no unnecessary code",
-the evidence is recorded in `docs/audit/issue-217-shared-compaction.md` and no
-runtime code, test or pin changed. Closes #217.
+the evidence is recorded in `docs/audit/issue-217-shared-compaction.md`. Closes #217.
 
 ## Spec
 
@@ -20,13 +19,12 @@ runtime code, test or pin changed. Closes #217.
 
 ### Essential Design Decisions
 
-- Audit-only outcome, matching the sibling Refinery audit (stSoftwareAU/NEAT-AI-Refinery#89, merged as PR #90).
+- Audit-only compaction outcome, matching the sibling Refinery audit (stSoftwareAU/NEAT-AI-Refinery#89, merged as PR #90).
 - The `Depends on` core #779 release gates switching a caller; with no caller,
   the audit completes while #779 is still open. Any future structure-changing
   path must call the shared neat-core API (recorded in the audit's "When to
   revisit").
-- The neat-core pin (`v0.23.4`) is left for the normal family-sync job
-  (`scripts/family-pins.sh`); this audit does not move it.
+- The PR bumps `neat_ai_backpropagation` from `0.1.50` to `0.1.51` and updates the neat-core pin from `v0.23.4` to `v0.23.11` in `backpropagation/Cargo.toml`. The root `Cargo.lock` resolves the tag to `9ef3668def917ffa3266c212d2990f1c77cab27d`.
 
 ### Undiscoverable Facts
 
@@ -50,29 +48,15 @@ runtime code, test or pin changed. Closes #217.
   - stSoftwareAU/NEAT-AI-core#775: Family-wide DRY: unified Rust creature compaction — staged migration tracker
   - stSoftwareAU/NEAT-AI-core#779: Compaction migration 3: publish one native/WASM compaction API with parity gates
   - stSoftwareAU/NEAT-AI#4196: Compaction migration 4A: switch TypeScript compact callers to shared Rust engine
-- Documentation-only change; no visual surface.
 
 ## Test Plan
 
-- No tests added, modified or removed.
-- `./quality.sh < /dev/null` in the worker environment: four
-  `scripts/test-check-push-branch-changes-action.sh` cases failed with
-  `[PRE_PUSH_BLOCKED]` (for example "FAIL commits every tracked change when no paths are given").
-  Their throwaway fixture repos inherit the worker's injected `core.hooksPath`
-  pre-push hook (`GIT_CONFIG_KEY_0`). This is a worker environment fault,
-  unrelated to this diff.
-- The same `./quality.sh < /dev/null` with only that injected config unset
-  passed: "All quality checks passed!". That covers shell checks, markdownlint,
-  codespell, cargo fmt, clippy, cargo-deny and docs, plus 383 Rust tests passed
-  and 0 failed.
+The eight existing cases in `backpropagation/tests/scorer_boundary.rs` now hold a shared mutex while writing and executing their scorer stubs. This prevents concurrent tests from racing on an open executable (`ETXTBSY`). All eight cases retain their original assertions.
 
 ## Merge verification
 
-- CI and code review pending.
+At commit `051d2df`, CI compiled the pinned neat-core and ran `cargo test --workspace --all-features -- --test-threads=2 -q`. All 383 Rust tests passed, including the eight scorer-boundary cases. [Quality Checks job 139978579433](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/runs/139978579433)
 
 ## Not checked
 
-- No scorer, serialised-creature parity or performance run was needed or done.
-  No code path changed, so existing tests are the compatibility evidence.
-  Compatibility with neat-core `v0.23.11` or a later #779 release was not
-  tested here. The family-sync job's CI covers it when the pin moves.
+The audit did not benchmark performance or run a separate serialised-creature parity comparison.
