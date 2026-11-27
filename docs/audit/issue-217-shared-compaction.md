@@ -37,7 +37,7 @@ The search was `grep -rniE 'compact|prune|cleanup|simplif|retain|dedup'` over `b
 
 ## Dependency state on 2026-11-26
 
-The PR bumps `neat_ai_backpropagation` from `0.1.50` to `0.1.51` and moves the neat-core pin in `backpropagation/Cargo.toml` from `v0.23.4`. The pin moved in three steps: `v0.23.11` (`9ef3668def917ffa3266c212d2990f1c77cab27d`), then `v0.23.13` (`847a3e38a17704104ca05ef1efa08481ff042a17`) via the automated family-sync commit `672ea9c`, then the released `v0.23.17` (`939ccf5f561277763eb7a473238a86074ca8a8cc`) via the family-sync commit `9f111ea`, then the released `v0.23.18` via the family-sync commit `ffb5d1c`. The earlier pins are historical. At commit `ffb5d1c`, `backpropagation/Cargo.toml:31` pins `v0.23.18` and `Cargo.lock:196-197` resolves it to `4bc275da4d683dcb559ee46874ba3a8ea9fc3060`; a later family-sync commit can move the pin again.
+The PR bumps `neat_ai_backpropagation` from `0.1.50` to `0.1.51` and moves the neat-core pin in `backpropagation/Cargo.toml` from `v0.23.4`. The pin moved in four steps: `v0.23.11` (`9ef3668def917ffa3266c212d2990f1c77cab27d`), then `v0.23.13` (`847a3e38a17704104ca05ef1efa08481ff042a17`) via the automated family-sync commit `672ea9c`, then the released `v0.23.17` (`939ccf5f561277763eb7a473238a86074ca8a8cc`) via the family-sync commit `9f111ea`, then the released `v0.23.18` via the family-sync commit `ffb5d1c`. The earlier pins are historical. At commit `ffb5d1c`, `backpropagation/Cargo.toml:31` pins `v0.23.18` and `Cargo.lock:196-197` resolves it to `4bc275da4d683dcb559ee46874ba3a8ea9fc3060`; a later family-sync commit can move the pin again.
 
 Core #779 and NEAT-AI#4196 were open on the audit date. This crate has no caller that depends on the shared compaction API.
 
