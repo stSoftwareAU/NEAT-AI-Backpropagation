@@ -37,7 +37,7 @@ The search was `grep -rniE 'compact|prune|cleanup|simplif|retain|dedup'` over `b
 
 ## Dependency state on 2026-11-26
 
-The PR bumps `neat_ai_backpropagation` from `0.1.50` to `0.1.51` and moves the neat-core pin in `backpropagation/Cargo.toml` from `v0.23.4`. The pin first moved to `v0.23.11` (`9ef3668def917ffa3266c212d2990f1c77cab27d`); the automated family-sync commit `672ea9c` then moved it to the released `v0.23.13`. At the final head `672ea9c`, `backpropagation/Cargo.toml` pins `v0.23.13` and the root `Cargo.lock` resolves it to `847a3e38a17704104ca05ef1efa08481ff042a17`.
+The PR bumps `neat_ai_backpropagation` from `0.1.50` to `0.1.51` and moves the neat-core pin in `backpropagation/Cargo.toml` from `v0.23.4`. The pin moved in three steps: `v0.23.11` (`9ef3668def917ffa3266c212d2990f1c77cab27d`), then `v0.23.13` (`847a3e38a17704104ca05ef1efa08481ff042a17`) via the automated family-sync commit `672ea9c`, then the released `v0.23.17` via the family-sync commit `9f111ea`. The earlier pins are historical. At the final head, `backpropagation/Cargo.toml` pins `v0.23.17` and the root `Cargo.lock` resolves it to `939ccf5f561277763eb7a473238a86074ca8a8cc`.
 
 Core #779 and NEAT-AI#4196 were open on the audit date. This crate has no caller that depends on the shared compaction API.
 
@@ -47,7 +47,9 @@ The eight existing cases in `backpropagation/tests/scorer_boundary.rs` now hold 
 
 At the earlier commit `051d2df` (pin `v0.23.11`), CI compiled the pinned neat-core and ran `cargo test --workspace --all-features -- --test-threads=2 -q`. All 383 Rust tests passed, including the eight scorer-boundary cases. [Quality Checks job 139978579433](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/runs/139978579433)
 
-At the final head `672ea9c` (pin `v0.23.13`), `gh pr checks 218` reports every check passing, including [Quality Checks](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/actions/runs/45902028014/job/140190523906). `672ea9c` changed only `Cargo.lock` and `backpropagation/Cargo.toml`; no source or test file differs from `051d2df`, and this audit did not re-run the suite locally.
+At the intermediate commit `672ea9c` (pin `v0.23.13`, historical), every check passed, including [Quality Checks](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/actions/runs/45902028014/job/140190523906).
+
+At the final dependency state (set by commit `9f111ea`, pin `v0.23.17`; later commits touch only these documents), `gh pr checks 218` reports every check passing, including [Quality Checks job 140275441181](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/actions/runs/45928350249/job/140275441181), which compiled `v0.23.17` and ran the same workspace test command. `672ea9c` and `9f111ea` changed only `Cargo.lock` and `backpropagation/Cargo.toml` (outside the docs); no source or test file differs from `051d2df`, and this audit did not re-run the suite locally.
 
 ## When to revisit
 
