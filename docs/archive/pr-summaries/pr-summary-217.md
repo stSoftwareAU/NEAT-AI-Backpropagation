@@ -24,15 +24,16 @@ the evidence is recorded in `docs/audit/issue-217-shared-compaction.md`. Closes 
   the audit completes while #779 is still open. Any future structure-changing
   path must call the shared neat-core API (recorded in the audit's "When to
   revisit").
-- The PR bumps `neat_ai_backpropagation` from `0.1.50` to `0.1.51` and moves the neat-core pin in `backpropagation/Cargo.toml` from `v0.23.4`. The pin moved in three steps: `v0.23.11` (`9ef3668def917ffa3266c212d2990f1c77cab27d`), then `v0.23.13` (`847a3e38a17704104ca05ef1efa08481ff042a17`) via the automated family-sync commit `672ea9c`, then the released `v0.23.17` via the family-sync commit `9f111ea`. The earlier pins are historical. At the final head, `backpropagation/Cargo.toml` pins `v0.23.17` and the root `Cargo.lock` resolves it to `939ccf5f561277763eb7a473238a86074ca8a8cc`.
+- The PR bumps `neat_ai_backpropagation` from `0.1.50` to `0.1.51` and moves the neat-core pin in `backpropagation/Cargo.toml` from `v0.23.4`. The pin moved in three steps: `v0.23.11` (`9ef3668def917ffa3266c212d2990f1c77cab27d`), then `v0.23.13` (`847a3e38a17704104ca05ef1efa08481ff042a17`) via the automated family-sync commit `672ea9c`, then the released `v0.23.17` (`939ccf5f561277763eb7a473238a86074ca8a8cc`) via the family-sync commit `9f111ea`, then the released `v0.23.18` via the family-sync commit `ffb5d1c`. The earlier pins are historical. At commit `ffb5d1c`, `backpropagation/Cargo.toml:31` pins `v0.23.18` and `Cargo.lock:196-197` resolves it to `4bc275da4d683dcb559ee46874ba3a8ea9fc3060`; a later family-sync commit can move the pin again.
 
 ### Undiscoverable Facts
 
 - On 2026-11-26, core #779 and NEAT-AI#4196 were open; the newest core release
   was `v0.23.11` (`9ef3668`), resolved with `git ls-remote --tags`; the
   family-sync commit `672ea9c` later moved the pin to the released `v0.23.13`
-  (`847a3e3`), and `9f111ea` then moved it to the released `v0.23.17`
-  (`939ccf5`).
+  (`847a3e3`), `9f111ea` then moved it to the released `v0.23.17`
+  (`939ccf5`), and `ffb5d1c` then moved it to the released `v0.23.18`
+  (`4bc275d`).
 
 ## Evidence
 
@@ -62,7 +63,9 @@ At the earlier commit `051d2df` (pin `v0.23.11`), CI compiled the pinned neat-co
 
 At the intermediate commit `672ea9c` (pin `v0.23.13`, historical), every check passed, including [Quality Checks](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/actions/runs/45902028014/job/140190523906).
 
-At the final dependency state (set by commit `9f111ea`, pin `v0.23.17`; later commits touch only these documents), `gh pr checks 218` reports every check passing, including [Quality Checks job 140275441181](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/actions/runs/45928350249/job/140275441181), which compiled `v0.23.17` and ran the same workspace test command. `672ea9c` and `9f111ea` changed only `Cargo.lock` and `backpropagation/Cargo.toml` (outside the docs); no source or test file differs from `051d2df`, and this audit did not re-run the suite locally.
+At the historical commit `9f111ea` (pin `v0.23.17`), `gh pr checks 218` reported every check passing, including [Quality Checks job 140275441181](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/actions/runs/45928350249/job/140275441181), which compiled `v0.23.17` and ran the same workspace test command.
+
+At commit `ffb5d1c` (pin `v0.23.18`, resolved to `4bc275da`), [Quality Checks job 140293295391](https://github.com/stSoftwareAU/NEAT-AI-Backpropagation/actions/runs/45933953037/job/140293295391) compiled neat-core `v0.23.18` at `4bc275da` and passed `cargo test --workspace --all-features -- --test-threads=2 -q`, including the eight scorer-boundary cases. `672ea9c`, `9f111ea` and `ffb5d1c` changed only `Cargo.lock` and `backpropagation/Cargo.toml`; no source or test file differs from `051d2df`. This audit did not re-run the suite locally.
 
 ## Not checked
 
